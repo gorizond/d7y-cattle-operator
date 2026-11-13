@@ -3,10 +3,10 @@
 Kubernetes operator that runs [Dragonfly](https://d7y.io) P2P on Rancher-managed
 RKE2 clusters.
 
-**Status**: MR-3b (seed registration/self-heal). The Cluster controller, role
-resolution, KeyDB, manager, seed role, `dragonfly-extras` chart, and manager
-registration with the scheduler ID allocator are implemented. p2p-static/Nginx
-and the admission webhook follow in later MRs.
+**Status**: MR-4a (p2p-static chart + bootstrap generator). The Cluster
+controller, role resolution, KeyDB, manager, seed role, manager registration,
+`dragonfly-extras`, and the `p2p-static` Nginx/bootstrap chart are implemented.
+The admission webhook and operator-side bootstrap injection follow in MR-4b.
 
 ## What it does today
 
@@ -34,7 +34,7 @@ and the admission webhook follow in later MRs.
 
 ## Follow-ups
 
-- p2p-static/Nginx extras and the bootstrap payload/webhook.
+- MR-4b: admission webhook and userData bootstrap injection.
 - The extras chart's VPA targetRef names must be verified against live workload
   names in the pilot.
 
@@ -161,6 +161,15 @@ loss; if the marker is absent or different, the ID is user-owned and is never
 overwritten (`IdMismatch` on server mismatch). This decision survives operator
 restarts. Registration failures set `RegistrationFailed` or `Retrying` and block
 control/data/nydus without blocking manager/KeyDB.
+
+## Bootstrap static chart
+
+`charts/p2p-static` serves `/p2p-install.sh` and `/bin/` through Nginx. The
+bootstrap payload is a base64url **env-file** (no JSON, no `jq`, no python on the
+node). Containerd keeps **overlayfs as the global snapshotter** and selects Nydus
+per runtime with `runtimeClass: nydus`; do **not** set
+`machineGlobalConfig.snapshotter: nydus`. See `charts/p2p-static/README.md` for
+values, payload keys, containerd templates, and pilot risks.
 
 ## Known pilot risk: extras target names
 
