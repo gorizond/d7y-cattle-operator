@@ -16,12 +16,18 @@ const (
 	// TargetNamespace is where Fleet installs the charts on downstream clusters.
 	TargetNamespace = "dragonfly-system"
 
+	ManagerGRPCPort = 65003
+
 	// CertDir is where the mTLS Secret is mounted in Dragonfly pods.
 	CertDir = "/etc/dragonfly/certs"
 
 	KeyDBChartRepo    = "https://gorizond.github.io/d7y-cattle-operator"
 	KeyDBChartName    = "keydb"
 	KeyDBChartVersion = "0.1.0"
+
+	NydusChartRepo    = "https://dragonflyoss.github.io/helm-charts"
+	NydusChartName    = "nydus-snapshotter"
+	NydusChartVersion = "0.0.10"
 )
 
 // HelmOpGVR identifies Fleet HelmOps for the resource client.
@@ -38,11 +44,15 @@ type Chart struct {
 
 // Cluster carries the per-cluster inputs shared by the HelmOp builders.
 type Cluster struct {
-	Name           string
-	Namespace      string
-	MTLSSecretName string
-	Chart          Chart
-	Labels         map[string]string
+	Name               string
+	Namespace          string
+	MTLSSecretName     string
+	Chart              Chart
+	ManagerGRPCDomain  string
+	SchedulerClusterID int
+	SchedulerReplicas  string
+	SeedClientReplicas string
+	Labels             map[string]string
 }
 
 // KeyDBName returns the KeyDB HelmOp and release name.
@@ -51,10 +61,25 @@ func KeyDBName(cluster string) string { return objectName(cluster, "keydb") }
 // ManagerName returns the manager HelmOp and release name.
 func ManagerName(cluster string) string { return objectName(cluster, "manager") }
 
+// ControlName returns the control (scheduler) HelmOp and release name.
+func ControlName(cluster string) string { return objectName(cluster, "control") }
+
+// DataName returns the data (seedClient/client) HelmOp and release name.
+func DataName(cluster string) string { return objectName(cluster, "data") }
+
+// NydusName returns the nydus-snapshotter HelmOp and release name.
+func NydusName(cluster string) string { return objectName(cluster, "nydus-snapshotter") }
+
 // ManagerFullname returns the chart fullnameOverride that makes the Dragonfly
 // chart create the <cluster>-manager Service.
 func ManagerFullname(cluster string) string {
 	return strings.TrimSuffix(ManagerName(cluster), "-manager")
+}
+
+// SchedulerServiceName returns the scheduler Service name created by the
+// control release.
+func SchedulerServiceName(cluster string) string {
+	return objectName(cluster, "control-scheduler")
 }
 
 const (

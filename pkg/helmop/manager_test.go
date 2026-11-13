@@ -4,11 +4,15 @@ import "testing"
 
 func testCluster() Cluster {
 	return Cluster{
-		Name:           "c1",
-		Namespace:      "fleet-default",
-		MTLSSecretName: "dragonfly-p2p-mtls",
-		Chart:          Chart{Repo: "https://charts.example.com", Name: "dragonfly", Version: "1.10.1"},
-		Labels:         map[string]string{"app.kubernetes.io/managed-by": "d7y-cattle-operator"},
+		Name:               "c1",
+		Namespace:          "fleet-default",
+		MTLSSecretName:     "dragonfly-p2p-mtls",
+		Chart:              Chart{Repo: "https://charts.example.com", Name: "dragonfly", Version: "1.10.1"},
+		ManagerGRPCDomain:  "grpc.example.com",
+		SchedulerClusterID: 42,
+		SchedulerReplicas:  ReplicasTemplate("p2p.dragonfly.io/scheduler-replicas"),
+		SeedClientReplicas: ReplicasTemplate("p2p.dragonfly.io/seedclient-replicas"),
+		Labels:             map[string]string{"app.kubernetes.io/managed-by": "d7y-cattle-operator"},
 	}
 }
 
