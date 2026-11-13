@@ -5,12 +5,16 @@ import (
 	"log/slog"
 	"os"
 
+	lassoclient "github.com/rancher/lasso/pkg/client"
+	provisioning "github.com/rancher/rancher/pkg/generated/controllers/provisioning.cattle.io"
 	"github.com/rancher/wrangler/v3/pkg/generated/controllers/core"
 	"github.com/rancher/wrangler/v3/pkg/kubeconfig"
 	"github.com/rancher/wrangler/v3/pkg/signals"
-	"k8s.io/client-go/rest"
+	"github.com/rancher/wrangler/v3/pkg/start"
 
+	"github.com/gorizond/d7y-cattle-operator/pkg/cluster"
 	"github.com/gorizond/d7y-cattle-operator/pkg/config"
+	"github.com/gorizond/d7y-cattle-operator/pkg/helmop"
 	"github.com/gorizond/d7y-cattle-operator/pkg/pki"
 )
 
@@ -27,19 +31,46 @@ func run() error {
 		return fmt.Errorf("config: %w", err)
 	}
 
-	restConfig, err := kubeRESTConfig(cfg.Kubeconfig)
+	restConfig, err := kubeconfig.GetNonInteractiveClientConfig(cfg.Kubeconfig).ClientConfig()
 	if err != nil {
 		return fmt.Errorf("kubernetes client config: %w", err)
 	}
+
 	coreFactory, err := core.NewFactoryFromConfig(restConfig)
 	if err != nil {
 		return fmt.Errorf("wrangler core factory: %w", err)
 	}
+	provisioningFactory, err := provisioning.NewFactoryFromConfig(restConfig)
+	if err != nil {
+		return fmt.Errorf("wrangler provisioning factory: %w", err)
+	}
+
+	clientFactory, err := lassoclient.NewSharedClientFactoryForConfig(restConfig)
+	if err != nil {
+		return fmt.Errorf("resource client factory: %w", err)
+	}
+	helmOps, err := clientFactory.ForResource(helmop.HelmOpGVR, true)
+	if err != nil {
+		return fmt.Errorf("HelmOp client: %w", err)
+	}
+
 	secretController := coreFactory.Core().V1().Secret()
+	eventController := coreFactory.Core().V1().Event()
+	clusterController := provisioningFactory.Provisioning().V1().Cluster()
 
 	ctx := signals.SetupSignalContext()
-	if err := coreFactory.Start(ctx, 1); err != nil {
-		return fmt.Errorf("start wrangler controllers: %w", err)
+	cluster.Register(ctx, clusterController, secretController, eventController, helmOps, cluster.Options{
+		OperatorNamespace: cfg.Namespace,
+		MTLSSecretName:    cfg.MTLSSecretName,
+		DragonflyChart: helmop.Chart{
+			Repo:    cfg.DragonflyChartRepo,
+			Name:    cfg.DragonflyChartName,
+			Version: cfg.DragonflyChartVersion,
+		},
+	})
+
+	if err := start.All(ctx, 1, coreFactory, provisioningFactory); err != nil {
+		return fmt.Errorf("start controllers: %w", err)
 	}
 
 	bundle, err := pki.Generate(pki.Options{
@@ -59,16 +90,9 @@ func run() error {
 		"name", cfg.MTLSSecretName,
 		"created", created,
 	)
-	slog.Info("operator scaffold running; controllers are not implemented yet")
+	slog.Info("cluster controller running")
 
 	<-ctx.Done()
 	slog.Info("shutting down")
 	return nil
-}
-
-func kubeRESTConfig(kubeconfigPath string) (*rest.Config, error) {
-	if kubeconfigPath == "" {
-		return rest.InClusterConfig()
-	}
-	return kubeconfig.GetNonInteractiveClientConfig(kubeconfigPath).ClientConfig()
 }
