@@ -15,63 +15,6 @@ import (
 	"github.com/gorizond/d7y-cattle-operator/pkg/helmop"
 )
 
-func TestReconcileSeedMissingSchedulerClusterID(t *testing.T) {
-	controller, store, events := newTestController(t)
-	cluster := testSeedCluster("")
-
-	if _, err := controller.reconcile("", cluster); err != nil {
-		t.Fatalf("reconcile() error = %v", err)
-	}
-
-	if !store.has("fleet-default/c1-keydb") {
-		t.Error("KeyDB HelmOp was not created")
-	}
-	for _, name := range []string{"c1-control", "c1-data", "c1-nydus-snapshotter"} {
-		if store.has("fleet-default/" + name) {
-			t.Errorf("%s was created without a scheduler cluster ID", name)
-		}
-	}
-	if len(events.events) != 1 || events.events[0].Reason != "SchedulerClusterIDMissing" {
-		t.Errorf("events = %+v, want one SchedulerClusterIDMissing event", events.events)
-	}
-
-	extras := store.object("fleet-default/c1-extras")
-	if extras == nil {
-		t.Fatal("extras HelmOp was not created")
-	}
-	for _, component := range []string{"control", "data", "nydus", "manager"} {
-		if got := valueAtPath(t, helmValues(t, extras), "vpa", "targets", component, "enabled"); got != false {
-			t.Errorf("%s VPA enabled = %v without a deployed role", component, got)
-		}
-	}
-	if got := valueAtPath(t, helmValues(t, extras), "vpa", "targets", "keydb", "enabled"); got != true {
-		t.Errorf("keydb VPA enabled = %v, want true", got)
-	}
-}
-
-func TestReconcileManagerContinuesWhenSchedulerClusterIDMissing(t *testing.T) {
-	controller, store, events := newTestController(t)
-	cluster := testSeedCluster("")
-	cluster.Annotations[AnnotationManager] = "true"
-
-	if _, err := controller.reconcile("", cluster); err != nil {
-		t.Fatalf("reconcile() error = %v", err)
-	}
-	for _, name := range []string{"c1-keydb", "c1-manager"} {
-		if !store.has("fleet-default/" + name) {
-			t.Errorf("%s HelmOp was not created", name)
-		}
-	}
-	for _, name := range []string{"c1-control", "c1-data", "c1-nydus-snapshotter"} {
-		if store.has("fleet-default/" + name) {
-			t.Errorf("%s was created without a scheduler cluster ID", name)
-		}
-	}
-	if len(events.events) != 1 || events.events[0].Reason != "SchedulerClusterIDMissing" {
-		t.Errorf("events = %+v, want one SchedulerClusterIDMissing event", events.events)
-	}
-}
-
 func TestReconcileSeedCreatesHelmOps(t *testing.T) {
 	controller, store, events := newTestController(t)
 	cluster := testSeedCluster("42")
@@ -120,9 +63,12 @@ func TestReconcileSeedRemovalAndLabelRemoval(t *testing.T) {
 		t.Fatalf("reconcile(seed) error = %v", err)
 	}
 
-	cluster.Annotations = nil
+	delete(cluster.Annotations, AnnotationSeed)
 	if _, err := controller.reconcile("", cluster); err != nil {
 		t.Fatalf("reconcile(seed removed) error = %v", err)
+	}
+	if got := cluster.Annotations[AnnotationSchedulerClusterID]; got != "42" {
+		t.Errorf("scheduler cluster ID annotation = %q after seed removal, want 42", got)
 	}
 	for _, name := range []string{"c1-control", "c1-data", "c1-nydus-snapshotter"} {
 		if store.has("fleet-default/" + name) {
@@ -153,10 +99,13 @@ func newTestController(t *testing.T) (*Controller, *fakeHelmOpStore, *fakeEventS
 	store := newFakeHelmOpStore()
 	events := &fakeEventStore{}
 	controller := &Controller{
-		ctx:     context.Background(),
-		secrets: secrets,
-		events:  events,
-		helmops: store,
+		ctx:       context.Background(),
+		secrets:   secrets,
+		events:    events,
+		helmops:   store,
+		clusters:  newFakeClusterStore(),
+		registrar: newFakeRegistrar(),
+		allocator: newFakeAllocator(),
 		opts: Options{
 			OperatorNamespace: "dragonfly-system",
 			MTLSSecretName:    "dragonfly-p2p-mtls",

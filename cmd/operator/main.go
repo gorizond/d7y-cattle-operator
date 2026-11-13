@@ -73,10 +73,12 @@ func run() error {
 
 	ctx := signals.SetupSignalContext()
 	cluster.Register(ctx, clusterController, secretController, eventController, helmOps, cluster.Options{
-		OperatorNamespace: cfg.Namespace,
-		MTLSSecretName:    cfg.MTLSSecretName,
-		ManagerGRPCDomain: cfg.ManagerGRPCDomain,
-		ManagerAPIHost:    apiHost,
+		OperatorNamespace:           cfg.Namespace,
+		MTLSSecretName:              cfg.MTLSSecretName,
+		ManagerGRPCDomain:           cfg.ManagerGRPCDomain,
+		ManagerAPIHost:              apiHost,
+		ManagerAPIURL:               cfg.ManagerAPIURL,
+		ManagerAPICredentialsSecret: cfg.ManagerAPICredentialsSecret,
 		DragonflyChart: helmop.Chart{
 			Repo:    cfg.DragonflyChartRepo,
 			Name:    cfg.DragonflyChartName,

@@ -6,7 +6,9 @@ import (
 	"errors"
 	"fmt"
 	"log/slog"
+	"net/http"
 	"strconv"
+	"sync"
 
 	fleetv1alpha1 "github.com/rancher/fleet/pkg/apis/fleet.cattle.io/v1alpha1"
 	provv1 "github.com/rancher/rancher/pkg/apis/provisioning.cattle.io/v1"
@@ -17,6 +19,7 @@ import (
 
 	"github.com/gorizond/d7y-cattle-operator/pkg/apply"
 	"github.com/gorizond/d7y-cattle-operator/pkg/helmop"
+	"github.com/gorizond/d7y-cattle-operator/pkg/registry"
 )
 
 const controllerName = "d7y-cattle-operator"
@@ -28,13 +31,15 @@ type eventStore interface {
 
 // Options carries the operator configuration needed for reconciliation.
 type Options struct {
-	OperatorNamespace string
-	MTLSSecretName    string
-	ManagerGRPCDomain string
-	ManagerAPIHost    string
-	DragonflyChart    helmop.Chart
-	ExtrasChart       helmop.Chart
-	VPAEnabled        bool
+	OperatorNamespace           string
+	MTLSSecretName              string
+	ManagerGRPCDomain           string
+	ManagerAPIHost              string
+	ManagerAPIURL               string
+	ManagerAPICredentialsSecret string
+	DragonflyChart              helmop.Chart
+	ExtrasChart                 helmop.Chart
+	VPAEnabled                  bool
 }
 
 // Controller reconciles provisioning.cattle.io/v1 Clusters.
@@ -44,17 +49,25 @@ type Controller struct {
 	events  eventStore
 	helmops apply.Store
 	opts    Options
+
+	clusters clusterStore
+
+	managerMu         sync.Mutex
+	managerHTTPClient *http.Client
+	registrar         managerRegistrar
+	allocator         *registry.Allocator
 }
 
 // Register wires the Cluster controller. Handlers must be registered before
 // the factories are started.
 func Register(ctx context.Context, clusters provctl.ClusterController, secrets corectl.SecretController, events corectl.EventController, helmops apply.Store, opts Options) {
 	c := &Controller{
-		ctx:     ctx,
-		secrets: secrets,
-		events:  events,
-		helmops: helmops,
-		opts:    opts,
+		ctx:      ctx,
+		secrets:  secrets,
+		events:   events,
+		helmops:  helmops,
+		clusters: clusters,
+		opts:     opts,
 	}
 	clusters.OnChange(ctx, controllerName, c.reconcile)
 }
@@ -70,6 +83,7 @@ func (c *Controller) reconcile(key string, cluster *provv1.Cluster) (*provv1.Clu
 			c.event(cluster, corev1.EventTypeWarning, "CleanupFailed", err.Error())
 			return cluster, err
 		}
+		c.markSeedDisabled(cluster)
 		return cluster, nil
 	}
 
@@ -97,21 +111,52 @@ func (c *Controller) reconcile(key string, cluster *provv1.Cluster) (*provv1.Clu
 		errs = append(errs, err)
 	}
 
+	seedReady := false
 	if roles.Seed {
 		if mtlsReady {
-			if err := c.ensureSeed(cluster, hc); err != nil {
+			id, mismatch, registrationCluster, err := c.ensureSeedRegistration(c.ctx, cluster)
+			if err != nil {
+				retrying := registrationFailure(err)
+				if c.markRegistrationFailure(cluster, retrying, err) {
+					reason := "RegistrationFailed"
+					if retrying {
+						reason = "Retrying"
+					}
+					c.event(cluster, corev1.EventTypeWarning, reason, err.Error())
+				}
 				errs = append(errs, err)
+			} else if int64(int(id)) != id {
+				err := fmt.Errorf("scheduler cluster ID %d does not fit in int", id)
+				retrying := registrationFailure(err)
+				c.markRegistrationFailure(cluster, retrying, err)
+				errs = append(errs, err)
+			} else {
+				if registrationCluster == nil {
+					registrationCluster = cluster
+				}
+				hc.SchedulerClusterID = int(id)
+				if changed := c.markRegistered(registrationCluster, id, mismatch); changed && mismatch {
+					c.event(cluster, corev1.EventTypeWarning, "IdMismatch",
+						fmt.Sprintf("annotation scheduler cluster ID %d differs from manager server ID %d; annotation preserved", hc.SchedulerClusterID, id))
+				}
+				seedReady = true
+				if err := c.ensureSeed(cluster, hc); err != nil {
+					errs = append(errs, err)
+				}
 			}
 		}
-	} else if err := c.deleteSeed(cluster); err != nil {
-		errs = append(errs, err)
+	} else {
+		if err := c.deleteSeed(cluster); err != nil {
+			errs = append(errs, err)
+		}
+		c.markSeedDisabled(cluster)
 	}
 
 	if err := c.applyHelmOp(cluster, helmop.Extras(hc, helmop.ExtrasOptions{
 		IngressEnabled: roles.Manager && mtlsReady,
 		VPAEnabled:     c.opts.VPAEnabled,
 		Manager:        roles.Manager && mtlsReady,
-		Seed:           roles.Seed && hc.SchedulerClusterID != 0,
+		Seed:           seedReady,
 	})); err != nil {
 		errs = append(errs, err)
 	}
@@ -158,8 +203,8 @@ func (c *Controller) helmopCluster(cluster *provv1.Cluster) helmop.Cluster {
 		ManagerGRPCDomain:  c.opts.ManagerGRPCDomain,
 		ManagerAPIHost:     c.opts.ManagerAPIHost,
 		SchedulerClusterID: schedulerClusterID(cluster),
-		SchedulerReplicas:  helmop.ReplicasTemplate(AnnotationSchedulerReplicas),
-		SeedClientReplicas: helmop.ReplicasTemplate(AnnotationSeedClientReplicas),
+		SchedulerReplicas:  helmop.ReplicasOrOne(AnnotationSchedulerReplicas, cluster.Annotations[AnnotationSchedulerReplicas]),
+		SeedClientReplicas: helmop.ReplicasOrOne(AnnotationSeedClientReplicas, cluster.Annotations[AnnotationSeedClientReplicas]),
 		Labels:             apply.Labels(cluster.Namespace, cluster.Name),
 	}
 }
