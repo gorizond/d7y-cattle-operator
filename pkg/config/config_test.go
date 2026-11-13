@@ -14,6 +14,9 @@ var envKeys = []string{
 	"DRAGONFLY_CHART_REPO",
 	"DRAGONFLY_CHART_NAME",
 	"DRAGONFLY_CHART_VERSION",
+	"EXTRAS_CHART_REPO",
+	"EXTRAS_CHART_NAME",
+	"EXTRAS_CHART_VERSION",
 	"POD_NAMESPACE",
 	"WEBHOOK_PORT",
 	"KUBECONFIG",
@@ -52,6 +55,15 @@ func TestLoadDefaults(t *testing.T) {
 	}
 	if cfg.DragonflyChartVersion != DefaultDragonflyChartVersion {
 		t.Errorf("DragonflyChartVersion = %q, want %q", cfg.DragonflyChartVersion, DefaultDragonflyChartVersion)
+	}
+	if cfg.ExtrasChartRepo != DefaultExtrasChartRepo {
+		t.Errorf("ExtrasChartRepo = %q, want %q", cfg.ExtrasChartRepo, DefaultExtrasChartRepo)
+	}
+	if cfg.ExtrasChartName != DefaultExtrasChartName {
+		t.Errorf("ExtrasChartName = %q, want %q", cfg.ExtrasChartName, DefaultExtrasChartName)
+	}
+	if cfg.ExtrasChartVersion != DefaultExtrasChartVersion {
+		t.Errorf("ExtrasChartVersion = %q, want %q", cfg.ExtrasChartVersion, DefaultExtrasChartVersion)
 	}
 	if cfg.Namespace != DefaultNamespace {
 		t.Errorf("Namespace = %q, want %q", cfg.Namespace, DefaultNamespace)
@@ -106,6 +118,8 @@ func TestLoadInvalidValues(t *testing.T) {
 		"invalid Secret name":               "--mtls-secret-name=Bad_Name",
 		"invalid namespace":                 "--namespace=Bad_Name",
 		"invalid chart version":             "--dragonfly-chart-version=latest",
+		"invalid extras chart version":      "--extras-chart-version=latest",
+		"invalid extras chart repo":         "--extras-chart-repo=not-a-url",
 		"webhook port zero":                 "--webhook-port=0",
 		"webhook port too large":            "--webhook-port=70000",
 	}
@@ -132,6 +146,9 @@ func TestLoadEnvOverride(t *testing.T) {
 	t.Setenv("DRAGONFLY_CHART_REPO", "https://charts.env.example.com")
 	t.Setenv("DRAGONFLY_CHART_NAME", "dragonfly-env")
 	t.Setenv("DRAGONFLY_CHART_VERSION", "2.0.0")
+	t.Setenv("EXTRAS_CHART_REPO", "https://extras.env.example.com")
+	t.Setenv("EXTRAS_CHART_NAME", "dragonfly-extras-env")
+	t.Setenv("EXTRAS_CHART_VERSION", "1.2.3")
 	t.Setenv("POD_NAMESPACE", "env-namespace")
 	t.Setenv("WEBHOOK_PORT", "10443")
 	t.Setenv("KUBECONFIG", "/tmp/kubeconfig")
@@ -164,6 +181,15 @@ func TestLoadEnvOverride(t *testing.T) {
 	}
 	if cfg.DragonflyChartVersion != "2.0.0" {
 		t.Errorf("DragonflyChartVersion = %q", cfg.DragonflyChartVersion)
+	}
+	if cfg.ExtrasChartRepo != "https://extras.env.example.com" {
+		t.Errorf("ExtrasChartRepo = %q", cfg.ExtrasChartRepo)
+	}
+	if cfg.ExtrasChartName != "dragonfly-extras-env" {
+		t.Errorf("ExtrasChartName = %q", cfg.ExtrasChartName)
+	}
+	if cfg.ExtrasChartVersion != "1.2.3" {
+		t.Errorf("ExtrasChartVersion = %q", cfg.ExtrasChartVersion)
 	}
 	if cfg.Namespace != "env-namespace" {
 		t.Errorf("Namespace = %q", cfg.Namespace)

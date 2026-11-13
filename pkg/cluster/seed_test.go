@@ -34,6 +34,19 @@ func TestReconcileSeedMissingSchedulerClusterID(t *testing.T) {
 	if len(events.events) != 1 || events.events[0].Reason != "SchedulerClusterIDMissing" {
 		t.Errorf("events = %+v, want one SchedulerClusterIDMissing event", events.events)
 	}
+
+	extras := store.object("fleet-default/c1-extras")
+	if extras == nil {
+		t.Fatal("extras HelmOp was not created")
+	}
+	for _, component := range []string{"control", "data", "nydus", "manager"} {
+		if got := valueAtPath(t, helmValues(t, extras), "vpa", "targets", component, "enabled"); got != false {
+			t.Errorf("%s VPA enabled = %v without a deployed role", component, got)
+		}
+	}
+	if got := valueAtPath(t, helmValues(t, extras), "vpa", "targets", "keydb", "enabled"); got != true {
+		t.Errorf("keydb VPA enabled = %v, want true", got)
+	}
 }
 
 func TestReconcileManagerContinuesWhenSchedulerClusterIDMissing(t *testing.T) {
@@ -148,7 +161,10 @@ func newTestController(t *testing.T) (*Controller, *fakeHelmOpStore, *fakeEventS
 			OperatorNamespace: "dragonfly-system",
 			MTLSSecretName:    "dragonfly-p2p-mtls",
 			ManagerGRPCDomain: "grpc.example.com",
+			ManagerAPIHost:    "api.example.com",
 			DragonflyChart:    helmop.Chart{Repo: "https://charts.example.com", Name: "dragonfly", Version: "1.10.1"},
+			ExtrasChart:       helmop.Chart{Repo: "https://charts.example.com", Name: "dragonfly-extras", Version: "0.1.0"},
+			VPAEnabled:        true,
 		},
 	}
 	return controller, store, events

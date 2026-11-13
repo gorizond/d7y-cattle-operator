@@ -27,8 +27,10 @@ jobs:
 
       - uses: azure/setup-helm@v4
 
-      - name: Lint chart
-        run: helm lint charts/d7y-cattle-operator
+      - name: Lint charts
+        run: helm lint charts/d7y-cattle-operator charts/dragonfly-extras
 
-      - name: Render chart
-        run: helm template d7y-cattle-operator charts/d7y-cattle-operator --set webhook.enabled=true > /dev/null
+      - name: Render charts
+        run: |
+          helm template d7y-cattle-operator charts/d7y-cattle-operator --set webhook.enabled=true > /dev/null
+          helm template dragonfly-extras charts/dragonfly-extras --set ingress.enabled=true --set vpa.enabled=true --api-versions autoscaling.k8s.io/v1 > /dev/null

@@ -1,0 +1,86 @@
+{{- if and .Values.vpa.enabled (.Capabilities.APIVersions.Has "autoscaling.k8s.io/v1") }}
+{{- if .Values.vpa.targets.keydb.enabled }}
+apiVersion: autoscaling.k8s.io/v1
+kind: VerticalPodAutoscaler
+metadata:
+  name: {{ .Release.Name }}-keydb
+  namespace: {{ .Values.vpa.namespace }}
+  labels:
+    {{- include "dragonfly-extras.labels" . | nindent 4 }}
+spec:
+  targetRef:
+    apiVersion: apps/v1
+    kind: {{ .Values.vpa.targets.keydb.kind }}
+    name: {{ default (printf "%s-keydb" .Values.vpa.clusterName) .Values.vpa.targets.keydb.name }}
+  updatePolicy:
+    updateMode: "Off"
+---
+{{- end }}
+{{- if .Values.vpa.targets.manager.enabled }}
+apiVersion: autoscaling.k8s.io/v1
+kind: VerticalPodAutoscaler
+metadata:
+  name: {{ .Release.Name }}-manager
+  namespace: {{ .Values.vpa.namespace }}
+  labels:
+    {{- include "dragonfly-extras.labels" . | nindent 4 }}
+spec:
+  targetRef:
+    apiVersion: apps/v1
+    kind: {{ .Values.vpa.targets.manager.kind }}
+    name: {{ default (printf "%s-manager" .Values.vpa.clusterName) .Values.vpa.targets.manager.name }}
+  updatePolicy:
+    updateMode: "Off"
+---
+{{- end }}
+{{- if .Values.vpa.targets.control.enabled }}
+apiVersion: autoscaling.k8s.io/v1
+kind: VerticalPodAutoscaler
+metadata:
+  name: {{ .Release.Name }}-control
+  namespace: {{ .Values.vpa.namespace }}
+  labels:
+    {{- include "dragonfly-extras.labels" . | nindent 4 }}
+spec:
+  targetRef:
+    apiVersion: apps/v1
+    kind: {{ .Values.vpa.targets.control.kind }}
+    name: {{ default (printf "%s-control-scheduler" .Values.vpa.clusterName) .Values.vpa.targets.control.name }}
+  updatePolicy:
+    updateMode: "Off"
+---
+{{- end }}
+{{- if .Values.vpa.targets.data.enabled }}
+apiVersion: autoscaling.k8s.io/v1
+kind: VerticalPodAutoscaler
+metadata:
+  name: {{ .Release.Name }}-data
+  namespace: {{ .Values.vpa.namespace }}
+  labels:
+    {{- include "dragonfly-extras.labels" . | nindent 4 }}
+spec:
+  targetRef:
+    apiVersion: apps/v1
+    kind: {{ .Values.vpa.targets.data.kind }}
+    name: {{ default (printf "%s-data-seed-client" .Values.vpa.clusterName) .Values.vpa.targets.data.name }}
+  updatePolicy:
+    updateMode: "Off"
+---
+{{- end }}
+{{- if .Values.vpa.targets.nydus.enabled }}
+apiVersion: autoscaling.k8s.io/v1
+kind: VerticalPodAutoscaler
+metadata:
+  name: {{ .Release.Name }}-nydus
+  namespace: {{ .Values.vpa.namespace }}
+  labels:
+    {{- include "dragonfly-extras.labels" . | nindent 4 }}
+spec:
+  targetRef:
+    apiVersion: apps/v1
+    kind: {{ .Values.vpa.targets.nydus.kind }}
+    name: {{ default (printf "%s-nydus-snapshotter" .Values.vpa.clusterName) .Values.vpa.targets.nydus.name }}
+  updatePolicy:
+    updateMode: "Off"
+{{- end }}
+{{- end }}

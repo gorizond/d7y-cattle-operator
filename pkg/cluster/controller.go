@@ -31,7 +31,10 @@ type Options struct {
 	OperatorNamespace string
 	MTLSSecretName    string
 	ManagerGRPCDomain string
+	ManagerAPIHost    string
 	DragonflyChart    helmop.Chart
+	ExtrasChart       helmop.Chart
+	VPAEnabled        bool
 }
 
 // Controller reconciles provisioning.cattle.io/v1 Clusters.
@@ -104,6 +107,15 @@ func (c *Controller) reconcile(key string, cluster *provv1.Cluster) (*provv1.Clu
 		errs = append(errs, err)
 	}
 
+	if err := c.applyHelmOp(cluster, helmop.Extras(hc, helmop.ExtrasOptions{
+		IngressEnabled: roles.Manager && mtlsReady,
+		VPAEnabled:     c.opts.VPAEnabled,
+		Manager:        roles.Manager && mtlsReady,
+		Seed:           roles.Seed && hc.SchedulerClusterID != 0,
+	})); err != nil {
+		errs = append(errs, err)
+	}
+
 	if len(errs) > 0 {
 		err := errors.Join(errs...)
 		c.event(cluster, corev1.EventTypeWarning, "ReconcileFailed", err.Error())
@@ -142,7 +154,9 @@ func (c *Controller) helmopCluster(cluster *provv1.Cluster) helmop.Cluster {
 		Namespace:          cluster.Namespace,
 		MTLSSecretName:     c.opts.MTLSSecretName,
 		Chart:              c.opts.DragonflyChart,
+		ExtrasChart:        c.opts.ExtrasChart,
 		ManagerGRPCDomain:  c.opts.ManagerGRPCDomain,
+		ManagerAPIHost:     c.opts.ManagerAPIHost,
 		SchedulerClusterID: schedulerClusterID(cluster),
 		SchedulerReplicas:  helmop.ReplicasTemplate(AnnotationSchedulerReplicas),
 		SeedClientReplicas: helmop.ReplicasTemplate(AnnotationSeedClientReplicas),
@@ -182,6 +196,7 @@ func (c *Controller) cleanupAll(cluster *provv1.Cluster) error {
 	for _, name := range []string{
 		helmop.KeyDBName(cluster.Name),
 		helmop.ManagerName(cluster.Name),
+		helmop.ExtrasName(cluster.Name),
 	} {
 		if err := c.deleteHelmOp(cluster, name); err != nil {
 			errs = append(errs, err)

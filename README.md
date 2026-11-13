@@ -3,10 +3,10 @@
 Kubernetes operator that runs [Dragonfly](https://d7y.io) P2P on Rancher-managed
 RKE2 clusters.
 
-**Status**: MR-2b (seed role). The Cluster controller, role resolution, KeyDB,
-manager, and seed role releases are implemented. Manager public endpoints,
-extras (VPA/p2p-static), manager API registration, and the admission webhook
-follow in later MRs.
+**Status**: MR-2c (extras). The Cluster controller, role resolution, KeyDB,
+manager, seed role, and the `dragonfly-extras` chart (manager Ingress + VPA)
+are implemented. Manager API registration, p2p-static/Nginx, and the admission
+webhook follow in later MRs.
 
 ## What it does today
 
@@ -21,16 +21,17 @@ follow in later MRs.
 - Deploys the seed role (scheduler/control, seedClient+client/data, and
   nydus-snapshotter) when `p2p.dragonfly.io/seed: "true"` and a scheduler
   cluster ID is present.
-- Keeps manager and scheduler Services cluster-internal; public endpoints are
-  not created yet.
+- Manages the manager Ingresses and optional VPAs through the separate
+  `<cluster>-extras` HelmOp and the `dragonfly-extras` chart. The operator has
+  no Ingress or VPA RBAC and creates neither kind directly.
 - Runs until it receives `SIGINT`/`SIGTERM`.
 
 ## Follow-ups
 
 - MR-3: manager API registration and automatic scheduler cluster ID allocation.
-- MR-2c: public manager gRPC/REST Ingresses and the extras chart (p2p-static, VPA).
-- Bootstrap payload injection through a mutating webhook that only handles
-  `CREATE` requests.
+- p2p-static/Nginx extras and the bootstrap payload/webhook.
+- The extras chart's VPA targetRef names must be verified against live workload
+  names in the pilot.
 
 ## Install
 
@@ -49,7 +50,7 @@ helm install d7y-cattle-operator charts/d7y-cattle-operator \
 The operator reads credentials only from Secret names. No secret values are passed
 through flags or chart values. `nginx.staticURL` and
 `managerApiCredentialsSecret` are required by the configuration contract but are
-not used until the extras and registration MRs.
+not used until the p2p-static and registration MRs.
 
 ### Required values
 
@@ -60,9 +61,13 @@ not used until the extras and registration MRs.
 | `nginx.staticURL` | `NGINX_STATIC_URL` | Base URL of the static asset server (`http` or `https`) |
 | `managerApiCredentialsSecret` | `MANAGER_API_CREDENTIALS_SECRET` | Secret with `username` and `password` keys for the manager API |
 | `dragonfly.chart.repo` | `DRAGONFLY_CHART_REPO` | Helm repository URL of the Dragonfly chart |
+| `extras.chart.repo` | `EXTRAS_CHART_REPO` | Helm repository URL of the dragonfly-extras chart |
+| `extras.chart.name` | `EXTRAS_CHART_NAME` | dragonfly-extras chart name |
+| `extras.chart.version` | `EXTRAS_CHART_VERSION` | dragonfly-extras chart version |
 
 Defaults: `mtlsSecretName=dragonfly-p2p-mtls`, `dragonfly.chart.name=dragonfly`,
-`dragonfly.chart.version=1.10.1`, `webhook.port=9443`, `leaderElect=false`.
+`dragonfly.chart.version=1.10.1`, `extras.chart.name=dragonfly-extras`,
+`extras.chart.version=0.1.0`, `webhook.port=9443`, `leaderElect=false`.
 
 ## Roles and HelmOps
 
@@ -71,11 +76,11 @@ annotations add the Dragonfly releases:
 
 | Roles | HelmOps |
 |---|---|
-| label only | `<cluster>-keydb` |
-| `manager: "true"` | KeyDB, `<cluster>-manager` (internal Service only) |
-| `seed: "true"` + scheduler ID | KeyDB, `<cluster>-control`, `<cluster>-data`, `<cluster>-nydus-snapshotter` |
-| manager + seed | all five releases |
-| `seed: "true"` without scheduler ID | KeyDB only; `SchedulerClusterIDMissing` event, no seed releases |
+| label only | `<cluster>-keydb`, `<cluster>-extras` (KeyDB VPA only) |
+| `manager: "true"` | KeyDB, `<cluster>-manager`, `<cluster>-extras` (Ingress + VPAs) |
+| `seed: "true"` + scheduler ID | KeyDB, `<cluster>-control`, `<cluster>-data`, `<cluster>-nydus-snapshotter`, `<cluster>-extras` (VPAs) |
+| manager + seed | all six releases |
+| `seed: "true"` without scheduler ID | KeyDB + extras (KeyDB VPA); `SchedulerClusterIDMissing` event, no seed releases |
 
 The operator requires Rancher 2.15+ with Fleet 0.16+ (the `HelmOp` CRD).
 The KeyDB chart (`keydb` 0.1.0) and nydus-snapshotter chart (`0.0.10`) are
@@ -83,8 +88,26 @@ pinned in the operator; KeyDB is published separately from this module.
 
 All releases target `dragonfly-system` and depend on each other through
 `spec.dependsOn`: control and nydus depend on KeyDB, data depends on control and
-KeyDB, and manager depends on KeyDB. The mTLS Secret is copied into the Cluster
-namespace and delivered downstream through `spec.downstreamResources`.
+KeyDB, manager depends on KeyDB, and extras depends on manager when Ingress is
+enabled. The mTLS Secret is copied into the Cluster namespace and delivered
+downstream through `spec.downstreamResources`.
+
+### Extras chart
+
+The `dragonfly-extras` chart owns the manager gRPC/REST Ingresses and the
+recommendation-only VPAs. The operator only creates the `<cluster>-extras`
+HelmOp:
+
+- `ingress.enabled` is true only for the manager role. gRPC uses port 65003 with
+  `GRPCS`, client mTLS verification from `dragonfly-p2p-mtls`, and no SSL
+  redirect. REST uses port 8080 over HTTPS.
+- `vpa.enabled` is set from API discovery for `autoscaling.k8s.io/v1`; the
+  chart additionally checks `Capabilities.APIVersions.Has`. Target names are
+  `<cluster>-keydb`, `<cluster>-manager`, `<cluster>-control-scheduler`,
+  `<cluster>-data-seed-client`, and `<cluster>-nydus-snapshotter`; each target
+  is enabled only for its active role.
+- The chart creates no PVC and no Secrets. The operator RBAC remains limited to
+  Clusters, HelmOps, Secrets, and Events.
 
 ## Cluster annotations
 
@@ -97,6 +120,18 @@ The operator only acts on Clusters labeled `p2p-dragonfly-io: "true"`.
 | `p2p.dragonfly.io/scheduler-cluster-id` | integer | Scheduler cluster ID; required by the seed role until MR-3 auto-allocates it |
 | `p2p.dragonfly.io/scheduler-replicas` | integer | Scheduler replicas (default `1`) |
 | `p2p.dragonfly.io/seedclient-replicas` | integer | Seed client replicas (default `1`) |
+
+## Known pilot risk: extras target names
+
+The Ingress backends and VPA targetRefs assume the Dragonfly chart workload
+names above. Verify them against the live release in the pilot, especially the
+`data` StatefulSet (`<cluster>-data-seed-client`) and the `control` StatefulSet
+(`<cluster>-control-scheduler`). The extras chart falls back to derived names
+when explicit names are empty, but the operator always sets them.
+
+The gRPC Ingress reads `auth-tls-secret` from `dragonfly-system`; the operator
+must be installed there (the default `namespace`) so the mTLS Secret is present
+in the Ingress namespace.
 
 ## Known pilot risk: nydus-snapshotter chart 0.0.10
 

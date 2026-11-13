@@ -38,6 +38,13 @@ dragonfly:
     name: dragonfly
     version: 1.10.1
 
+# dragonfly-extras chart owns the manager Ingresses and optional VPAs.
+extras:
+  chart:
+    repo: https://gorizond.github.io/d7y-cattle-operator
+    name: dragonfly-extras
+    version: 0.1.0
+
 webhook:
   # Admission webhook port served by the operator.
   port: 9443
