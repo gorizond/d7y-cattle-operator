@@ -5,10 +5,10 @@ import (
 	"log/slog"
 	"os"
 
+	"github.com/rancher/wrangler/v3/pkg/generated/controllers/core"
+	"github.com/rancher/wrangler/v3/pkg/kubeconfig"
 	"github.com/rancher/wrangler/v3/pkg/signals"
-	"k8s.io/client-go/kubernetes"
 	"k8s.io/client-go/rest"
-	"k8s.io/client-go/tools/clientcmd"
 
 	"github.com/gorizond/d7y-cattle-operator/pkg/config"
 	"github.com/gorizond/d7y-cattle-operator/pkg/pki"
@@ -31,9 +31,15 @@ func run() error {
 	if err != nil {
 		return fmt.Errorf("kubernetes client config: %w", err)
 	}
-	client, err := kubernetes.NewForConfig(restConfig)
+	coreFactory, err := core.NewFactoryFromConfig(restConfig)
 	if err != nil {
-		return fmt.Errorf("kubernetes client: %w", err)
+		return fmt.Errorf("wrangler core factory: %w", err)
+	}
+	secretController := coreFactory.Core().V1().Secret()
+
+	ctx := signals.SetupSignalContext()
+	if err := coreFactory.Start(ctx, 1); err != nil {
+		return fmt.Errorf("start wrangler controllers: %w", err)
 	}
 
 	bundle, err := pki.Generate(pki.Options{
@@ -44,8 +50,7 @@ func run() error {
 		return fmt.Errorf("generate mTLS material: %w", err)
 	}
 
-	ctx := signals.SetupSignalContext()
-	created, err := pki.EnsureSecret(ctx, client, cfg.Namespace, cfg.MTLSSecretName, bundle)
+	created, err := pki.EnsureSecret(secretController, cfg.Namespace, cfg.MTLSSecretName, bundle)
 	if err != nil {
 		return fmt.Errorf("ensure mTLS secret: %w", err)
 	}
@@ -61,9 +66,9 @@ func run() error {
 	return nil
 }
 
-func kubeRESTConfig(kubeconfig string) (*rest.Config, error) {
-	if kubeconfig == "" {
+func kubeRESTConfig(kubeconfigPath string) (*rest.Config, error) {
+	if kubeconfigPath == "" {
 		return rest.InClusterConfig()
 	}
-	return clientcmd.BuildConfigFromFlags("", kubeconfig)
+	return kubeconfig.GetNonInteractiveClientConfig(kubeconfigPath).ClientConfig()
 }

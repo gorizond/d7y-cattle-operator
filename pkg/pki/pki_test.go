@@ -1,7 +1,6 @@
 package pki
 
 import (
-	"context"
 	"crypto/ecdsa"
 	"crypto/elliptic"
 	"crypto/x509"
@@ -9,10 +8,14 @@ import (
 	"testing"
 	"time"
 
+	wranglercorev1 "github.com/rancher/wrangler/v3/pkg/generated/controllers/core/v1"
 	corev1 "k8s.io/api/core/v1"
+	apierrors "k8s.io/apimachinery/pkg/api/errors"
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
-	"k8s.io/client-go/kubernetes/fake"
 )
+
+// Wrangler's generated SecretController must satisfy SecretStore.
+var _ SecretStore = (wranglercorev1.SecretController)(nil)
 
 const (
 	testGRPCDomain = "manager-grpc.example.com"
@@ -131,11 +134,10 @@ func TestParsePrivateKeyRejectsInvalidPEM(t *testing.T) {
 }
 
 func TestEnsureSecret(t *testing.T) {
-	ctx := context.Background()
-	client := fake.NewSimpleClientset()
+	store := newFakeSecretStore()
 	bundle := testBundle(t)
 
-	created, err := EnsureSecret(ctx, client, "dragonfly-system", "dragonfly-p2p-mtls", bundle)
+	created, err := EnsureSecret(store, "dragonfly-system", "dragonfly-p2p-mtls", bundle)
 	if err != nil {
 		t.Fatalf("EnsureSecret() error = %v", err)
 	}
@@ -143,7 +145,7 @@ func TestEnsureSecret(t *testing.T) {
 		t.Error("EnsureSecret() created = false, want true")
 	}
 
-	secret, err := client.CoreV1().Secrets("dragonfly-system").Get(ctx, "dragonfly-p2p-mtls", metav1.GetOptions{})
+	secret, err := store.Get("dragonfly-system", "dragonfly-p2p-mtls", metav1.GetOptions{})
 	if err != nil {
 		t.Fatalf("get secret: %v", err)
 	}
@@ -165,7 +167,7 @@ func TestEnsureSecret(t *testing.T) {
 		CertPEM:   []byte("new-cert"),
 		KeyPEM:    []byte("new-key"),
 	}
-	created, err = EnsureSecret(ctx, client, "dragonfly-system", "dragonfly-p2p-mtls", replacement)
+	created, err = EnsureSecret(store, "dragonfly-system", "dragonfly-p2p-mtls", replacement)
 	if err != nil {
 		t.Fatalf("EnsureSecret(second) error = %v", err)
 	}
@@ -173,7 +175,7 @@ func TestEnsureSecret(t *testing.T) {
 		t.Error("EnsureSecret(second) created = true, want false")
 	}
 
-	unchanged, err := client.CoreV1().Secrets("dragonfly-system").Get(ctx, "dragonfly-p2p-mtls", metav1.GetOptions{})
+	unchanged, err := store.Get("dragonfly-system", "dragonfly-p2p-mtls", metav1.GetOptions{})
 	if err != nil {
 		t.Fatalf("get secret: %v", err)
 	}
@@ -183,9 +185,34 @@ func TestEnsureSecret(t *testing.T) {
 }
 
 func TestEnsureSecretNilBundle(t *testing.T) {
-	if _, err := EnsureSecret(context.Background(), fake.NewSimpleClientset(), "ns", "name", nil); err == nil {
+	if _, err := EnsureSecret(newFakeSecretStore(), "ns", "name", nil); err == nil {
 		t.Fatal("EnsureSecret(nil) error = nil, want an error")
 	}
+}
+
+type fakeSecretStore struct {
+	secrets map[string]*corev1.Secret
+}
+
+func newFakeSecretStore() *fakeSecretStore {
+	return &fakeSecretStore{secrets: make(map[string]*corev1.Secret)}
+}
+
+func (f *fakeSecretStore) Get(namespace, name string, _ metav1.GetOptions) (*corev1.Secret, error) {
+	secret, ok := f.secrets[namespace+"/"+name]
+	if !ok {
+		return nil, apierrors.NewNotFound(corev1.Resource("secrets"), name)
+	}
+	return secret.DeepCopy(), nil
+}
+
+func (f *fakeSecretStore) Create(secret *corev1.Secret) (*corev1.Secret, error) {
+	key := secret.Namespace + "/" + secret.Name
+	if _, ok := f.secrets[key]; ok {
+		return nil, apierrors.NewAlreadyExists(corev1.Resource("secrets"), secret.Name)
+	}
+	f.secrets[key] = secret.DeepCopy()
+	return secret.DeepCopy(), nil
 }
 
 func keysOf(data map[string][]byte) []string {
