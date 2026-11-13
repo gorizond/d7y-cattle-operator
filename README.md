@@ -3,10 +3,11 @@
 Kubernetes operator that runs [Dragonfly](https://d7y.io) P2P on Rancher-managed
 RKE2 clusters.
 
-**Status**: MR-2c (extras). The Cluster controller, role resolution, KeyDB,
-manager, seed role, and the `dragonfly-extras` chart (manager Ingress + VPA)
-are implemented. Manager API registration, p2p-static/Nginx, and the admission
-webhook follow in later MRs.
+**Status**: MR-3a (manager API library). The Cluster controller, role
+resolution, KeyDB, manager, seed role, and the `dragonfly-extras` chart are
+implemented. The manager REST client and scheduler ID allocator are library-only;
+controller wiring, p2p-static/Nginx, and the admission webhook follow in later
+MRs.
 
 ## What it does today
 
@@ -24,11 +25,14 @@ webhook follow in later MRs.
 - Manages the manager Ingresses and optional VPAs through the separate
   `<cluster>-extras` HelmOp and the `dragonfly-extras` chart. The operator has
   no Ingress or VPA RBAC and creates neither kind directly.
+- Provides a JWT-authenticated manager REST client (`pkg/managerapi`) and a
+  thread-safe scheduler ID allocator (`pkg/registry`). Neither is wired into the
+  controller yet.
 - Runs until it receives `SIGINT`/`SIGTERM`.
 
 ## Follow-ups
 
-- MR-3: manager API registration and automatic scheduler cluster ID allocation.
+- MR-3b: wire the manager API client and allocator into the Cluster controller.
 - p2p-static/Nginx extras and the bootstrap payload/webhook.
 - The extras chart's VPA targetRef names must be verified against live workload
   names in the pilot.
@@ -120,6 +124,34 @@ The operator only acts on Clusters labeled `p2p-dragonfly-io: "true"`.
 | `p2p.dragonfly.io/scheduler-cluster-id` | integer | Scheduler cluster ID; required by the seed role until MR-3 auto-allocates it |
 | `p2p.dragonfly.io/scheduler-replicas` | integer | Scheduler replicas (default `1`) |
 | `p2p.dragonfly.io/seedclient-replicas` | integer | Seed client replicas (default `1`) |
+
+## Manager API client and scheduler ID allocator
+
+`pkg/managerapi` is a stdlib-only client for the Dragonfly v2.5.4 manager REST
+API:
+
+- JWT `POST /api/v1/users/signin` with `name`/`password` (the Secret key remains
+  `username`); response `token` + `expire`; Bearer auth; one re-signin on 401.
+- List/create SchedulerCluster and SeedPeerCluster, GET by ID, and idempotent
+  `Ensure*` helpers.
+- Pagination follows the `Link` header `rel=next`; list responses may be `null`
+  (treated as empty) and `page`/`per_page`/exact `name` filters are supported.
+- SeedPeerCluster → SchedulerCluster linking uses the explicit
+  `PUT /api/v1/seed-peer-clusters/{seed_id}/scheduler-clusters/{scheduler_id}`
+  endpoint; the create bodies never send `id`, `seed_peer_cluster_id`, or
+  `scheduler_cluster_id`.
+- 404 → `ErrNotFound`, 409 → `ErrConflict` (re-read), 401/403 → auth failure,
+  422 → `ErrUnprocessable` (no retry); 5xx/timeouts surface as errors for the
+  controller's future backoff.
+- `block_list` is sent as an empty object (`{}`) because the contract expects an
+  object and the nested shape is not confirmed. Neither package is wired into
+  reconciliation yet.
+
+`pkg/registry` allocates scheduler cluster IDs with a mutex and cache: ID 1 is
+reserved, automatic allocation starts at 2, manager IDs are skipped, an
+existing annotation is returned unchanged and never overwritten, and repeated
+or concurrent calls for the same cluster return the cached ID. Neither package
+is wired into reconciliation yet.
 
 ## Known pilot risk: extras target names
 
