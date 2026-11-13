@@ -1,0 +1,26 @@
+{{- if .Values.webhook.enabled }}
+apiVersion: admissionregistration.k8s.io/v1
+kind: MutatingWebhookConfiguration
+metadata:
+  name: {{ include "d7y-cattle-operator.fullname" . }}
+  labels:
+    {{- include "d7y-cattle-operator.labels" . | nindent 4 }}
+webhooks:
+  - name: machineconfig.d7y.gorizond.io
+    admissionReviewVersions: ["v1"]
+    sideEffects: None
+    failurePolicy: {{ .Values.webhook.failurePolicy }}
+    rules:
+      - apiGroups: ["rke-machine-config.cattle.io"]
+        apiVersions: ["v1"]
+        operations: ["CREATE"]
+        resources: ["*"]
+        scope: "*"
+    clientConfig:
+      caBundle: ""
+      service:
+        name: {{ include "d7y-cattle-operator.fullname" . }}-webhook
+        namespace: {{ .Release.Namespace }}
+        path: /mutate
+        port: 443
+{{- end }}

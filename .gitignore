@@ -1,0 +1,24 @@
+# Binaries and build output
+/bin/
+/dist/
+*.exe
+*.test
+*.out
+coverage.*
+
+# Go tooling
+vendor/
+
+# Editors and OS files
+.idea/
+.vscode/
+.DS_Store
+*.swp
+
+# Secrets and local configuration
+.env
+.env.*
+!.env.example
+*.pem
+*.key
+*.crt

@@ -1,0 +1,39 @@
+{{- if .Values.rbac.create }}
+apiVersion: rbac.authorization.k8s.io/v1
+kind: ClusterRole
+metadata:
+  name: {{ include "d7y-cattle-operator.fullname" . }}
+  labels:
+    {{- include "d7y-cattle-operator.labels" . | nindent 4 }}
+rules:
+  - apiGroups: ["provisioning.cattle.io"]
+    resources: ["clusters"]
+    verbs: ["get", "list", "watch"]
+  - apiGroups: ["fleet.cattle.io"]
+    resources: ["helmops"]
+    verbs: ["get", "list", "watch", "create", "update", "patch", "delete"]
+  - apiGroups: ["rke-machine-config.cattle.io"]
+    resources: ["*"]
+    verbs: ["get", "list", "watch"]
+  - apiGroups: [""]
+    resources: ["secrets"]
+    verbs: ["get", "list", "watch", "create", "update"]
+  - apiGroups: [""]
+    resources: ["events"]
+    verbs: ["create", "patch"]
+---
+apiVersion: rbac.authorization.k8s.io/v1
+kind: ClusterRoleBinding
+metadata:
+  name: {{ include "d7y-cattle-operator.fullname" . }}
+  labels:
+    {{- include "d7y-cattle-operator.labels" . | nindent 4 }}
+roleRef:
+  apiGroup: rbac.authorization.k8s.io
+  kind: ClusterRole
+  name: {{ include "d7y-cattle-operator.fullname" . }}
+subjects:
+  - kind: ServiceAccount
+    name: {{ include "d7y-cattle-operator.serviceAccountName" . }}
+    namespace: {{ .Release.Namespace }}
+{{- end }}
