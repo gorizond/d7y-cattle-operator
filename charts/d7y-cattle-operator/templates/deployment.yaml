@@ -1,0 +1,64 @@
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: {{ include "d7y-cattle-operator.fullname" . }}
+  labels:
+    {{- include "d7y-cattle-operator.labels" . | nindent 4 }}
+spec:
+  replicas: {{ .Values.replicaCount }}
+  selector:
+    matchLabels:
+      {{- include "d7y-cattle-operator.selectorLabels" . | nindent 6 }}
+  template:
+    metadata:
+      labels:
+        {{- include "d7y-cattle-operator.selectorLabels" . | nindent 8 }}
+    spec:
+      serviceAccountName: {{ include "d7y-cattle-operator.serviceAccountName" . }}
+      securityContext:
+        runAsNonRoot: true
+        runAsUser: 65532
+        runAsGroup: 65532
+        seccompProfile:
+          type: RuntimeDefault
+      containers:
+        - name: manager
+          image: "{{ .Values.image.repository }}:{{ .Values.image.tag | default (printf "v%s" .Chart.Version) }}"
+          imagePullPolicy: {{ .Values.image.pullPolicy }}
+          args:
+            - --leader-elect={{ .Values.leaderElect }}
+          env:
+            - name: MANAGER_GRPC_DOMAIN
+              value: {{ .Values.manager.grpcDomain | quote }}
+            - name: MANAGER_API_URL
+              value: {{ .Values.manager.apiURL | quote }}
+            - name: NGINX_STATIC_URL
+              value: {{ .Values.nginx.staticURL | quote }}
+            - name: MTLS_SECRET_NAME
+              value: {{ .Values.mtlsSecretName | quote }}
+            - name: MANAGER_API_CREDENTIALS_SECRET
+              value: {{ .Values.managerApiCredentialsSecret | quote }}
+            - name: DRAGONFLY_CHART_REPO
+              value: {{ .Values.dragonfly.chart.repo | quote }}
+            - name: DRAGONFLY_CHART_NAME
+              value: {{ .Values.dragonfly.chart.name | quote }}
+            - name: DRAGONFLY_CHART_VERSION
+              value: {{ .Values.dragonfly.chart.version | quote }}
+            - name: POD_NAMESPACE
+              valueFrom:
+                fieldRef:
+                  fieldPath: metadata.namespace
+            - name: WEBHOOK_PORT
+              value: {{ .Values.webhook.port | quote }}
+          ports:
+            - name: webhook
+              containerPort: {{ .Values.webhook.port }}
+              protocol: TCP
+          securityContext:
+            allowPrivilegeEscalation: false
+            readOnlyRootFilesystem: true
+            capabilities:
+              drop:
+                - ALL
+          resources:
+            {{- toYaml .Values.resources | nindent 12 }}

@@ -1,0 +1,57 @@
+replicaCount: 1
+
+image:
+  repository: ghcr.io/gorizond/d7y-cattle-operator
+  # Defaults to v<chart version> to match the release image tags.
+  tag: ""
+  pullPolicy: IfNotPresent
+
+nameOverride: ""
+fullnameOverride: ""
+
+serviceAccount:
+  create: true
+  name: ""
+
+rbac:
+  create: true
+
+# Secret holding the CA and leaf certificate shared with Dragonfly.
+mtlsSecretName: dragonfly-p2p-mtls
+
+# Secret with manager REST API credentials (keys: username, password).
+managerApiCredentialsSecret: ""
+
+manager:
+  # Public hostname of the manager gRPC endpoint (no scheme).
+  grpcDomain: ""
+  # Public HTTPS URL of the manager REST API.
+  apiURL: ""
+
+nginx:
+  # Base URL of the static asset server (http or https).
+  staticURL: ""
+
+dragonfly:
+  chart:
+    repo: https://dragonflyoss.github.io/helm-charts
+    name: dragonfly
+    version: 1.10.1
+
+webhook:
+  # Admission webhook port served by the operator.
+  port: 9443
+  # The MutatingWebhookConfiguration is registered by the operator in MR-4.
+  # Keep this disabled until the webhook server is implemented.
+  enabled: false
+  failurePolicy: Ignore
+
+leaderElect: false
+
+resources:
+  requests:
+    cpu: 50m
+    memory: 64Mi
+  limits:
+    cpu: 500m
+    memory: 256Mi

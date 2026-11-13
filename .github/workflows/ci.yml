@@ -1,0 +1,34 @@
+name: CI
+
+on:
+  push:
+    branches: [main]
+  pull_request:
+
+jobs:
+  test:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Build test image
+        run: docker build --target test -t d7y-cattle-operator:test .
+
+      - name: Run unit tests
+        run: docker run --rm d7y-cattle-operator:test go test ./...
+
+      - name: Build operator image
+        run: docker build -t d7y-cattle-operator:ci .
+
+  helm:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: azure/setup-helm@v4
+
+      - name: Lint chart
+        run: helm lint charts/d7y-cattle-operator
+
+      - name: Render chart
+        run: helm template d7y-cattle-operator charts/d7y-cattle-operator --set webhook.enabled=true > /dev/null
