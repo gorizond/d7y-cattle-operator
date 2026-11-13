@@ -3,14 +3,20 @@ package main
 import (
 	"fmt"
 	"log/slog"
+	"net/url"
 	"os"
 
+	provisioning "github.com/rancher/rancher/pkg/generated/controllers/provisioning.cattle.io"
 	"github.com/rancher/wrangler/v3/pkg/generated/controllers/core"
 	"github.com/rancher/wrangler/v3/pkg/kubeconfig"
 	"github.com/rancher/wrangler/v3/pkg/signals"
+	"github.com/rancher/wrangler/v3/pkg/start"
+	"k8s.io/client-go/dynamic"
 	"k8s.io/client-go/rest"
 
+	"github.com/gorizond/d7y-cattle-operator/pkg/cluster"
 	"github.com/gorizond/d7y-cattle-operator/pkg/config"
+	"github.com/gorizond/d7y-cattle-operator/pkg/helmop"
 	"github.com/gorizond/d7y-cattle-operator/pkg/pki"
 )
 
@@ -31,15 +37,44 @@ func run() error {
 	if err != nil {
 		return fmt.Errorf("kubernetes client config: %w", err)
 	}
+
 	coreFactory, err := core.NewFactoryFromConfig(restConfig)
 	if err != nil {
 		return fmt.Errorf("wrangler core factory: %w", err)
 	}
+	provisioningFactory, err := provisioning.NewFactoryFromConfig(restConfig)
+	if err != nil {
+		return fmt.Errorf("wrangler provisioning factory: %w", err)
+	}
+	dynamicClient, err := dynamic.NewForConfig(restConfig)
+	if err != nil {
+		return fmt.Errorf("dynamic client: %w", err)
+	}
+
+	apiHost, err := hostFromURL(cfg.ManagerAPIURL)
+	if err != nil {
+		return fmt.Errorf("manager API URL: %w", err)
+	}
+
 	secretController := coreFactory.Core().V1().Secret()
+	eventController := coreFactory.Core().V1().Event()
+	clusterController := provisioningFactory.Provisioning().V1().Cluster()
 
 	ctx := signals.SetupSignalContext()
-	if err := coreFactory.Start(ctx, 1); err != nil {
-		return fmt.Errorf("start wrangler controllers: %w", err)
+	cluster.Register(ctx, clusterController, secretController, eventController, dynamicClient, cluster.Options{
+		OperatorNamespace: cfg.Namespace,
+		MTLSSecretName:    cfg.MTLSSecretName,
+		ManagerGRPCDomain: cfg.ManagerGRPCDomain,
+		ManagerAPIHost:    apiHost,
+		DragonflyChart: helmop.Chart{
+			Repo:    cfg.DragonflyChartRepo,
+			Name:    cfg.DragonflyChartName,
+			Version: cfg.DragonflyChartVersion,
+		},
+	})
+
+	if err := start.All(ctx, 1, coreFactory, provisioningFactory); err != nil {
+		return fmt.Errorf("start controllers: %w", err)
 	}
 
 	bundle, err := pki.Generate(pki.Options{
@@ -59,7 +94,7 @@ func run() error {
 		"name", cfg.MTLSSecretName,
 		"created", created,
 	)
-	slog.Info("operator scaffold running; controllers are not implemented yet")
+	slog.Info("cluster controller running")
 
 	<-ctx.Done()
 	slog.Info("shutting down")
@@ -71,4 +106,15 @@ func kubeRESTConfig(kubeconfigPath string) (*rest.Config, error) {
 		return rest.InClusterConfig()
 	}
 	return kubeconfig.GetNonInteractiveClientConfig(kubeconfigPath).ClientConfig()
+}
+
+func hostFromURL(raw string) (string, error) {
+	parsed, err := url.Parse(raw)
+	if err != nil {
+		return "", err
+	}
+	if parsed.Hostname() == "" {
+		return "", fmt.Errorf("no host in %q", raw)
+	}
+	return parsed.Hostname(), nil
 }

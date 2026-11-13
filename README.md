@@ -3,25 +3,27 @@
 Kubernetes operator that runs [Dragonfly](https://d7y.io) P2P on Rancher-managed
 RKE2 clusters.
 
-**Status**: early scaffold. This MR ships configuration parsing, PKI/mTLS Secret
-bootstrap, the container image, CI, and the Helm chart skeleton. Controllers,
-Fleet HelmOp builders, and the admission webhook follow in later MRs.
+**Status**: MR-2. The Cluster controller, role reconciliation, KeyDB/manager/
+control/data/nydus HelmOps, and optional VPA support are implemented. Manager
+API registration and the admission webhook follow in later MRs.
 
 ## What it does today
 
 - Parses and validates the operator configuration from flags/environment variables.
 - Ensures a single mTLS CA and leaf certificate Secret (`dragonfly-p2p-mtls` by
   default) in the operator namespace. The Secret is created once and never
-  overwritten.
+  overwritten, and is replicated into each Cluster namespace.
+- Reconciles `provisioning.cattle.io/v1` Clusters selected by the
+  `p2p-dragonfly-io: "true"` label.
+- Deploys KeyDB, manager, scheduler, seed client, and nydus-snapshotter through
+  Fleet HelmOps, without PersistentVolumeClaims.
+- Publishes the manager on a gRPC endpoint with client mTLS and a REST API over
+  HTTPS.
 - Runs until it receives `SIGINT`/`SIGTERM`.
 
 ## Planned behavior
 
-- Reconcile `provisioning.cattle.io/v1` Clusters selected by the
-  `p2p-dragonfly-io: "true"` label.
-- Deploy KeyDB, manager, scheduler, seed client, and nydus-snapshotter through
-  Fleet HelmOps, without PersistentVolumeClaims.
-- Publish the manager on a gRPC endpoint with client mTLS and a REST API with JWT.
+- Manager API registration and scheduler cluster ID allocation.
 - Inject a bootstrap payload into new machine configs through a mutating webhook
   that only handles `CREATE` requests.
 
@@ -55,6 +57,50 @@ through flags or chart values.
 Defaults: `mtlsSecretName=dragonfly-p2p-mtls`, `dragonfly.chart.name=dragonfly`,
 `dragonfly.chart.version=1.10.1`, `webhook.port=9443`, `leaderElect=false`.
 
+## Roles and HelmOps
+
+A Cluster labeled `p2p-dragonfly-io: "true"` gets one KeyDB release. Role
+annotations add the Dragonfly releases:
+
+| Roles | HelmOps |
+|---|---|
+| label only | `<cluster>-keydb` |
+| `manager: "true"` | KeyDB, `<cluster>-manager`, gRPC/REST Ingresses |
+| `seed: "true"` | KeyDB, `<cluster>-control`, `<cluster>-data`, `<cluster>-nydus-snapshotter` |
+| both | all five releases and both Ingresses |
+
+The operator requires Rancher 2.15+ with Fleet 0.16+ (the `HelmOp` CRD).
+KeyDB (`keydb` 0.1.0) and nydus-snapshotter (`0.0.10`) chart versions are pinned
+in the operator; the KeyDB chart is published separately from this module.
+
+All releases target `dragonfly-system` and depend on each other through
+`spec.dependsOn` (`manager`/`control`/`nydus` on KeyDB, `data` on control and
+KeyDB). The mTLS Secret is copied into the Cluster namespace and delivered
+downstream through `spec.downstreamResources`.
+
+VerticalPodAutoscalers are applied in recommendation-only mode (`updateMode:
+Off`) when the `autoscaling.k8s.io/v1` CRD is installed; otherwise they are
+skipped and a Cluster event is emitted.
+
+### Manager API credentials
+
+Registration (MR-3) reads the manager API credentials from a Secret. Create it
+before enabling the manager role:
+
+```yaml
+apiVersion: v1
+kind: Secret
+metadata:
+  name: dragonfly-manager-api
+  namespace: dragonfly-system
+type: Opaque
+stringData:
+  username: admin
+  password: change-me
+```
+
+The operator never logs the credential values.
+
 ## Cluster annotations
 
 The operator only acts on Clusters labeled `p2p-dragonfly-io: "true"`.
@@ -71,6 +117,9 @@ Role handling is implemented in later MRs; the annotations are documented here
 because they define the operator contract.
 
 ## Development
+
+Go 1.26 is required because the operator builds against the Rancher 2.15 and
+Fleet 0.16 API machinery used by the target management cluster.
 
 Docker is the source of truth for builds and tests:
 

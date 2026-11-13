@@ -16,7 +16,8 @@ serviceAccount:
 rbac:
   create: true
 
-# Secret holding the CA and leaf certificate shared with Dragonfly.
+# Secret holding the CA and leaf certificate shared with Dragonfly. It is
+# replicated into every Cluster namespace for downstream delivery.
 mtlsSecretName: dragonfly-p2p-mtls
 
 # Secret with manager REST API credentials (keys: username, password).
@@ -32,6 +33,7 @@ nginx:
   # Base URL of the static asset server (http or https).
   staticURL: ""
 
+# Dragonfly chart used by the manager, control, and data HelmOps.
 dragonfly:
   chart:
     repo: https://dragonflyoss.github.io/helm-charts
