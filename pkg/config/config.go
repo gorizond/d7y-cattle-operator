@@ -19,6 +19,9 @@ const (
 	DefaultMTLSSecretName        = "dragonfly-p2p-mtls"
 	DefaultDragonflyChartName    = "dragonfly"
 	DefaultDragonflyChartVersion = "1.10.1"
+	DefaultExtrasChartRepo       = "https://gorizond.github.io/d7y-cattle-operator"
+	DefaultExtrasChartName       = "dragonfly-extras"
+	DefaultExtrasChartVersion    = "0.1.0"
 	DefaultNamespace             = "dragonfly-system"
 	DefaultWebhookPort           = 9443
 )
@@ -35,6 +38,9 @@ type Config struct {
 	DragonflyChartRepo          string
 	DragonflyChartName          string
 	DragonflyChartVersion       string
+	ExtrasChartRepo             string
+	ExtrasChartName             string
+	ExtrasChartVersion          string
 	Namespace                   string
 	WebhookPort                 int
 	LeaderElect                 bool
@@ -59,6 +65,9 @@ func Load(args []string) (*Config, error) {
 	fs.StringVar(&cfg.DragonflyChartRepo, "dragonfly-chart-repo", envOr("DRAGONFLY_CHART_REPO", ""), "Helm repository URL of the Dragonfly chart")
 	fs.StringVar(&cfg.DragonflyChartName, "dragonfly-chart-name", envOr("DRAGONFLY_CHART_NAME", DefaultDragonflyChartName), "Dragonfly chart name")
 	fs.StringVar(&cfg.DragonflyChartVersion, "dragonfly-chart-version", envOr("DRAGONFLY_CHART_VERSION", DefaultDragonflyChartVersion), "Dragonfly chart version")
+	fs.StringVar(&cfg.ExtrasChartRepo, "extras-chart-repo", envOr("EXTRAS_CHART_REPO", DefaultExtrasChartRepo), "Helm repository URL of the dragonfly-extras chart")
+	fs.StringVar(&cfg.ExtrasChartName, "extras-chart-name", envOr("EXTRAS_CHART_NAME", DefaultExtrasChartName), "dragonfly-extras chart name")
+	fs.StringVar(&cfg.ExtrasChartVersion, "extras-chart-version", envOr("EXTRAS_CHART_VERSION", DefaultExtrasChartVersion), "dragonfly-extras chart version")
 	fs.StringVar(&cfg.Namespace, "namespace", envOr("POD_NAMESPACE", DefaultNamespace), "namespace where the operator stores its Secret")
 	fs.IntVar(&cfg.WebhookPort, "webhook-port", defaultWebhookPort, "admission webhook port")
 	fs.BoolVar(&cfg.LeaderElect, "leader-elect", false, "enable leader election")
@@ -117,6 +126,19 @@ func (c *Config) Validate() error {
 	}
 	if !chartVersionPattern.MatchString(c.DragonflyChartVersion) {
 		add("--dragonfly-chart-version: %q is not a valid chart version", c.DragonflyChartVersion)
+	}
+	if c.ExtrasChartRepo == "" {
+		add("--extras-chart-repo is required")
+	} else if err := validateURL(c.ExtrasChartRepo, "http", "https"); err != nil {
+		add("--extras-chart-repo: %v", err)
+	}
+	if c.ExtrasChartName == "" {
+		add("--extras-chart-name is required")
+	} else if msgs := validation.IsDNS1123Label(c.ExtrasChartName); len(msgs) > 0 {
+		add("--extras-chart-name: %s", strings.Join(msgs, "; "))
+	}
+	if !chartVersionPattern.MatchString(c.ExtrasChartVersion) {
+		add("--extras-chart-version: %q is not a valid chart version", c.ExtrasChartVersion)
 	}
 	if c.Namespace == "" {
 		add("--namespace is required")

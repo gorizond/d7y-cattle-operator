@@ -20,8 +20,9 @@ lint:
 	docker run --rm $(IMAGE):test go vet ./...
 
 helm-lint:
-	helm lint charts/d7y-cattle-operator
+	helm lint charts/d7y-cattle-operator charts/dragonfly-extras
 
 helm-template:
 	helm template d7y-cattle-operator charts/d7y-cattle-operator
 	helm template d7y-cattle-operator charts/d7y-cattle-operator --set webhook.enabled=true
+	helm template dragonfly-extras charts/dragonfly-extras --set ingress.enabled=true --set vpa.enabled=true --api-versions autoscaling.k8s.io/v1

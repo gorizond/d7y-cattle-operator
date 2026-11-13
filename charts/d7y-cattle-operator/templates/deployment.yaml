@@ -44,6 +44,12 @@ spec:
               value: {{ .Values.dragonfly.chart.name | quote }}
             - name: DRAGONFLY_CHART_VERSION
               value: {{ .Values.dragonfly.chart.version | quote }}
+            - name: EXTRAS_CHART_REPO
+              value: {{ .Values.extras.chart.repo | quote }}
+            - name: EXTRAS_CHART_NAME
+              value: {{ .Values.extras.chart.name | quote }}
+            - name: EXTRAS_CHART_VERSION
+              value: {{ .Values.extras.chart.version | quote }}
             - name: POD_NAMESPACE
               valueFrom:
                 fieldRef:

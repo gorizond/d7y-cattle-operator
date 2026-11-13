@@ -1,0 +1,49 @@
+# Manager Ingresses (gRPC with client mTLS + REST over HTTPS).
+ingress:
+  enabled: false
+  grpc:
+    host: ""
+    service: ""
+    port: 65003
+  rest:
+    host: ""
+    service: ""
+    port: 8080
+  # Secret in this namespace that holds ca.crt for client certificate verification.
+  mtlsSecret: dragonfly-p2p-mtls
+
+# VerticalPodAutoscalers in recommendation-only mode. Rendered only when the
+# autoscaling.k8s.io/v1 CRD is installed and vpa.enabled is true.
+#
+# The operator sets explicit target names; the fallbacks below derive names from
+# clusterName. Pilot must verify the live workload names:
+#   keydb   Deployment    <cluster>-keydb
+#   manager Deployment    <cluster>-manager
+#   control StatefulSet   <cluster>-control-scheduler
+#   data    StatefulSet   <cluster>-data-seed-client
+#   nydus   DaemonSet     <cluster>-nydus-snapshotter
+vpa:
+  enabled: false
+  namespace: dragonfly-system
+  clusterName: ""
+  targets:
+    keydb:
+      enabled: true
+      kind: Deployment
+      name: ""
+    manager:
+      enabled: false
+      kind: Deployment
+      name: ""
+    control:
+      enabled: false
+      kind: StatefulSet
+      name: ""
+    data:
+      enabled: false
+      kind: StatefulSet
+      name: ""
+    nydus:
+      enabled: false
+      kind: DaemonSet
+      name: ""

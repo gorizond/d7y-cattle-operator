@@ -17,6 +17,7 @@ const (
 	TargetNamespace = "dragonfly-system"
 
 	ManagerGRPCPort = 65003
+	ManagerRESTPort = 8080
 
 	// CertDir is where the mTLS Secret is mounted in Dragonfly pods.
 	CertDir = "/etc/dragonfly/certs"
@@ -48,7 +49,9 @@ type Cluster struct {
 	Namespace          string
 	MTLSSecretName     string
 	Chart              Chart
+	ExtrasChart        Chart
 	ManagerGRPCDomain  string
+	ManagerAPIHost     string
 	SchedulerClusterID int
 	SchedulerReplicas  string
 	SeedClientReplicas string
@@ -70,11 +73,18 @@ func DataName(cluster string) string { return objectName(cluster, "data") }
 // NydusName returns the nydus-snapshotter HelmOp and release name.
 func NydusName(cluster string) string { return objectName(cluster, "nydus-snapshotter") }
 
+// ExtrasName returns the dragonfly-extras HelmOp and release name.
+func ExtrasName(cluster string) string { return objectName(cluster, "extras") }
+
 // ManagerFullname returns the chart fullnameOverride that makes the Dragonfly
 // chart create the <cluster>-manager Service.
 func ManagerFullname(cluster string) string {
 	return strings.TrimSuffix(ManagerName(cluster), "-manager")
 }
+
+// ManagerServiceName returns the manager Service name created by the manager
+// release. It is the backend of the extras Ingress.
+func ManagerServiceName(cluster string) string { return objectName(cluster, "manager") }
 
 // SchedulerServiceName returns the scheduler Service name created by the
 // control release.

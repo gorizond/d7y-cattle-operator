@@ -3,6 +3,7 @@ package main
 import (
 	"fmt"
 	"log/slog"
+	"net/url"
 	"os"
 
 	lassoclient "github.com/rancher/lasso/pkg/client"
@@ -54,6 +55,18 @@ func run() error {
 		return fmt.Errorf("HelmOp client: %w", err)
 	}
 
+	apiHost, err := hostFromURL(cfg.ManagerAPIURL)
+	if err != nil {
+		return fmt.Errorf("manager API URL: %w", err)
+	}
+
+	// Discovery is allowed to every authenticated user, so checking the VPA
+	// API needs no autoscaling RBAC.
+	vpaEnabled := false
+	if _, err := clientFactory.GVKForResource(helmop.VPAGVR); err == nil {
+		vpaEnabled = true
+	}
+
 	secretController := coreFactory.Core().V1().Secret()
 	eventController := coreFactory.Core().V1().Event()
 	clusterController := provisioningFactory.Provisioning().V1().Cluster()
@@ -63,11 +76,18 @@ func run() error {
 		OperatorNamespace: cfg.Namespace,
 		MTLSSecretName:    cfg.MTLSSecretName,
 		ManagerGRPCDomain: cfg.ManagerGRPCDomain,
+		ManagerAPIHost:    apiHost,
 		DragonflyChart: helmop.Chart{
 			Repo:    cfg.DragonflyChartRepo,
 			Name:    cfg.DragonflyChartName,
 			Version: cfg.DragonflyChartVersion,
 		},
+		ExtrasChart: helmop.Chart{
+			Repo:    cfg.ExtrasChartRepo,
+			Name:    cfg.ExtrasChartName,
+			Version: cfg.ExtrasChartVersion,
+		},
+		VPAEnabled: vpaEnabled,
 	})
 
 	if err := start.All(ctx, 1, coreFactory, provisioningFactory); err != nil {
@@ -96,4 +116,15 @@ func run() error {
 	<-ctx.Done()
 	slog.Info("shutting down")
 	return nil
+}
+
+func hostFromURL(raw string) (string, error) {
+	parsed, err := url.Parse(raw)
+	if err != nil {
+		return "", err
+	}
+	if parsed.Hostname() == "" {
+		return "", fmt.Errorf("no host in %q", raw)
+	}
+	return parsed.Hostname(), nil
 }
