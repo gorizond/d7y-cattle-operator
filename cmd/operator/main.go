@@ -62,6 +62,7 @@ func run() error {
 	cluster.Register(ctx, clusterController, secretController, eventController, helmOps, cluster.Options{
 		OperatorNamespace: cfg.Namespace,
 		MTLSSecretName:    cfg.MTLSSecretName,
+		ManagerGRPCDomain: cfg.ManagerGRPCDomain,
 		DragonflyChart: helmop.Chart{
 			Repo:    cfg.DragonflyChartRepo,
 			Name:    cfg.DragonflyChartName,

@@ -6,6 +6,7 @@ import (
 	"errors"
 	"fmt"
 	"log/slog"
+	"strconv"
 
 	fleetv1alpha1 "github.com/rancher/fleet/pkg/apis/fleet.cattle.io/v1alpha1"
 	provv1 "github.com/rancher/rancher/pkg/apis/provisioning.cattle.io/v1"
@@ -20,18 +21,24 @@ import (
 
 const controllerName = "d7y-cattle-operator"
 
+// eventStore is the subset of Wrangler's EventController used for Cluster events.
+type eventStore interface {
+	Create(*corev1.Event) (*corev1.Event, error)
+}
+
 // Options carries the operator configuration needed for reconciliation.
 type Options struct {
 	OperatorNamespace string
 	MTLSSecretName    string
+	ManagerGRPCDomain string
 	DragonflyChart    helmop.Chart
 }
 
 // Controller reconciles provisioning.cattle.io/v1 Clusters.
 type Controller struct {
 	ctx     context.Context
-	secrets corectl.SecretController
-	events  corectl.EventController
+	secrets apply.SecretStore
+	events  eventStore
 	helmops apply.Store
 	opts    Options
 }
@@ -69,19 +76,32 @@ func (c *Controller) reconcile(key string, cluster *provv1.Cluster) (*provv1.Clu
 		errs = append(errs, err)
 	}
 
+	mtlsReady := true
+	if roles.Manager || roles.Seed {
+		if err := c.ensureMTLSSecret(cluster); err != nil {
+			errs = append(errs, err)
+			mtlsReady = false
+		}
+	}
+
 	if roles.Manager {
-		if err := c.ensureManagerSecret(cluster); err != nil {
-			errs = append(errs, err)
-		} else if err := c.ensureManager(cluster, hc); err != nil {
-			errs = append(errs, err)
+		if mtlsReady {
+			if err := c.ensureManager(cluster, hc); err != nil {
+				errs = append(errs, err)
+			}
 		}
 	} else if err := c.deleteManager(cluster); err != nil {
 		errs = append(errs, err)
 	}
 
 	if roles.Seed {
-		c.event(cluster, corev1.EventTypeNormal, "SeedRoleNotImplemented",
-			fmt.Sprintf("annotation %s is set, but the seed role is not implemented in this release; ignoring it", AnnotationSeed))
+		if mtlsReady {
+			if err := c.ensureSeed(cluster, hc); err != nil {
+				errs = append(errs, err)
+			}
+		}
+	} else if err := c.deleteSeed(cluster); err != nil {
+		errs = append(errs, err)
 	}
 
 	if len(errs) > 0 {
@@ -92,9 +112,9 @@ func (c *Controller) reconcile(key string, cluster *provv1.Cluster) (*provv1.Clu
 	return cluster, nil
 }
 
-// ensureManagerSecret replicates the operator mTLS Secret into the Cluster
+// ensureMTLSSecret replicates the operator mTLS Secret into the Cluster
 // namespace so Fleet can deliver it downstream.
-func (c *Controller) ensureManagerSecret(cluster *provv1.Cluster) error {
+func (c *Controller) ensureMTLSSecret(cluster *provv1.Cluster) error {
 	mtls, err := c.secrets.Get(c.opts.OperatorNamespace, c.opts.MTLSSecretName, metav1.GetOptions{})
 	if err != nil {
 		message := fmt.Sprintf("Secret %s/%s: %v", c.opts.OperatorNamespace, c.opts.MTLSSecretName, err)
@@ -118,12 +138,29 @@ func (c *Controller) ensureManagerSecret(cluster *provv1.Cluster) error {
 
 func (c *Controller) helmopCluster(cluster *provv1.Cluster) helmop.Cluster {
 	return helmop.Cluster{
-		Name:           cluster.Name,
-		Namespace:      cluster.Namespace,
-		MTLSSecretName: c.opts.MTLSSecretName,
-		Chart:          c.opts.DragonflyChart,
-		Labels:         apply.Labels(cluster.Namespace, cluster.Name),
+		Name:               cluster.Name,
+		Namespace:          cluster.Namespace,
+		MTLSSecretName:     c.opts.MTLSSecretName,
+		Chart:              c.opts.DragonflyChart,
+		ManagerGRPCDomain:  c.opts.ManagerGRPCDomain,
+		SchedulerClusterID: schedulerClusterID(cluster),
+		SchedulerReplicas:  helmop.ReplicasTemplate(AnnotationSchedulerReplicas),
+		SeedClientReplicas: helmop.ReplicasTemplate(AnnotationSeedClientReplicas),
+		Labels:             apply.Labels(cluster.Namespace, cluster.Name),
 	}
+}
+
+// schedulerClusterID returns the annotation value as the integer the Dragonfly
+// chart expects. Missing, non-numeric, and non-positive values are reported as 0
+// so ensureSeed emits SchedulerClusterIDMissing instead of deploying with a
+// default ID.
+func schedulerClusterID(cluster *provv1.Cluster) int {
+	raw := cluster.Annotations[AnnotationSchedulerClusterID]
+	id, err := strconv.Atoi(raw)
+	if err != nil || id < 1 {
+		return 0
+	}
+	return id
 }
 
 func (c *Controller) applyHelmOp(cluster *provv1.Cluster, op *fleetv1alpha1.HelmOp) error {
@@ -149,6 +186,9 @@ func (c *Controller) cleanupAll(cluster *provv1.Cluster) error {
 		if err := c.deleteHelmOp(cluster, name); err != nil {
 			errs = append(errs, err)
 		}
+	}
+	if err := c.deleteSeed(cluster); err != nil {
+		errs = append(errs, err)
 	}
 	return errors.Join(errs...)
 }

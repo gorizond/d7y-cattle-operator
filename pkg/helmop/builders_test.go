@@ -35,3 +35,34 @@ func TestKeyDBHelmOp(t *testing.T) {
 		t.Errorf("master.persistence.enabled = %v", got)
 	}
 }
+
+func TestNydusHelmOp(t *testing.T) {
+	op := Nydus(testCluster())
+
+	if op.Name != "c1-nydus-snapshotter" {
+		t.Errorf("name = %q", op.Name)
+	}
+	if len(op.Spec.DependsOn) != 1 || op.Spec.DependsOn[0].Name != "c1-keydb" {
+		t.Errorf("dependsOn = %+v", op.Spec.DependsOn)
+	}
+	if op.Spec.Helm.Chart != NydusChartName || op.Spec.Helm.Version != NydusChartVersion {
+		t.Errorf("chart = %s %s", op.Spec.Helm.Chart, op.Spec.Helm.Version)
+	}
+
+	values := op.Spec.Helm.Values.Data
+	if got := valueAt(t, values, "priorityClassName"); got != "system-node-critical" {
+		t.Errorf("priorityClassName = %v", got)
+	}
+	if got := valueAt(t, values, "runtimeClass"); got != "nydus" {
+		t.Errorf("runtimeClass = %v", got)
+	}
+	if got := valueAt(t, values, "hostSocket"); got != "/run/k3s/containerd/containerd.sock" {
+		t.Errorf("hostSocket = %v", got)
+	}
+	if got := valueAt(t, values, "initContainer", "privileged"); got != true {
+		t.Errorf("initContainer.privileged = %v", got)
+	}
+	if got := valueAt(t, values, "containerRuntime", "containerd", "configFile"); got != "/var/lib/rancher/rke2/agent/etc/containerd/config.toml.tmpl" {
+		t.Errorf("containerd configFile = %v", got)
+	}
+}

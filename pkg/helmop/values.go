@@ -1,5 +1,13 @@
 package helmop
 
+import "fmt"
+
+// ReplicasTemplate returns a Fleet values template that reads a replica count
+// from the Cluster annotations and falls back to "1".
+func ReplicasTemplate(annotation string) string {
+	return fmt.Sprintf(`${ index .ClusterAnnotations %q | default "1" }`, annotation)
+}
+
 func tlsPaths() map[string]any {
 	return map[string]any{
 		"caCert": CertDir + "/ca.crt",

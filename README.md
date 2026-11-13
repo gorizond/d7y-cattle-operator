@@ -3,10 +3,10 @@
 Kubernetes operator that runs [Dragonfly](https://d7y.io) P2P on Rancher-managed
 RKE2 clusters.
 
-**Status**: MR-2a (manager-only slice). The Cluster controller, role resolution,
-and the KeyDB + manager HelmOps are implemented. Seed/control/data/nydus
-releases, public manager endpoints, VPA, manager API registration, and the
-admission webhook follow in later MRs.
+**Status**: MR-2b (seed role). The Cluster controller, role resolution, KeyDB,
+manager, and seed role releases are implemented. Manager public endpoints,
+extras (VPA/p2p-static), manager API registration, and the admission webhook
+follow in later MRs.
 
 ## What it does today
 
@@ -18,18 +18,17 @@ admission webhook follow in later MRs.
   `p2p-dragonfly-io: "true"` label.
 - Deploys KeyDB and the Dragonfly manager through Fleet HelmOps, without
   PersistentVolumeClaims.
-- Keeps the manager Service cluster-internal; public gRPC/REST endpoints are not
-  created yet.
+- Deploys the seed role (scheduler/control, seedClient+client/data, and
+  nydus-snapshotter) when `p2p.dragonfly.io/seed: "true"` and a scheduler
+  cluster ID is present.
+- Keeps manager and scheduler Services cluster-internal; public endpoints are
+  not created yet.
 - Runs until it receives `SIGINT`/`SIGTERM`.
-
-The `p2p.dragonfly.io/seed` annotation is recognized but ignored: the operator
-emits a `SeedRoleNotImplemented` Cluster event and deploys nothing for it.
 
 ## Follow-ups
 
-- Seed role: scheduler (control), seed client (data), and nydus-snapshotter HelmOps.
-- Manager public gRPC/REST Ingresses and the extras chart (p2p-static, VPA).
-- Manager API registration and scheduler cluster ID allocation.
+- MR-3: manager API registration and automatic scheduler cluster ID allocation.
+- MR-2c: public manager gRPC/REST Ingresses and the extras chart (p2p-static, VPA).
 - Bootstrap payload injection through a mutating webhook that only handles
   `CREATE` requests.
 
@@ -67,23 +66,25 @@ Defaults: `mtlsSecretName=dragonfly-p2p-mtls`, `dragonfly.chart.name=dragonfly`,
 
 ## Roles and HelmOps
 
-A Cluster labeled `p2p-dragonfly-io: "true"` gets one KeyDB release. The manager
-annotation adds the Dragonfly manager release:
+A Cluster labeled `p2p-dragonfly-io: "true"` gets one KeyDB release. The role
+annotations add the Dragonfly releases:
 
 | Roles | HelmOps |
 |---|---|
 | label only | `<cluster>-keydb` |
 | `manager: "true"` | KeyDB, `<cluster>-manager` (internal Service only) |
-| `seed: "true"` | KeyDB; seed is not implemented yet, a Cluster event is emitted |
-| both | KeyDB, `<cluster>-manager`; seed is still ignored |
+| `seed: "true"` + scheduler ID | KeyDB, `<cluster>-control`, `<cluster>-data`, `<cluster>-nydus-snapshotter` |
+| manager + seed | all five releases |
+| `seed: "true"` without scheduler ID | KeyDB only; `SchedulerClusterIDMissing` event, no seed releases |
 
 The operator requires Rancher 2.15+ with Fleet 0.16+ (the `HelmOp` CRD).
-The KeyDB chart (`keydb` 0.1.0) is pinned in the operator and published
-separately from this module.
+The KeyDB chart (`keydb` 0.1.0) and nydus-snapshotter chart (`0.0.10`) are
+pinned in the operator; KeyDB is published separately from this module.
 
-Both releases target `dragonfly-system` and the manager release depends on KeyDB
-through `spec.dependsOn`. The mTLS Secret is copied into the Cluster namespace
-and delivered downstream through `spec.downstreamResources`.
+All releases target `dragonfly-system` and depend on each other through
+`spec.dependsOn`: control and nydus depend on KeyDB, data depends on control and
+KeyDB, and manager depends on KeyDB. The mTLS Secret is copied into the Cluster
+namespace and delivered downstream through `spec.downstreamResources`.
 
 ## Cluster annotations
 
@@ -92,7 +93,26 @@ The operator only acts on Clusters labeled `p2p-dragonfly-io: "true"`.
 | Annotation | Value | Effect |
 |---|---|---|
 | `p2p.dragonfly.io/manager` | `"true"` | Manager role: manager and its database, KeyDB as external Redis |
-| `p2p.dragonfly.io/seed` | `"true"` | Reserved for a follow-up MR; currently ignored with an event |
+| `p2p.dragonfly.io/seed` | `"true"` | Seed role: scheduler, seed client/client, nydus-snapshotter |
+| `p2p.dragonfly.io/scheduler-cluster-id` | integer | Scheduler cluster ID; required by the seed role until MR-3 auto-allocates it |
+| `p2p.dragonfly.io/scheduler-replicas` | integer | Scheduler replicas (default `1`) |
+| `p2p.dragonfly.io/seedclient-replicas` | integer | Seed client replicas (default `1`) |
+
+## Known pilot risk: nydus-snapshotter chart 0.0.10
+
+The nydus HelmOp keeps the intended contract values, but chart 0.0.10 does not
+expose all of them:
+
+- `hostSocket` is ignored; the chart hardcodes its containerd integration paths,
+  so the RKE2 socket `/run/k3s/containerd/containerd.sock` is not configured.
+- `initContainer.command`/`initContainer.privileged` are ignored; the chart runs
+  its own `toml-cli` init container.
+- `runtimeClass: nydus` is ignored; the DaemonSet template does not set a
+  runtime class.
+
+`priorityClassName` and `containerRuntime.containerd.configFile` are supported.
+Resolve the socket/runtime-class gap in the pilot (chart patch or a fork) before
+enabling the seed role on a production cluster.
 
 ## Development
 
