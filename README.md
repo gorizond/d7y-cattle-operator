@@ -3,11 +3,10 @@
 Kubernetes operator that runs [Dragonfly](https://d7y.io) P2P on Rancher-managed
 RKE2 clusters.
 
-**Status**: MR-3a (manager API library). The Cluster controller, role
-resolution, KeyDB, manager, seed role, and the `dragonfly-extras` chart are
-implemented. The manager REST client and scheduler ID allocator are library-only;
-controller wiring, p2p-static/Nginx, and the admission webhook follow in later
-MRs.
+**Status**: MR-3b (seed registration/self-heal). The Cluster controller, role
+resolution, KeyDB, manager, seed role, `dragonfly-extras` chart, and manager
+registration with the scheduler ID allocator are implemented. p2p-static/Nginx
+and the admission webhook follow in later MRs.
 
 ## What it does today
 
@@ -25,14 +24,16 @@ MRs.
 - Manages the manager Ingresses and optional VPAs through the separate
   `<cluster>-extras` HelmOp and the `dragonfly-extras` chart. The operator has
   no Ingress or VPA RBAC and creates neither kind directly.
-- Provides a JWT-authenticated manager REST client (`pkg/managerapi`) and a
-  thread-safe scheduler ID allocator (`pkg/registry`). Neither is wired into the
-  controller yet.
+- Uses a JWT-authenticated manager REST client (`pkg/managerapi`) and a
+  thread-safe scheduler ID allocator (`pkg/registry`) for seed registration:
+  auto mode writes the server-assigned ID to both `scheduler-cluster-id` and
+  the durable `scheduler-cluster-id-auto` marker; user-owned IDs are never
+  overwritten and mismatches are reported via the `IdMismatch` condition.
+  Missing records are recreated and relinked on every reconcile.
 - Runs until it receives `SIGINT`/`SIGTERM`.
 
 ## Follow-ups
 
-- MR-3b: wire the manager API client and allocator into the Cluster controller.
 - p2p-static/Nginx extras and the bootstrap payload/webhook.
 - The extras chart's VPA targetRef names must be verified against live workload
   names in the pilot.
@@ -144,14 +145,22 @@ API:
   422 → `ErrUnprocessable` (no retry); 5xx/timeouts surface as errors for the
   controller's future backoff.
 - `block_list` is sent as an empty object (`{}`) because the contract expects an
-  object and the nested shape is not confirmed. Neither package is wired into
-  reconciliation yet.
+  object and the nested shape is not confirmed.
 
 `pkg/registry` allocates scheduler cluster IDs with a mutex and cache: ID 1 is
 reserved, automatic allocation starts at 2, manager IDs are skipped, an
 existing annotation is returned unchanged and never overwritten, and repeated
-or concurrent calls for the same cluster return the cached ID. Neither package
-is wired into reconciliation yet.
+or concurrent calls for the same cluster return the cached ID.
+
+The seed reconcile uses both packages: it ensures the SchedulerCluster and
+SeedPeerCluster by exact name, links them with the explicit PUT endpoint, and
+writes the server-assigned ID to `scheduler-cluster-id` plus the durable
+`scheduler-cluster-id-auto` marker in auto mode. If the marker equals
+`scheduler-cluster-id`, the ID is auto-owned and may be updated after manager DB
+loss; if the marker is absent or different, the ID is user-owned and is never
+overwritten (`IdMismatch` on server mismatch). This decision survives operator
+restarts. Registration failures set `RegistrationFailed` or `Retrying` and block
+control/data/nydus without blocking manager/KeyDB.
 
 ## Known pilot risk: extras target names
 

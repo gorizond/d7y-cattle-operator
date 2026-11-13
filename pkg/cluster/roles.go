@@ -6,11 +6,12 @@ const (
 	// LabelEnabled is the single gate for deploying the Dragonfly stack.
 	LabelEnabled = "p2p-dragonfly-io"
 
-	AnnotationManager            = "p2p.dragonfly.io/manager"
-	AnnotationSeed               = "p2p.dragonfly.io/seed"
-	AnnotationSchedulerClusterID = "p2p.dragonfly.io/scheduler-cluster-id"
-	AnnotationSchedulerReplicas  = "p2p.dragonfly.io/scheduler-replicas"
-	AnnotationSeedClientReplicas = "p2p.dragonfly.io/seedclient-replicas"
+	AnnotationManager                = "p2p.dragonfly.io/manager"
+	AnnotationSeed                   = "p2p.dragonfly.io/seed"
+	AnnotationSchedulerClusterID     = "p2p.dragonfly.io/scheduler-cluster-id"
+	AnnotationSchedulerClusterIDAuto = "p2p.dragonfly.io/scheduler-cluster-id-auto"
+	AnnotationSchedulerReplicas      = "p2p.dragonfly.io/scheduler-replicas"
+	AnnotationSeedClientReplicas     = "p2p.dragonfly.io/seedclient-replicas"
 )
 
 // Roles is the resolved role set for a Cluster.

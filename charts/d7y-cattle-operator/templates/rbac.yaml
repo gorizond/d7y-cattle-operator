@@ -8,7 +8,10 @@ metadata:
 rules:
   - apiGroups: ["provisioning.cattle.io"]
     resources: ["clusters"]
-    verbs: ["get", "list", "watch"]
+    verbs: ["get", "list", "watch", "update", "patch"]
+  - apiGroups: ["provisioning.cattle.io"]
+    resources: ["clusters/status"]
+    verbs: ["get", "update", "patch"]
   - apiGroups: ["fleet.cattle.io"]
     resources: ["helmops"]
     verbs: ["get", "list", "watch", "create", "update", "patch", "delete"]
