@@ -336,6 +336,110 @@ func TestListPaginationFollowsLink(t *testing.T) {
 	}
 }
 
+func TestListSchedulerClustersSelfLinkTerminates(t *testing.T) {
+	var requests atomic.Int32
+	client := newTestClient(t, http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		switch r.URL.Path {
+		case SignInPath:
+			writeJSON(w, http.StatusOK, SignInResponse{Token: "token"})
+		case SchedulerClustersPath:
+			requests.Add(1)
+			next := (&url.URL{
+				Scheme:   "https",
+				Host:     r.Host,
+				Path:     SchedulerClustersPath,
+				RawQuery: "page=1&per_page=50",
+			}).String()
+			w.Header().Set("Link", "<"+next+">; rel=\"next\"")
+			writeJSON(w, http.StatusOK, []SchedulerCluster{{ID: 2, Name: "only"}})
+		default:
+			t.Errorf("unexpected path %s", r.URL.Path)
+		}
+	}))
+
+	clusters, err := client.ListSchedulerClusters(context.Background())
+	if err != nil {
+		t.Fatalf("ListSchedulerClusters() error = %v", err)
+	}
+	if len(clusters) != 1 || clusters[0].ID != 2 {
+		t.Errorf("clusters = %+v, want one item", clusters)
+	}
+	if requests.Load() != 1 {
+		t.Errorf("requests = %d, want 1", requests.Load())
+	}
+}
+
+func TestListPaginationLoopTerminates(t *testing.T) {
+	var pages atomic.Int32
+	client := newTestClient(t, http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		switch r.URL.Path {
+		case SignInPath:
+			writeJSON(w, http.StatusOK, SignInResponse{Token: "token"})
+		case SchedulerClustersPath:
+			pages.Add(1)
+			page := r.URL.Query().Get("page")
+			targetPage := "1"
+			if page == "1" {
+				targetPage = "2"
+			}
+			next := (&url.URL{
+				Scheme:   "https",
+				Host:     r.Host,
+				Path:     SchedulerClustersPath,
+				RawQuery: "page=" + targetPage + "&per_page=50",
+			}).String()
+			w.Header().Set("Link", "<"+next+">; rel=\"next\"")
+			writeJSON(w, http.StatusOK, []SchedulerCluster{{ID: 1, Name: "page-" + page}})
+		default:
+			t.Errorf("unexpected path %s", r.URL.Path)
+		}
+	}))
+
+	clusters, err := client.ListSchedulerClusters(context.Background())
+	if err != nil {
+		t.Fatalf("ListSchedulerClusters() error = %v", err)
+	}
+	if len(clusters) != 2 {
+		t.Errorf("len(clusters) = %d, want 2", len(clusters))
+	}
+	if pages.Load() != 2 {
+		t.Errorf("pages = %d, want 2", pages.Load())
+	}
+}
+
+func TestListSeedPeerClustersSelfLinkTerminates(t *testing.T) {
+	var requests atomic.Int32
+	client := newTestClient(t, http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		switch r.URL.Path {
+		case SignInPath:
+			writeJSON(w, http.StatusOK, SignInResponse{Token: "token"})
+		case SeedPeerClustersPath:
+			requests.Add(1)
+			next := (&url.URL{
+				Scheme:   "https",
+				Host:     r.Host,
+				Path:     SeedPeerClustersPath,
+				RawQuery: "page=1&per_page=50",
+			}).String()
+			w.Header().Set("Link", "<"+next+">; rel=\"next\"")
+			writeJSON(w, http.StatusOK, []SeedPeerCluster{{ID: 5, Name: "only"}})
+		default:
+			t.Errorf("unexpected path %s", r.URL.Path)
+		}
+	}))
+
+	clusters, err := client.ListSeedPeerClusters(context.Background())
+	if err != nil {
+		t.Fatalf("ListSeedPeerClusters() error = %v", err)
+	}
+	if len(clusters) != 1 || clusters[0].ID != 5 {
+		t.Errorf("clusters = %+v, want one item", clusters)
+	}
+	if requests.Load() != 1 {
+		t.Errorf("requests = %d, want 1", requests.Load())
+	}
+}
+
 func TestListNullIsEmpty(t *testing.T) {
 	client := newTestClient(t, http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		if r.URL.Path == SignInPath {

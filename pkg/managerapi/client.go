@@ -233,7 +233,9 @@ func (c *Client) listSchedulerClusters(ctx context.Context, name string) ([]Sche
 			return all, nil
 		}
 		if seen[next] {
-			return nil, fmt.Errorf("manager api: scheduler cluster pagination loop at %s", next)
+			// Some managers emit rel=next pointing back at the current page.
+			// Re-fetching would loop forever; the batch was already collected.
+			return all, nil
 		}
 		seen[next] = true
 		endpoint = next
@@ -269,7 +271,9 @@ func (c *Client) listSeedPeerClusters(ctx context.Context, name string) ([]SeedP
 			return all, nil
 		}
 		if seen[next] {
-			return nil, fmt.Errorf("manager api: seed peer cluster pagination loop at %s", next)
+			// Some managers emit rel=next pointing back at the current page.
+			// Re-fetching would loop forever; the batch was already collected.
+			return all, nil
 		}
 		seen[next] = true
 		endpoint = next
