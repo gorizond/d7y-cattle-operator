@@ -31,7 +31,7 @@ func TestKeyDBHelmOp(t *testing.T) {
 	values := op.Spec.Helm.Values.Data
 	for key, want := range map[string]any{
 		"fullnameOverride": "c1-keydb",
-		"nodes":            3,
+		"nodes":            2,
 		"multiMaster":      "yes",
 		"activeReplicas":   "yes",
 		"threads":          2,
