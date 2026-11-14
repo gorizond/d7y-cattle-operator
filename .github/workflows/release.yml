@@ -77,6 +77,14 @@ jobs:
           cr upload -o gorizond -r d7y-cattle-operator \
             -p .cr-release-packages --token "$CR_TOKEN" --skip-existing
 
+      # cr index commits index.yaml to gh-pages. The runner has no git identity,
+      # so without this the push fails with "Author identity unknown" /
+      # "fatal: empty ident name ... not allowed".
+      - name: Configure git identity
+        run: |
+          git config --global user.name "github-actions[bot]"
+          git config --global user.email "41898282+github-actions[bot]@users.noreply.github.com"
+
       - name: Update chart index
         env:
           CR_TOKEN: ${{ secrets.GITHUB_TOKEN }}
