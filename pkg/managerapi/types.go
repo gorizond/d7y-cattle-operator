@@ -110,7 +110,8 @@ func NewSchedulerClusterRequest(namespace, name string) SchedulerClusterRequest 
 		Name: SchedulerClusterName(namespace, name),
 		Bio:  ManagedByBio,
 		Config: SchedulerClusterConfig{
-			CandidateParentLimit: 100,
+			// Manager v2.5.4 validates candidate_parent_limit as gte=1,lte=20.
+			CandidateParentLimit: 20,
 			FilterParentLimit:    100,
 			JobRateLimit:         0,
 		},

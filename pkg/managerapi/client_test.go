@@ -242,7 +242,7 @@ func TestCreateSchedulerClusterBody(t *testing.T) {
 		t.Errorf("body = %+v", body)
 	}
 	config := body["config"].(map[string]any)
-	if config["candidate_parent_limit"] != float64(100) || config["filter_parent_limit"] != float64(100) || config["job_rate_limit"] != float64(0) {
+	if config["candidate_parent_limit"] != float64(20) || config["filter_parent_limit"] != float64(100) || config["job_rate_limit"] != float64(0) {
 		t.Errorf("config = %+v", config)
 	}
 	clientConfig := body["client_config"].(map[string]any)
@@ -573,14 +573,31 @@ func TestNamesAndRequests(t *testing.T) {
 	}
 
 	scheduler := NewSchedulerClusterRequest("ns", "c1")
-	if scheduler.Bio != ManagedByBio || scheduler.Config.CandidateParentLimit != 100 ||
+	if scheduler.Bio != ManagedByBio || scheduler.Config.CandidateParentLimit != 20 ||
 		scheduler.Config.FilterParentLimit != 100 || scheduler.ClientConfig.LoadLimit != 500 ||
 		scheduler.ClientConfig.BlockList == nil || scheduler.SeedClientConfig.BlockList == nil {
 		t.Errorf("scheduler request = %+v", scheduler)
 	}
+	// Pin the Dragonfly manager v2.5.4 validation bounds
+	// (manager/types/scheduler_cluster.go) so an out-of-range default cannot
+	// silently return: candidate_parent_limit gte=1,lte=20;
+	// filter_parent_limit gte=10,lte=1000; client load_limit gte=1,lte=2000.
+	if v := scheduler.Config.CandidateParentLimit; v < 1 || v > 20 {
+		t.Errorf("candidate_parent_limit = %d, manager allows 1..20", v)
+	}
+	if v := scheduler.Config.FilterParentLimit; v < 10 || v > 1000 {
+		t.Errorf("filter_parent_limit = %d, manager allows 10..1000", v)
+	}
+	if v := scheduler.ClientConfig.LoadLimit; v < 1 || v > 2000 {
+		t.Errorf("client load_limit = %d, manager allows 1..2000", v)
+	}
 	seed := NewSeedPeerClusterRequest("ns", "c1")
 	if seed.Bio != ManagedByBio || seed.Config.LoadLimit != 500 || seed.Config.BlockList == nil {
 		t.Errorf("seed request = %+v", seed)
+	}
+	// seed_peer load_limit: gte=1,lte=50000.
+	if v := seed.Config.LoadLimit; v < 1 || v > 50000 {
+		t.Errorf("seed peer load_limit = %d, manager allows 1..50000", v)
 	}
 }
 
