@@ -44,8 +44,17 @@ jobs:
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
 
       - uses: azure/setup-helm@v4
+
+      # cr upload/index use origin/gh-pages; a shallow tag checkout does not
+      # contain that ref. Fetch it explicitly and keep a local branch for cr.
+      - name: Fetch gh-pages
+        run: |
+          git fetch origin gh-pages:refs/remotes/origin/gh-pages
+          git branch -f gh-pages refs/remotes/origin/gh-pages
 
       # Publish every chart checked into charts/. The external enapter/keydb
       # chart is pinned by the operator but is not vendored here.
