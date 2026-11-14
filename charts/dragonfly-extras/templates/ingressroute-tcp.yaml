@@ -1,0 +1,25 @@
+{{- $controller := .Values.ingress.controller | default "nginx" -}}
+{{- if and .Values.ingress.enabled .Values.ingress.grpc.enabled (eq $controller "traefik") (.Capabilities.APIVersions.Has "traefik.io/v1alpha1") }}
+# Traefik gRPC is TCP passthrough because gRPC mTLS must reach the manager;
+# nginx keeps GRPCS plus auth-tls client verification instead.
+apiVersion: traefik.io/v1alpha1
+kind: IngressRouteTCP
+metadata:
+  name: {{ .Release.Name }}-manager-grpc
+  namespace: {{ .Release.Namespace }}
+  labels:
+    {{- include "dragonfly-extras.labels" . | nindent 4 }}
+spec:
+  {{- with .Values.ingress.className }}
+  ingressClassName: {{ . | quote }}
+  {{- end }}
+  entryPoints:
+    {{- toYaml (.Values.ingress.traefik.entryPoints | default (list "websecure")) | nindent 4 }}
+  routes:
+    - match: {{ printf "HostSNI(`%s`)" .Values.ingress.grpc.host | quote }}
+      services:
+        - name: {{ .Values.ingress.grpc.service | quote }}
+          port: {{ .Values.ingress.grpc.port }}
+  tls:
+    passthrough: true
+{{- end }}

@@ -1,5 +1,5 @@
 {{- $controller := .Values.ingress.controller | default "nginx" -}}
-{{- if and .Values.ingress.enabled .Values.ingress.grpc.enabled }}
+{{- if and .Values.ingress.enabled .Values.ingress.grpc.enabled (eq $controller "nginx") }}
 apiVersion: networking.k8s.io/v1
 kind: Ingress
 metadata:
@@ -71,8 +71,8 @@ spec:
 {{- else if eq $controller "traefik" }}
 {{- if .Capabilities.APIVersions.Has "traefik.io/v1alpha1" }}
 # Traefik v3 ignores the service.serversscheme annotation for REST backends,
-# so the HTTPS backend is declared with an IngressRoute. Traefik gRPC is out
-# of scope for this fix; the gRPC Ingress above stays nginx-only.
+# so the HTTPS backend is declared with an IngressRoute. Traefik gRPC uses an
+# IngressRouteTCP with TLS passthrough (see ingressroute-tcp.yaml).
 apiVersion: traefik.io/v1alpha1
 kind: IngressRoute
 metadata:

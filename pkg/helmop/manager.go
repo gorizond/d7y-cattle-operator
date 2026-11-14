@@ -9,13 +9,24 @@ import (
 // Manager returns the manager HelmOp with an embedded MySQL database (no PVC)
 // and KeyDB as the external Redis-compatible store.
 func Manager(c Cluster) *fleetv1alpha1.HelmOp {
+	grpcTLS := tlsPaths()
+	extraVolumes := []map[string]any{logVolume()}
+	extraVolumeMounts := []map[string]any{logVolumeMount("/var/log/dragonfly/manager")}
+	if c.ManagerPublicTLSSecret != "" {
+		// The manager gRPC server presents the public certificate while the
+		// internal CA stays the client CA.
+		grpcTLS["cert"] = PublicTLSDir + "/tls.crt"
+		grpcTLS["key"] = PublicTLSDir + "/tls.key"
+		extraVolumes = append(extraVolumes, publicTLSVolume(c.ManagerPublicTLSSecret))
+		extraVolumeMounts = append(extraVolumeMounts, publicTLSVolumeMount())
+	}
 	values := map[string]any{
 		"fullnameOverride": ManagerFullname(c.Name),
 		"manager": map[string]any{
 			"enable": true,
 			"config": map[string]any{
 				"server": map[string]any{
-					"grpc": map[string]any{"tls": tlsPaths()},
+					"grpc": map[string]any{"tls": grpcTLS},
 					"rest": map[string]any{
 						"tls": map[string]any{
 							"cert": CertDir + "/tls.crt",
@@ -24,8 +35,8 @@ func Manager(c Cluster) *fleetv1alpha1.HelmOp {
 					},
 				},
 			},
-			"extraVolumes":      volumes(c.MTLSSecretName, logVolume()),
-			"extraVolumeMounts": volumeMounts(logVolumeMount("/var/log/dragonfly/manager")),
+			"extraVolumes":      volumes(c.MTLSSecretName, extraVolumes...),
+			"extraVolumeMounts": volumeMounts(extraVolumeMounts...),
 		},
 		// Bitnami MySQL 11.x reads persistence under the primary subchart.
 		"mysql": map[string]any{
