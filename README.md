@@ -42,8 +42,10 @@ verification remains deferred.
   and the status/condition transitions.
 - The extras chart's VPA targetRef names must be verified against live workload
   names in the pilot.
-- The KeyDB chart (`keydb` 0.1.0) is released from its own repository; it is
-  not vendored in this repo. See [Release](#release).
+- The KeyDB chart is external: `enapter/keydb` `0.48.0` from
+  `https://enapter.github.io/charts/`. It is not vendored in this repo. The
+  HelmOp requests three active multi-master nodes with persistence disabled. See
+  [Release](#release).
 
 ## Install
 
@@ -103,8 +105,12 @@ annotations add the Dragonfly releases:
 | `seed: "true"` without scheduler ID | KeyDB + extras (KeyDB VPA); `SchedulerClusterIDMissing` event, no seed releases |
 
 The operator requires Rancher 2.15+ with Fleet 0.16+ (the `HelmOp` CRD).
-The KeyDB chart (`keydb` 0.1.0) and nydus-snapshotter chart (`0.0.10`) are
-pinned in the operator; KeyDB is published separately from this module.
+The KeyDB chart (`enapter/keydb` `0.48.0`) and nydus-snapshotter chart
+(`0.0.10`) are pinned in the operator; KeyDB is external and is not published
+from this module. The KeyDB HelmOp runs three active masters (`nodes: 3`,
+`multiMaster: "yes"`, `activeReplicas: "yes"`) with `persistentVolume.enabled:
+false`, so it uses emptyDir and creates no PVC. The chart exposes the service as
+`<cluster>-keydb:6379`.
 
 ### Status conditions
 
@@ -337,9 +343,10 @@ Pushing a `v*` tag runs `.github/workflows/release.yml`:
   the `gh-pages` branch.
 
 The repository charts are `d7y-cattle-operator`, `dragonfly-extras`, and
-`p2p-static`. The KeyDB chart is released from its own repository and is not
-vendored here; the README in this repo documents the pinned `keydb` 0.1.0
-contract used by the operator.
+`p2p-static`. The KeyDB chart is external (`enapter/keydb` `0.48.0` from
+`https://enapter.github.io/charts/`) and is not vendored or published here. The
+operator pins that external chart and submits the three-master, no-PVC values
+described above.
 
 ## License
 

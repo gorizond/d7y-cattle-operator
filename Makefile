@@ -19,8 +19,8 @@ lint:
 	docker build --target test -t $(IMAGE):test .
 	docker run --rm $(IMAGE):test go vet ./...
 
-# Every chart checked into charts/ is linted. The KeyDB chart is published from
-# its own repository; see README.md.
+# Every chart checked into charts/ is linted. The external enapter/keydb chart
+# is pinned by the operator; see README.md.
 helm-lint:
 	helm lint charts/*
 

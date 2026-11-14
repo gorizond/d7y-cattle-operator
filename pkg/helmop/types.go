@@ -26,9 +26,9 @@ const (
 	// operator is tested against. Other versions are allowed but warn.
 	VerifiedDragonflyChartVersion = "1.10.1"
 
-	KeyDBChartRepo    = "https://gorizond.github.io/d7y-cattle-operator"
+	KeyDBChartRepo    = "https://enapter.github.io/charts/"
 	KeyDBChartName    = "keydb"
-	KeyDBChartVersion = "0.1.0"
+	KeyDBChartVersion = "0.48.0"
 
 	NydusChartRepo    = "https://dragonflyoss.github.io/helm-charts"
 	NydusChartName    = "nydus-snapshotter"

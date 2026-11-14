@@ -21,22 +21,36 @@ func TestKeyDBHelmOp(t *testing.T) {
 	if len(op.Spec.DownstreamResources) != 0 {
 		t.Errorf("downstreamResources = %+v, want none", op.Spec.DownstreamResources)
 	}
-	if op.Spec.Helm.Chart != KeyDBChartName || op.Spec.Helm.Version != KeyDBChartVersion {
-		t.Errorf("chart = %s %s", op.Spec.Helm.Chart, op.Spec.Helm.Version)
+	if op.Spec.Helm.Repo != KeyDBChartRepo || op.Spec.Helm.Chart != KeyDBChartName || op.Spec.Helm.Version != KeyDBChartVersion {
+		t.Errorf("chart = %s/%s %s", op.Spec.Helm.Repo, op.Spec.Helm.Chart, op.Spec.Helm.Version)
+	}
+	if KeyDBChartRepo != "https://enapter.github.io/charts/" || KeyDBChartVersion != "0.48.0" {
+		t.Errorf("keydb chart = %s %s, want enapter 0.48.0", KeyDBChartRepo, KeyDBChartVersion)
 	}
 
 	values := op.Spec.Helm.Values.Data
-	if got := valueAt(t, values, "architecture"); got != "replication" {
-		t.Errorf("architecture = %v", got)
+	for key, want := range map[string]any{
+		"fullnameOverride": "c1-keydb",
+		"nodes":            3,
+		"multiMaster":      "yes",
+		"activeReplicas":   "yes",
+		"threads":          2,
+		"protectedMode":    "no",
+		"appendonly":       "no",
+		"imageRepository":  "eqalpha/keydb",
+		"imageTag":         "x86_64_v6.3.2",
+	} {
+		if got := values[key]; got != want {
+			t.Errorf("%s = %v, want %v", key, got, want)
+		}
 	}
-	if got := valueAt(t, values, "replica", "replicaCount"); got != 2 {
-		t.Errorf("replica.replicaCount = %v", got)
+	if got := valueAt(t, values, "persistentVolume", "enabled"); got != false {
+		t.Errorf("persistentVolume.enabled = %v, want false", got)
 	}
-	if got := valueAt(t, values, "replica", "persistence", "enabled"); got != false {
-		t.Errorf("replica.persistence.enabled = %v", got)
-	}
-	if got := valueAt(t, values, "master", "persistence", "enabled"); got != false {
-		t.Errorf("master.persistence.enabled = %v", got)
+	for _, legacy := range []string{"architecture", "replica", "master"} {
+		if containsKey(values, legacy) {
+			t.Errorf("legacy key %q is present", legacy)
+		}
 	}
 }
 
@@ -142,7 +156,7 @@ func truePersistence(value any) []string {
 	switch typed := value.(type) {
 	case map[string]any:
 		for key, child := range typed {
-			if key == "persistence" {
+			if key == "persistence" || key == "persistentVolume" {
 				if settings, ok := child.(map[string]any); ok {
 					if enabled, ok := settings["enabled"].(bool); ok && enabled {
 						paths = append(paths, key)

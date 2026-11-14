@@ -11,7 +11,8 @@ passed by this repository.
 - At least one RKE2 cluster in `fleet-default` (optional: the `local` cluster in
   `fleet-local`).
 - Helm repositories for the upstream Dragonfly chart, `nydus-snapshotter`, and
-  the KeyDB chart; the KeyDB chart is published separately from this module.
+  the external KeyDB chart (`enapter/keydb` `0.48.0` from
+  `https://enapter.github.io/charts/`).
 - A stateless Nginx static server (`NGINX_STATIC_URL`) with
   `deploy/nginx/nginx.conf` and binaries under `/bin/`.
 - `kubectl`, `helm`, `curl`, `openssl`, `jq`.
@@ -40,8 +41,9 @@ helm template d7y-cattle-operator charts/d7y-cattle-operator | kubectl apply --d
 helm template p2p-static charts/p2p-static > /dev/null
 ```
 
-Expected: all green; rendered operator manifests contain no PVC. The KeyDB chart
-is not vendored here; lint it from its own repository.
+Expected: all green; rendered operator manifests contain no PVC. The external
+KeyDB chart is not vendored here; the operator pins `enapter/keydb` `0.48.0`
+with `persistentVolume.enabled: false`.
 
 ## 2. Webhook: CREATE-only and idempotency (envtest/kind)
 
