@@ -45,7 +45,7 @@ verification remains deferred.
   names in the pilot.
 - The KeyDB chart is external: `enapter/keydb` `0.48.0` from
   `https://enapter.github.io/charts/`. It is not vendored in this repo. The
-  HelmOp requests three active multi-master nodes with persistence disabled. See
+  HelmOp requests two active multi-master nodes with persistence disabled. See
   [Release](#release).
 
 ## Install
@@ -114,7 +114,7 @@ annotations add the Dragonfly releases:
 The operator requires Rancher 2.15+ with Fleet 0.16+ (the `HelmOp` CRD).
 The KeyDB chart (`enapter/keydb` `0.48.0`) and nydus-snapshotter chart
 (`0.0.10`) are pinned in the operator; KeyDB is external and is not published
-from this module. The KeyDB HelmOp runs three active masters (`nodes: 3`,
+from this module. The KeyDB HelmOp runs two active masters (`nodes: 2`,
 `multiMaster: "yes"`, `activeReplicas: "yes"`) with `persistentVolume.enabled:
 false`, so it uses emptyDir and creates no PVC. The chart exposes the service as
 `<cluster>-keydb:6379`.
