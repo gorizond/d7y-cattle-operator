@@ -13,6 +13,7 @@ import (
 	fleetv1alpha1 "github.com/rancher/fleet/pkg/apis/fleet.cattle.io/v1alpha1"
 	provv1 "github.com/rancher/rancher/pkg/apis/provisioning.cattle.io/v1"
 	provctl "github.com/rancher/rancher/pkg/generated/controllers/provisioning.cattle.io/v1"
+	"github.com/rancher/wrangler/v3/pkg/condition"
 	corectl "github.com/rancher/wrangler/v3/pkg/generated/controllers/core/v1"
 	corev1 "k8s.io/api/core/v1"
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
@@ -77,20 +78,34 @@ func (c *Controller) reconcile(key string, cluster *provv1.Cluster) (*provv1.Clu
 		return nil, nil
 	}
 
+	status := c.newStatus(cluster)
+	defer status.apply()
+
 	roles := ResolveRoles(cluster)
 	if !roles.Enabled {
 		if err := c.cleanupAll(cluster); err != nil {
 			c.event(cluster, corev1.EventTypeWarning, "CleanupFailed", err.Error())
+			if hasManagedStatus(cluster) {
+				status.managedDisabled("LabelMissing", "cluster does not have label "+LabelEnabled+"=true")
+			}
 			return cluster, err
 		}
-		c.markSeedDisabled(cluster)
+		if hasManagedStatus(cluster) {
+			status.managedDisabled("LabelMissing", "cluster does not have label "+LabelEnabled+"=true")
+		}
 		return cluster, nil
 	}
+	status.rolesResolved(true, roles.Manager, roles.Seed)
 
 	hc := c.helmopCluster(cluster)
+	c.warnUnsupportedChartVersion(cluster, hc.Chart.Version)
+
 	var errs []error
 	if err := c.applyHelmOp(cluster, helmop.KeyDB(hc)); err != nil {
+		status.set(conditionKeyDBReady, false, "ApplyFailed", err.Error())
 		errs = append(errs, err)
+	} else {
+		status.set(conditionKeyDBReady, true, "Ready", "KeyDB HelmOp applied")
 	}
 
 	mtlsReady := true
@@ -117,39 +132,51 @@ func (c *Controller) reconcile(key string, cluster *provv1.Cluster) (*provv1.Clu
 			id, mismatch, registrationCluster, err := c.ensureSeedRegistration(c.ctx, cluster)
 			if err != nil {
 				retrying := registrationFailure(err)
-				if c.markRegistrationFailure(cluster, retrying, err) {
+				if status.registrationFailure(retrying, err) {
 					reason := "RegistrationFailed"
 					if retrying {
 						reason = "Retrying"
 					}
 					c.event(cluster, corev1.EventTypeWarning, reason, err.Error())
 				}
+				status.seedUnavailable(reasonFor(retrying), err.Error())
 				errs = append(errs, err)
 			} else if int64(int(id)) != id {
 				err := fmt.Errorf("scheduler cluster ID %d does not fit in int", id)
 				retrying := registrationFailure(err)
-				c.markRegistrationFailure(cluster, retrying, err)
+				status.registrationFailure(retrying, err)
+				status.seedUnavailable(reasonFor(retrying), err.Error())
 				errs = append(errs, err)
 			} else {
 				if registrationCluster == nil {
 					registrationCluster = cluster
 				}
+				status.rebase(registrationCluster)
 				hc.SchedulerClusterID = int(id)
-				if changed := c.markRegistered(registrationCluster, id, mismatch); changed && mismatch {
+				if changed := status.registrationSuccess(id, mismatch); changed {
 					c.event(cluster, corev1.EventTypeWarning, "IdMismatch",
 						fmt.Sprintf("annotation scheduler cluster ID %d differs from manager server ID %d; annotation preserved", hc.SchedulerClusterID, id))
 				}
 				seedReady = true
-				if err := c.ensureSeed(cluster, hc); err != nil {
-					errs = append(errs, err)
+				controlErr, dataErr, nydusErr := c.ensureSeed(cluster, hc)
+				setSeedCondition(status, conditionControlReady, controlErr)
+				setSeedCondition(status, conditionDataReady, dataErr)
+				setSeedCondition(status, conditionNydusReady, nydusErr)
+				for _, err := range []error{controlErr, dataErr, nydusErr} {
+					if err != nil {
+						errs = append(errs, err)
+					}
 				}
 			}
+		} else {
+			status.seedUnavailable("MTLSSecretUnavailable", "mTLS Secret is not ready")
 		}
 	} else {
 		if err := c.deleteSeed(cluster); err != nil {
 			errs = append(errs, err)
 		}
-		c.markSeedDisabled(cluster)
+		status.seedDisabled()
+		status.seedUnavailable("SeedDisabled", "seed role is disabled; the scheduler cluster ID annotation is preserved")
 	}
 
 	if err := c.applyHelmOp(cluster, helmop.Extras(hc, helmop.ExtrasOptions{
@@ -167,6 +194,29 @@ func (c *Controller) reconcile(key string, cluster *provv1.Cluster) (*provv1.Clu
 		return cluster, err
 	}
 	return cluster, nil
+}
+
+func reasonFor(retrying bool) string {
+	if retrying {
+		return "Retrying"
+	}
+	return "RegistrationFailed"
+}
+
+func setSeedCondition(status *statusBuilder, cond condition.Cond, err error) {
+	if err != nil {
+		status.set(cond, false, "ApplyFailed", err.Error())
+		return
+	}
+	status.set(cond, true, "Ready", "HelmOp applied")
+}
+
+func (c *Controller) warnUnsupportedChartVersion(cluster *provv1.Cluster, version string) {
+	if version == helmop.VerifiedDragonflyChartVersion {
+		return
+	}
+	c.event(cluster, corev1.EventTypeWarning, "UnsupportedChartVersion",
+		fmt.Sprintf("Dragonfly chart version %s is not verified; expected %s", version, helmop.VerifiedDragonflyChartVersion))
 }
 
 // ensureMTLSSecret replicates the operator mTLS Secret into the Cluster

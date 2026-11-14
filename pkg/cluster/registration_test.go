@@ -542,6 +542,15 @@ func (f *fakeClusterStore) annotations() map[string]string {
 	return out
 }
 
+func (f *fakeClusterStore) get() *provv1.Cluster {
+	f.mu.Lock()
+	defer f.mu.Unlock()
+	if f.cluster == nil {
+		return nil
+	}
+	return f.cluster.DeepCopy()
+}
+
 func (f *fakeClusterStore) updateCount() int {
 	f.mu.Lock()
 	defer f.mu.Unlock()

@@ -35,8 +35,17 @@ jobs:
     steps:
       - uses: actions/checkout@v4
 
+      - uses: azure/setup-helm@v4
+
+      # Publish every chart checked into charts/. The KeyDB chart is released
+      # from its own repository (see README.md) and is not vendored here.
+      - name: Lint charts
+        run: helm lint charts/*
+
       - uses: helm/chart-releaser-action@v1.7.0
         with:
           charts_dir: charts
+          pages_branch: gh-pages
+          skip_existing: true
         env:
           CR_TOKEN: ${{ secrets.GITHUB_TOKEN }}

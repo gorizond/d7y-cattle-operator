@@ -22,6 +22,10 @@ const (
 	// CertDir is where the mTLS Secret is mounted in Dragonfly pods.
 	CertDir = "/etc/dragonfly/certs"
 
+	// VerifiedDragonflyChartVersion is the Dragonfly chart version this
+	// operator is tested against. Other versions are allowed but warn.
+	VerifiedDragonflyChartVersion = "1.10.1"
+
 	KeyDBChartRepo    = "https://gorizond.github.io/d7y-cattle-operator"
 	KeyDBChartName    = "keydb"
 	KeyDBChartVersion = "0.1.0"

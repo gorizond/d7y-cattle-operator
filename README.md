@@ -3,10 +3,11 @@
 Kubernetes operator that runs [Dragonfly](https://d7y.io) P2P on Rancher-managed
 RKE2 clusters.
 
-**Status**: MR-4b (CREATE-only webhook + userData injection). The Cluster
-controller, role resolution, KeyDB, manager, seed role, manager registration,
-`dragonfly-extras`, the `p2p-static` chart, and the admission webhook are
-implemented. Live envtest/pilot verification remains deferred.
+**Status**: MR-5 (status conditions, version guard, release workflow, and
+English documentation). The Cluster controller, role resolution, KeyDB,
+manager, seed role, manager registration, `dragonfly-extras`, the `p2p-static`
+chart, and the admission webhook are implemented. Live envtest/pilot
+verification remains deferred.
 
 ## What it does today
 
@@ -30,20 +31,28 @@ implemented. Live envtest/pilot verification remains deferred.
   the durable `scheduler-cluster-id-auto` marker; user-owned IDs are never
   overwritten and mismatches are reported via the `IdMismatch` condition.
   Missing records are recreated and relinked on every reconcile.
+- Publishes role/registration state as Cluster conditions (`RolesResolved`,
+  `KeyDBReady`, `ControlReady`, `DataReady`, `NydusReady`, `Registered`) and
+  updates them only when they change.
 - Runs until it receives `SIGINT`/`SIGTERM`.
 
 ## Follow-ups
 
-- Live envtest/pilot verification of the CREATE-only webhook and node bootstrap.
+- Live envtest/pilot verification of the CREATE-only webhook, node bootstrap,
+  and the status/condition transitions.
 - The extras chart's VPA targetRef names must be verified against live workload
   names in the pilot.
+- The KeyDB chart (`keydb` 0.1.0) is released from its own repository; it is
+  not vendored in this repo. See [Release](#release).
 
 ## Install
 
-The chart is not published yet; install it from a checkout:
+Install the published chart from the GitHub Pages Helm repository:
 
 ```bash
-helm install d7y-cattle-operator charts/d7y-cattle-operator \
+helm repo add gorizond https://gorizond.github.io/d7y-cattle-operator
+helm repo update
+helm install d7y-cattle-operator gorizond/d7y-cattle-operator \
   --namespace dragonfly-system \
   --create-namespace \
   --set manager.grpcDomain=manager-grpc.example.com \
@@ -51,6 +60,12 @@ helm install d7y-cattle-operator charts/d7y-cattle-operator \
   --set nginx.staticURL=https://static.example.com \
   --set managerApiCredentialsSecret=dragonfly-manager-api
 ```
+
+For local development use `charts/d7y-cattle-operator` instead of the repository
+chart. The release tag (`v<chart version>`) and the default image tag
+(`v<chart version>`) are kept in sync by the release workflow. See
+[quickstart.md](quickstart.md) for static checks and the live-pilot verification
+steps.
 
 The operator reads credentials only from Secret names. No secret values are passed
 through flags or chart values. `nginx.staticURL` and
@@ -90,6 +105,60 @@ annotations add the Dragonfly releases:
 The operator requires Rancher 2.15+ with Fleet 0.16+ (the `HelmOp` CRD).
 The KeyDB chart (`keydb` 0.1.0) and nydus-snapshotter chart (`0.0.10`) are
 pinned in the operator; KeyDB is published separately from this module.
+
+### Status conditions
+
+The operator writes conditions to `Cluster.status.conditions` and updates them
+only when the value, reason, or message changes:
+
+| Condition | True when |
+|---|---|
+| `RolesResolved` | The Cluster has the `p2p-dragonfly-io: "true"` label; the role annotations are parsed. |
+| `KeyDBReady` | The `<cluster>-keydb` HelmOp was applied. |
+| `ControlReady` | The seed scheduler HelmOp was applied (`seed: "true"`). |
+| `DataReady` | The seedClient/client HelmOp was applied (`seed: "true"`). |
+| `NydusReady` | The nydus-snapshotter HelmOp was applied (`seed: "true"`). |
+| `Registered` | Scheduler and seed-peer records were ensured and linked in the manager. |
+| `RegistrationFailed` | Registration failed permanently; `Retrying` marks transient failures. |
+| `IdMismatch` | The user-provided `scheduler-cluster-id` differs from the manager server ID; the annotation is preserved. |
+
+A label-only Cluster reports `ControlReady=False`, `DataReady=False`, and
+`NydusReady=False` with reason `SeedDisabled`; a seed Cluster whose mTLS Secret
+is missing reports `MTLSSecretUnavailable`. Conditions never contain Secret
+values or certificate material.
+
+### Dragonfly chart version
+
+`dragonfly.chart.version` defaults to the verified `1.10.1` and is passed to
+every Dragonfly HelmOp (`manager`, `control`, `data`). A different value is
+allowed for experiments, but the operator emits an `UnsupportedChartVersion`
+warning event on each reconcile because TLS fields and topology control/data
+behavior may change between chart versions. Pin the chart version in the
+operator release values; never hardcode it in Go code.
+
+### Port security
+
+Dragonfly peers use `hostNetwork`, so Kubernetes NetworkPolicy does not cover
+their node ports. Enforce the following with node firewall rules and cloud
+security groups:
+
+| Ports | Purpose | Exposure |
+|---|---|---|
+| `8002` | Scheduler gRPC | mTLS required; allow only cluster nodes/manager |
+| `4000` | dfdaemon upload | mTLS required; allow only cluster peers/scheduler |
+| `4001/4002/4003/4004` | client proxy/metrics/health/stats | bind to `127.0.0.1`; do not expose |
+| `4005/4006` | client storage TCP/QUIC | cluster network only |
+| `4100` | seedClient upload | mTLS required; allow only cluster peers/scheduler |
+| `4101/4102/4103/4104` | seedClient proxy/metrics/health/stats | bind to `127.0.0.1`; do not expose |
+| `4105/4106` | seedClient storage TCP/QUIC | cluster network only |
+| `65003` | manager gRPC | mTLS required; public Ingress is allowed |
+| `8080` | manager REST | JWT required; public Ingress is allowed |
+
+Do not use `proxy.basicAuth` for peer authentication: chart 1.10.1 places it in
+the wrong configuration block. The operator keeps `proxy`, `metrics`, `health`,
+and `stats` on `127.0.0.1` for both `client` and `seedClient`. Because both
+DaemonSets may run on the same node, seedClient ports are shifted to
+`4100–4106` so they do not collide with client `4000–4006`.
 
 All releases target `dragonfly-system` and depend on each other through
 `spec.dependsOn`: control and nydus depend on KeyDB, data depends on control and
@@ -223,6 +292,19 @@ expose all of them:
 Resolve the socket/runtime-class gap in the pilot (chart patch or a fork) before
 enabling the seed role on a production cluster.
 
+## MR roadmap
+
+| MR | Scope | Status |
+|---|---|---|
+| MR-1 | Scaffold, PKI, mTLS Secret, chart/CI skeleton | merged |
+| MR-2 | KeyDB, manager, control, data, nydus, extras HelmOps | merged |
+| MR-3 | Scheduler ID allocation, manager REST client, registration | merged |
+| MR-4a | `p2p-static` chart and bootstrap payload | merged |
+| MR-4b | CREATE-only admission webhook and userData injection | merged |
+| MR-5 | Status conditions, chart version guard, release workflow, docs | this change |
+
+Live envtest/pilot items remain deferred for the MR-5 follow-up list.
+
 ## Development
 
 Go 1.26 is required because the operator builds against the Rancher 2.15 and
@@ -234,8 +316,8 @@ Docker is the source of truth for builds and tests:
 make docker-build   # container image
 make docker-test    # go test ./... inside Docker
 make lint           # go vet ./... inside Docker
-make helm-lint      # helm lint charts/d7y-cattle-operator
-make helm-template  # render the chart
+make helm-lint      # helm lint every chart under charts/
+make helm-template  # render the operator, extras, and p2p-static charts
 ```
 
 ## Security notes
@@ -244,6 +326,20 @@ make helm-template  # render the chart
 - mTLS private keys exist only in the `kubernetes.io/tls` Secret and are never logged.
 - The operator uses only Wrangler/lasso Kubernetes clients (no client-go clientset
   or dynamic client) and requests no Ingress or VPA permissions.
+
+## Release
+
+Pushing a `v*` tag runs `.github/workflows/release.yml`:
+
+- builds and pushes the multi-arch operator image tagged with the Git tag
+  (`v<chart version>`);
+- lints every chart under `charts/` and publishes it with `chart-releaser` to
+  the `gh-pages` branch.
+
+The repository charts are `d7y-cattle-operator`, `dragonfly-extras`, and
+`p2p-static`. The KeyDB chart is released from its own repository and is not
+vendored here; the README in this repo documents the pinned `keydb` 0.1.0
+contract used by the operator.
 
 ## License
 
