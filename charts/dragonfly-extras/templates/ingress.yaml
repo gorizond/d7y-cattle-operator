@@ -38,22 +38,15 @@ spec:
 ---
 {{- end }}
 {{- if and .Values.ingress.enabled .Values.ingress.rest.enabled }}
+{{- if eq $controller "nginx" }}
 apiVersion: networking.k8s.io/v1
 kind: Ingress
 metadata:
   name: {{ .Release.Name }}-manager-api
   labels:
     {{- include "dragonfly-extras.labels" . | nindent 4 }}
-  {{- if eq $controller "nginx" }}
   annotations:
     nginx.ingress.kubernetes.io/backend-protocol: HTTPS
-  {{- else if eq $controller "traefik" }}
-  annotations:
-    traefik.ingress.kubernetes.io/service.serversscheme: https
-    {{- if .Values.ingress.traefik.serversTransport.enabled }}
-    traefik.ingress.kubernetes.io/service.serverstransport: {{ printf "%s-%s-manager-rest@kubernetescrd" .Release.Namespace .Release.Name | quote }}
-    {{- end }}
-  {{- end }}
 spec:
   {{- with .Values.ingress.className }}
   ingressClassName: {{ . | quote }}
@@ -75,6 +68,40 @@ spec:
                 name: {{ .Values.ingress.rest.service | quote }}
                 port:
                   number: {{ .Values.ingress.rest.port }}
+{{- else if eq $controller "traefik" }}
+{{- if .Capabilities.APIVersions.Has "traefik.io/v1alpha1" }}
+# Traefik v3 ignores the service.serversscheme annotation for REST backends,
+# so the HTTPS backend is declared with an IngressRoute. Traefik gRPC is out
+# of scope for this fix; the gRPC Ingress above stays nginx-only.
+apiVersion: traefik.io/v1alpha1
+kind: IngressRoute
+metadata:
+  name: {{ .Release.Name }}-manager-api
+  namespace: {{ .Release.Namespace }}
+  labels:
+    {{- include "dragonfly-extras.labels" . | nindent 4 }}
+spec:
+  {{- with .Values.ingress.className }}
+  ingressClassName: {{ . | quote }}
+  {{- end }}
+  entryPoints:
+    {{- toYaml (.Values.ingress.traefik.entryPoints | default (list "websecure")) | nindent 4 }}
+  routes:
+    - kind: Rule
+      match: {{ printf "Host(`%s`)" .Values.ingress.rest.host | quote }}
+      services:
+        - name: {{ .Values.ingress.rest.service | quote }}
+          port: {{ .Values.ingress.rest.port }}
+          scheme: https
+          {{- if .Values.ingress.traefik.serversTransport.enabled }}
+          serversTransport: {{ printf "%s-manager-rest" .Release.Name | quote }}
+          {{- end }}
+  {{- if .Values.ingress.tls.enabled }}
+  tls:
+    secretName: {{ .Values.ingress.tls.secretName | quote }}
+  {{- end }}
+{{- end }}
+{{- end }}
 {{- end }}
 {{- if and .Values.ingress.enabled .Values.ingress.rest.enabled (eq $controller "traefik") .Values.ingress.traefik.serversTransport.enabled (.Capabilities.APIVersions.Has "traefik.io/v1alpha1") }}
 ---

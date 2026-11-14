@@ -39,9 +39,11 @@ helm template e "$extras" --namespace dragonfly-system \
   --set ingress.tls.secretName=dragonfly-p2p-mtls \
   --api-versions traefik.io/v1alpha1 >"$tmp/traefik.yaml"
 if grep -q 'name: e-manager-grpc' "$tmp/traefik.yaml"; then fail "Traefik manager-only rendered a gRPC Ingress"; fi
-grep -q 'traefik.ingress.kubernetes.io/service.serversscheme: https' "$tmp/traefik.yaml" || fail "Traefik REST serversscheme missing"
-grep -q 'traefik.ingress.kubernetes.io/service.serverstransport: "dragonfly-system-e-manager-rest@kubernetescrd"' "$tmp/traefik.yaml" || fail "Traefik ServersTransport annotation missing"
+grep -q 'kind: IngressRoute' "$tmp/traefik.yaml" || fail "Traefik REST IngressRoute missing"
+if grep -q '^kind: Ingress$' "$tmp/traefik.yaml"; then fail "Traefik manager-only rendered a REST Ingress"; fi
 grep -q 'ingressClassName: "traefik"' "$tmp/traefik.yaml" || fail "Traefik ingressClassName missing"
+grep -q 'scheme: https' "$tmp/traefik.yaml" || fail "Traefik REST backend scheme missing"
+grep -q 'serversTransport: "e-manager-rest"' "$tmp/traefik.yaml" || fail "Traefik ServersTransport reference missing"
 grep -q 'secretName: "dragonfly-p2p-mtls"' "$tmp/traefik.yaml" || fail "Traefik TLS Secret missing"
 grep -q 'kind: ServersTransport' "$tmp/traefik.yaml" || fail "ServersTransport missing"
 grep -q 'name: e-manager-rest' "$tmp/traefik.yaml" || fail "ServersTransport name missing"
@@ -49,7 +51,8 @@ grep -q 'namespace: dragonfly-system' "$tmp/traefik.yaml" || fail "ServersTransp
 grep -q 'insecureSkipVerify: true' "$tmp/traefik.yaml" || fail "ServersTransport insecureSkipVerify missing"
 if grep -q 'nginx.ingress.kubernetes.io' "$tmp/traefik.yaml"; then fail "Traefik output contains nginx annotations"; fi
 
-# The ServersTransport and its annotation disappear when the toggle is off.
+# The ServersTransport and its IngressRoute reference disappear when the toggle
+# is off.
 helm template e "$extras" --namespace dragonfly-system \
   --set ingress.enabled=true \
   --set ingress.controller=traefik \
@@ -58,7 +61,7 @@ helm template e "$extras" --namespace dragonfly-system \
   --set ingress.traefik.serversTransport.enabled=false \
   --api-versions traefik.io/v1alpha1 >"$tmp/traefik-no-transport.yaml"
 if grep -q 'kind: ServersTransport' "$tmp/traefik-no-transport.yaml"; then fail "ServersTransport rendered while disabled"; fi
-if grep -q 'service.serverstransport' "$tmp/traefik-no-transport.yaml"; then fail "ServersTransport annotation rendered while disabled"; fi
+if grep -q 'serversTransport:' "$tmp/traefik-no-transport.yaml"; then fail "ServersTransport reference rendered while disabled"; fi
 
 # A Traefik gRPC Ingress (when explicitly enabled) must not inherit nginx-only
 # annotations. The manager-only canary keeps gRPC disabled.

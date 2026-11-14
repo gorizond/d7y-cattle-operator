@@ -94,7 +94,7 @@ not used until the p2p-static and registration MRs.
 
 Defaults: `mtlsSecretName=dragonfly-p2p-mtls`, `dragonfly.chart.name=dragonfly`,
 `dragonfly.chart.version=1.10.1`, `extras.chart.name=dragonfly-extras`,
-`extras.chart.version=0.1.0`, `extras.ingress.controller=nginx`,
+`extras.chart.version=0.1.1`, `extras.ingress.controller=nginx`,
 `extras.ingress.grpcEnabled=true`, `extras.ingress.restEnabled=true`,
 `webhook.port=9443`, `leaderElect=false`.
 
@@ -190,14 +190,15 @@ HelmOp:
 - `ingress.controller=nginx` (default) keeps the existing behavior: gRPC uses
   `GRPCS` with client mTLS verification from `dragonfly-p2p-mtls` and no SSL
   redirect; REST uses `backend-protocol: HTTPS`.
-- `ingress.controller=traefik` renders the REST Ingress with
-  `traefik.ingress.kubernetes.io/service.serversscheme: https` and, when
-  enabled, a `ServersTransport` (`traefik.io/v1alpha1`) named
-  `<release>-manager-rest` in the release namespace. The annotation references
-  `<namespace>-<release>-manager-rest@kubernetescrd` and uses
-  `insecureSkipVerify: true`. No nginx annotations are added in Traefik mode.
-  The gRPC Ingress is suppressed unless `ingress.grpc.enabled=true`; the
-  manager-only canary keeps it disabled.
+- `ingress.controller=traefik` renders a `traefik.io/v1alpha1` `IngressRoute`
+  named `<release>-manager-api` for the REST backend (Traefik v3 ignores
+  `traefik.ingress.kubernetes.io/service.serversscheme`). The route uses
+  `scheme: https` and, when enabled, references the `ServersTransport` named
+  `<release>-manager-rest` in the release namespace; that resource uses
+  `insecureSkipVerify: true`. The REST Ingress is not rendered in Traefik mode,
+  and no nginx annotations are added. The gRPC Ingress is suppressed unless
+  `ingress.grpc.enabled=true`; Traefik gRPC is out of scope for this fix, so
+  the gRPC Ingress keeps the existing nginx behavior.
 - `ingress.tls.enabled` adds a TLS block using `ingress.tls.secretName`. The
   manager-only canary uses `dragonfly-p2p-mtls` for
   `manager-api.koldun.negash.ru`.

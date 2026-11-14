@@ -1,6 +1,10 @@
 package helmop
 
-import fleetv1alpha1 "github.com/rancher/fleet/pkg/apis/fleet.cattle.io/v1alpha1"
+import (
+	"fmt"
+
+	fleetv1alpha1 "github.com/rancher/fleet/pkg/apis/fleet.cattle.io/v1alpha1"
+)
 
 // Manager returns the manager HelmOp with an embedded MySQL database (no PVC)
 // and KeyDB as the external Redis-compatible store.
@@ -23,15 +27,23 @@ func Manager(c Cluster) *fleetv1alpha1.HelmOp {
 			"extraVolumes":      volumes(c.MTLSSecretName, logVolume()),
 			"extraVolumeMounts": volumeMounts(logVolumeMount("/var/log/dragonfly/manager")),
 		},
+		// Bitnami MySQL 11.x reads persistence under the primary subchart.
 		"mysql": map[string]any{
-			"enable":      true,
-			"persistence": map[string]any{"enabled": false},
+			"enable": true,
+			"primary": map[string]any{
+				"persistence": map[string]any{"enabled": false},
+			},
 		},
-		"redis":         map[string]any{"enable": false},
-		"externalRedis": map[string]any{"host": KeyDBName(c.Name), "port": 6379},
-		"scheduler":     map[string]any{"enable": false},
-		"seedClient":    map[string]any{"enable": false},
-		"client":        map[string]any{"enable": false},
+		"redis": map[string]any{"enable": false},
+		// The Dragonfly chart expects externalRedis.addrs, not host/port.
+		// KeyDB is installed downstream into TargetNamespace; c.Namespace is the
+		// Fleet namespace of the HelmOp, so it is not the in-cluster namespace.
+		"externalRedis": map[string]any{
+			"addrs": []any{fmt.Sprintf("%s.%s.svc.cluster.local:6379", KeyDBName(c.Name), TargetNamespace)},
+		},
+		"scheduler":  map[string]any{"enable": false},
+		"seedClient": map[string]any{"enable": false},
+		"client":     map[string]any{"enable": false},
 	}
 	op := newHelmOp(ManagerName(c.Name), c, c.Chart, "manager", values, []string{KeyDBName(c.Name)})
 	return withMTLS(op, c.MTLSSecretName)

@@ -8,7 +8,7 @@ func testCluster() Cluster {
 		Namespace:          "fleet-default",
 		MTLSSecretName:     "dragonfly-p2p-mtls",
 		Chart:              Chart{Repo: "https://charts.example.com", Name: "dragonfly", Version: "1.10.1"},
-		ExtrasChart:        Chart{Repo: "https://charts.example.com", Name: "dragonfly-extras", Version: "0.1.0"},
+		ExtrasChart:        Chart{Repo: "https://charts.example.com", Name: "dragonfly-extras", Version: "0.1.1"},
 		ManagerGRPCDomain:  "grpc.example.com",
 		ManagerAPIHost:     "api.example.com",
 		SchedulerClusterID: 42,
@@ -91,14 +91,21 @@ func TestManagerHelmOp(t *testing.T) {
 	if got := valueAt(t, values, "mysql", "enable"); got != true {
 		t.Errorf("mysql.enable = %v", got)
 	}
-	if got := valueAt(t, values, "mysql", "persistence", "enabled"); got != false {
-		t.Errorf("mysql.persistence.enabled = %v", got)
+	if got := valueAt(t, values, "mysql", "primary", "persistence", "enabled"); got != false {
+		t.Errorf("mysql.primary.persistence.enabled = %v", got)
+	}
+	if mysql := nested(t, values, "mysql"); mysql["persistence"] != nil {
+		t.Errorf("mysql.persistence = %v, want unset (Bitnami MySQL expects mysql.primary.persistence)", mysql["persistence"])
 	}
 	if got := valueAt(t, values, "redis", "enable"); got != false {
 		t.Errorf("redis.enable = %v", got)
 	}
-	if got := valueAt(t, values, "externalRedis", "host"); got != "c1-keydb" {
-		t.Errorf("externalRedis.host = %v", got)
+	addrs, ok := valueAt(t, values, "externalRedis", "addrs").([]any)
+	if !ok || len(addrs) != 1 || addrs[0] != "c1-keydb.dragonfly-system.svc.cluster.local:6379" {
+		t.Errorf("externalRedis.addrs = %v, want [c1-keydb.dragonfly-system.svc.cluster.local:6379]", addrs)
+	}
+	if externalRedis := nested(t, values, "externalRedis"); externalRedis["host"] != nil {
+		t.Errorf("externalRedis.host = %v, want unset (Dragonfly chart requires externalRedis.addrs)", externalRedis["host"])
 	}
 	for _, component := range []string{"scheduler", "seedClient", "client"} {
 		if got := valueAt(t, values, component, "enable"); got != false {
