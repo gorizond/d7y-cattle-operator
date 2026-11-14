@@ -27,6 +27,10 @@ manager:
   grpcDomain: ""
   # Public HTTPS URL of the manager REST API.
   apiURL: ""
+  # Optional Secret with a public tls.crt/tls.key for the manager gRPC server.
+  # Empty keeps the internal mTLS certificate. The internal CA remains the
+  # client CA.
+  publicTLSSecret: ""
 
 nginx:
   # Base URL of the static asset server (http or https).
@@ -45,10 +49,11 @@ extras:
   chart:
     repo: https://gorizond.github.io/d7y-cattle-operator
     name: dragonfly-extras
-    version: 0.1.1
+    version: 0.1.2
   ingress:
     # nginx keeps the existing mTLS gRPC/REST annotations; traefik renders a
-    # REST IngressRoute with a CRD ServersTransport.
+    # REST IngressRoute with a CRD ServersTransport and a gRPC IngressRouteTCP
+    # with TLS passthrough.
     controller: nginx
     className: ""
     grpcEnabled: true

@@ -32,6 +32,8 @@ spec:
               value: {{ .Values.manager.grpcDomain | quote }}
             - name: MANAGER_API_URL
               value: {{ .Values.manager.apiURL | quote }}
+            - name: MANAGER_PUBLIC_TLS_SECRET
+              value: {{ .Values.manager.publicTLSSecret | quote }}
             - name: NGINX_STATIC_URL
               value: {{ .Values.nginx.staticURL | quote }}
             - name: MTLS_SECRET_NAME

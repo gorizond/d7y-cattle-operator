@@ -97,6 +97,7 @@ func run() error {
 		ManagerAPIHost:              apiHost,
 		ManagerAPIURL:               cfg.ManagerAPIURL,
 		ManagerAPICredentialsSecret: cfg.ManagerAPICredentialsSecret,
+		ManagerPublicTLSSecret:      cfg.ManagerPublicTLSSecret,
 		DragonflyChart: helmop.Chart{
 			Repo:    cfg.DragonflyChartRepo,
 			Name:    cfg.DragonflyChartName,

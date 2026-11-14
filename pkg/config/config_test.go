@@ -11,6 +11,7 @@ var envKeys = []string{
 	"NGINX_STATIC_URL",
 	"MTLS_SECRET_NAME",
 	"MANAGER_API_CREDENTIALS_SECRET",
+	"MANAGER_PUBLIC_TLS_SECRET",
 	"DRAGONFLY_CHART_REPO",
 	"DRAGONFLY_CHART_NAME",
 	"DRAGONFLY_CHART_VERSION",
@@ -88,6 +89,9 @@ func TestLoadDefaults(t *testing.T) {
 	if !cfg.ExtrasTraefikTransport {
 		t.Error("ExtrasTraefikTransport = false, want true")
 	}
+	if cfg.ManagerPublicTLSSecret != DefaultManagerPublicTLSSecret {
+		t.Errorf("ManagerPublicTLSSecret = %q, want %q", cfg.ManagerPublicTLSSecret, DefaultManagerPublicTLSSecret)
+	}
 	if cfg.Namespace != DefaultNamespace {
 		t.Errorf("Namespace = %q, want %q", cfg.Namespace, DefaultNamespace)
 	}
@@ -152,6 +156,7 @@ func TestLoadInvalidValues(t *testing.T) {
 		"invalid extras ingress controller": "--extras-ingress-controller=haproxy",
 		"invalid extras ingress class":      "--extras-ingress-class-name=Bad_Name",
 		"invalid extras ingress TLS Secret": "--extras-ingress-tls-secret=Bad_Name",
+		"invalid manager public TLS Secret": "--manager-public-tls-secret=Bad_Name",
 		"webhook port zero":                 "--webhook-port=0",
 		"webhook port too large":            "--webhook-port=70000",
 		"empty webhook cert dir":            "--webhook-cert-dir=",
@@ -177,6 +182,7 @@ func TestLoadEnvOverride(t *testing.T) {
 	t.Setenv("NGINX_STATIC_URL", "http://static.env.example.com")
 	t.Setenv("MTLS_SECRET_NAME", "env-mtls")
 	t.Setenv("MANAGER_API_CREDENTIALS_SECRET", "env-credentials")
+	t.Setenv("MANAGER_PUBLIC_TLS_SECRET", "env-public-tls")
 	t.Setenv("DRAGONFLY_CHART_REPO", "https://charts.env.example.com")
 	t.Setenv("DRAGONFLY_CHART_NAME", "dragonfly-env")
 	t.Setenv("DRAGONFLY_CHART_VERSION", "2.0.0")
@@ -214,6 +220,9 @@ func TestLoadEnvOverride(t *testing.T) {
 	}
 	if cfg.ManagerAPICredentialsSecret != "env-credentials" {
 		t.Errorf("ManagerAPICredentialsSecret = %q", cfg.ManagerAPICredentialsSecret)
+	}
+	if cfg.ManagerPublicTLSSecret != "env-public-tls" {
+		t.Errorf("ManagerPublicTLSSecret = %q", cfg.ManagerPublicTLSSecret)
 	}
 	if cfg.DragonflyChartRepo != "https://charts.env.example.com" {
 		t.Errorf("DragonflyChartRepo = %q", cfg.DragonflyChartRepo)
@@ -272,13 +281,19 @@ func TestLoadFlagOverridesEnv(t *testing.T) {
 	clearEnv(t)
 	t.Setenv("MANAGER_GRPC_DOMAIN", "grpc.env.example.com")
 
-	args := append(requiredArgs(), "--manager-grpc-domain=grpc.flag.example.com")
+	args := append(requiredArgs(),
+		"--manager-grpc-domain=grpc.flag.example.com",
+		"--manager-public-tls-secret=flag-public-tls",
+	)
 	cfg, err := Load(args)
 	if err != nil {
 		t.Fatalf("Load() error = %v", err)
 	}
 	if cfg.ManagerGRPCDomain != "grpc.flag.example.com" {
 		t.Errorf("ManagerGRPCDomain = %q, want flag value", cfg.ManagerGRPCDomain)
+	}
+	if cfg.ManagerPublicTLSSecret != "flag-public-tls" {
+		t.Errorf("ManagerPublicTLSSecret = %q, want flag value", cfg.ManagerPublicTLSSecret)
 	}
 }
 

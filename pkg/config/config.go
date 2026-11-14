@@ -17,11 +17,12 @@ import (
 // Defaults shared with the Helm chart.
 const (
 	DefaultMTLSSecretName                = "dragonfly-p2p-mtls"
+	DefaultManagerPublicTLSSecret        = ""
 	DefaultDragonflyChartName            = "dragonfly"
 	DefaultDragonflyChartVersion         = "1.10.1"
 	DefaultExtrasChartRepo               = "https://gorizond.github.io/d7y-cattle-operator"
 	DefaultExtrasChartName               = "dragonfly-extras"
-	DefaultExtrasChartVersion            = "0.1.1"
+	DefaultExtrasChartVersion            = "0.1.2"
 	DefaultExtrasIngressController       = "nginx"
 	DefaultExtrasIngressClassName        = ""
 	DefaultExtrasIngressGRPCEnabled      = true
@@ -43,6 +44,7 @@ type Config struct {
 	NginxStaticURL              string
 	MTLSSecretName              string
 	ManagerAPICredentialsSecret string
+	ManagerPublicTLSSecret      string
 	DragonflyChartRepo          string
 	DragonflyChartName          string
 	DragonflyChartVersion       string
@@ -90,6 +92,7 @@ func Load(args []string) (*Config, error) {
 	fs.StringVar(&cfg.NginxStaticURL, "nginx-static-url", envOr("NGINX_STATIC_URL", ""), "base URL of the static asset server (http or https)")
 	fs.StringVar(&cfg.MTLSSecretName, "mtls-secret-name", envOr("MTLS_SECRET_NAME", DefaultMTLSSecretName), "name of the mTLS Secret")
 	fs.StringVar(&cfg.ManagerAPICredentialsSecret, "manager-api-credentials-secret", envOr("MANAGER_API_CREDENTIALS_SECRET", ""), "name of the Secret holding manager API credentials")
+	fs.StringVar(&cfg.ManagerPublicTLSSecret, "manager-public-tls-secret", envOr("MANAGER_PUBLIC_TLS_SECRET", DefaultManagerPublicTLSSecret), "name of the Secret holding the manager public TLS certificate (empty keeps the internal mTLS certificate)")
 	fs.StringVar(&cfg.DragonflyChartRepo, "dragonfly-chart-repo", envOr("DRAGONFLY_CHART_REPO", ""), "Helm repository URL of the Dragonfly chart")
 	fs.StringVar(&cfg.DragonflyChartName, "dragonfly-chart-name", envOr("DRAGONFLY_CHART_NAME", DefaultDragonflyChartName), "Dragonfly chart name")
 	fs.StringVar(&cfg.DragonflyChartVersion, "dragonfly-chart-version", envOr("DRAGONFLY_CHART_VERSION", DefaultDragonflyChartVersion), "Dragonfly chart version")
@@ -149,6 +152,11 @@ func (c *Config) Validate() error {
 		add("--manager-api-credentials-secret is required")
 	} else if msgs := validation.IsDNS1123Subdomain(c.ManagerAPICredentialsSecret); len(msgs) > 0 {
 		add("--manager-api-credentials-secret: %s", strings.Join(msgs, "; "))
+	}
+	if c.ManagerPublicTLSSecret != "" {
+		if msgs := validation.IsDNS1123Subdomain(c.ManagerPublicTLSSecret); len(msgs) > 0 {
+			add("--manager-public-tls-secret: %s", strings.Join(msgs, "; "))
+		}
 	}
 	if c.DragonflyChartRepo == "" {
 		add("--dragonfly-chart-repo is required")

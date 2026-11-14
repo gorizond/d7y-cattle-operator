@@ -393,6 +393,7 @@ func TestReconcileRegistrationRetryCondition(t *testing.T) {
 
 func TestHelmopClusterReplicas(t *testing.T) {
 	controller := &Controller{}
+	controller.opts.ManagerPublicTLSSecret = "poligon-manager-public-tls"
 	cluster := &provv1.Cluster{
 		ObjectMeta: metav1.ObjectMeta{
 			Annotations: map[string]string{
@@ -402,6 +403,9 @@ func TestHelmopClusterReplicas(t *testing.T) {
 		},
 	}
 	hc := controller.helmopCluster(cluster)
+	if hc.ManagerPublicTLSSecret != "poligon-manager-public-tls" {
+		t.Errorf("manager public TLS Secret = %q, want config value", hc.ManagerPublicTLSSecret)
+	}
 	if hc.SchedulerReplicas != helmop.ReplicasTemplate(AnnotationSchedulerReplicas) {
 		t.Errorf("scheduler replicas = %q, want template", hc.SchedulerReplicas)
 	}

@@ -2,7 +2,8 @@
 ingress:
   enabled: false
   # nginx keeps the existing auth-tls/backend-protocol behavior. traefik uses
-  # CRD ServersTransport for the HTTPS REST backend.
+  # an IngressRouteTCP with TLS passthrough for gRPC and a CRD ServersTransport
+  # for the HTTPS REST backend.
   controller: nginx
   className: ""
   grpc:
@@ -19,7 +20,7 @@ ingress:
     enabled: false
     secretName: ""
   traefik:
-    # Entry points used by the REST IngressRoute.
+    # Entry points used by the REST IngressRoute and gRPC IngressRouteTCP.
     entryPoints: ["websecure"]
     serversTransport:
       enabled: true
