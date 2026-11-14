@@ -139,10 +139,10 @@ func TestReconcileAutoRegistrationWritesAnnotation(t *testing.T) {
 	if len(links) != 1 || links[0].seedPeerID != 7 || links[0].schedulerID != 5 {
 		t.Errorf("links = %+v, want seed 7 -> scheduler 5", links)
 	}
-	if got := clusterStore.condition("Registered"); got == nil || got.Status != corev1.ConditionTrue {
+	if got := clusterStore.condition(string(conditionRegistered)); got == nil || got.Status != corev1.ConditionTrue {
 		t.Errorf("Registered condition = %+v, want True", got)
 	}
-	if got := clusterStore.condition("IdMismatch"); got == nil || got.Status != corev1.ConditionFalse {
+	if got := clusterStore.condition(string(conditionIDMismatch)); got == nil || got.Status != corev1.ConditionFalse {
 		t.Errorf("IdMismatch condition = %+v, want False", got)
 	}
 }
@@ -180,10 +180,10 @@ func TestReconcileUserIDPreservedAndMismatch(t *testing.T) {
 		t.Errorf("data schedulerClusterID = %v, want annotation 42", got)
 	}
 
-	if got := clusterStore.condition("Registered"); got == nil || got.Status != corev1.ConditionTrue {
+	if got := clusterStore.condition(string(conditionRegistered)); got == nil || got.Status != corev1.ConditionTrue {
 		t.Errorf("Registered condition = %+v, want True", got)
 	}
-	if got := clusterStore.condition("IdMismatch"); got == nil || got.Status != corev1.ConditionTrue {
+	if got := clusterStore.condition(string(conditionIDMismatch)); got == nil || got.Status != corev1.ConditionTrue {
 		t.Errorf("IdMismatch condition = %+v, want True", got)
 	}
 	found := false
@@ -235,7 +235,7 @@ func TestReconcileAutoDBWipeUpdatesAnnotation(t *testing.T) {
 	if got := valueAtPath(t, helmValues(t, control), "scheduler", "config", "manager", "schedulerClusterID"); got != int64(9) {
 		t.Errorf("control schedulerClusterID = %v, want 9", got)
 	}
-	if got := clusterStore.condition("IdMismatch"); got == nil || got.Status != corev1.ConditionFalse {
+	if got := clusterStore.condition(string(conditionIDMismatch)); got == nil || got.Status != corev1.ConditionFalse {
 		t.Errorf("IdMismatch condition = %+v, want False", got)
 	}
 }
@@ -279,7 +279,7 @@ func TestReconcileAutoOwnershipSurvivesRestart(t *testing.T) {
 	if got := restartedStore.annotation(AnnotationSchedulerClusterIDAuto); got != "9" {
 		t.Errorf("auto marker = %q, want 9", got)
 	}
-	if got := restartedStore.condition("IdMismatch"); got == nil || got.Status != corev1.ConditionFalse {
+	if got := restartedStore.condition(string(conditionIDMismatch)); got == nil || got.Status != corev1.ConditionFalse {
 		t.Errorf("IdMismatch condition = %+v, want False", got)
 	}
 }
@@ -336,10 +336,10 @@ func TestReconcileRegistrationFailureKeepsManagerAndKeyDB(t *testing.T) {
 			t.Errorf("%s HelmOp was created despite registration failure", name)
 		}
 	}
-	if got := clusterStore.condition("Registered"); got == nil || got.Status != corev1.ConditionFalse {
+	if got := clusterStore.condition(string(conditionRegistered)); got == nil || got.Status != corev1.ConditionFalse {
 		t.Errorf("Registered condition = %+v, want False", got)
 	}
-	if got := clusterStore.condition("RegistrationFailed"); got == nil || got.Status != corev1.ConditionTrue {
+	if got := clusterStore.condition(string(conditionRegistrationFailed)); got == nil || got.Status != corev1.ConditionTrue {
 		t.Errorf("RegistrationFailed condition = %+v, want True", got)
 	}
 	found := false
@@ -374,10 +374,10 @@ func TestReconcileRegistrationRetryCondition(t *testing.T) {
 			t.Errorf("%s HelmOp was created despite registration failure", name)
 		}
 	}
-	if got := clusterStore.condition("Retrying"); got == nil || got.Status != corev1.ConditionTrue {
+	if got := clusterStore.condition(string(conditionRetrying)); got == nil || got.Status != corev1.ConditionTrue {
 		t.Errorf("Retrying condition = %+v, want True", got)
 	}
-	if got := clusterStore.condition("RegistrationFailed"); got == nil || got.Status != corev1.ConditionFalse {
+	if got := clusterStore.condition(string(conditionRegistrationFailed)); got == nil || got.Status != corev1.ConditionFalse {
 		t.Errorf("RegistrationFailed condition = %+v, want False", got)
 	}
 	found := false
@@ -488,6 +488,7 @@ type fakeClusterStore struct {
 	cluster       *provv1.Cluster
 	updates       int
 	statusUpdates int
+	statusErr     error
 }
 
 func newFakeClusterStore() *fakeClusterStore {
@@ -512,6 +513,9 @@ func (f *fakeClusterStore) UpdateStatus(cluster *provv1.Cluster) (*provv1.Cluste
 	f.mu.Lock()
 	defer f.mu.Unlock()
 	f.statusUpdates++
+	if f.statusErr != nil {
+		return nil, f.statusErr
+	}
 	if f.cluster == nil {
 		f.cluster = cluster.DeepCopy()
 	} else {

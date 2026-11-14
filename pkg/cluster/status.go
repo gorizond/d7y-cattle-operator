@@ -2,7 +2,6 @@ package cluster
 
 import (
 	"fmt"
-	"log/slog"
 
 	provv1 "github.com/rancher/rancher/pkg/apis/provisioning.cattle.io/v1"
 	"github.com/rancher/wrangler/v3/pkg/condition"
@@ -10,15 +9,15 @@ import (
 )
 
 const (
-	conditionRolesResolved      condition.Cond = "RolesResolved"
-	conditionKeyDBReady         condition.Cond = "KeyDBReady"
-	conditionControlReady       condition.Cond = "ControlReady"
-	conditionDataReady          condition.Cond = "DataReady"
-	conditionNydusReady         condition.Cond = "NydusReady"
-	conditionRegistered         condition.Cond = "Registered"
-	conditionRegistrationFailed condition.Cond = "RegistrationFailed"
-	conditionRetrying           condition.Cond = "Retrying"
-	conditionIDMismatch         condition.Cond = "IdMismatch"
+	conditionRolesResolved      condition.Cond = "d7y.io/RolesResolved"
+	conditionKeyDBReady         condition.Cond = "d7y.io/KeyDBReady"
+	conditionControlReady       condition.Cond = "d7y.io/ControlReady"
+	conditionDataReady          condition.Cond = "d7y.io/DataReady"
+	conditionNydusReady         condition.Cond = "d7y.io/NydusReady"
+	conditionRegistered         condition.Cond = "d7y.io/Registered"
+	conditionRegistrationFailed condition.Cond = "d7y.io/RegistrationFailed"
+	conditionRetrying           condition.Cond = "d7y.io/Retrying"
+	conditionIDMismatch         condition.Cond = "d7y.io/IdMismatch"
 )
 
 // statusBuilder accumulates all condition changes for one reconcile pass and
@@ -125,20 +124,17 @@ func (s *statusBuilder) rebase(cluster *provv1.Cluster) {
 	s.updated.ResourceVersion = cluster.ResourceVersion
 }
 
-func (s *statusBuilder) apply() bool {
+func (s *statusBuilder) apply() (bool, error) {
 	if equality.Semantic.DeepEqual(s.original.Status.Conditions, s.updated.Status.Conditions) {
-		return false
+		return false, nil
 	}
 	if s.controller.clusters == nil {
-		return true
+		return false, nil
 	}
 	if _, err := s.controller.clusters.UpdateStatus(s.updated); err != nil {
-		slog.Warn("failed to update Cluster status",
-			"cluster", s.original.Namespace+"/"+s.original.Name,
-			"error", err,
-		)
+		return false, fmt.Errorf("update Cluster status: %w", err)
 	}
-	return true
+	return true, nil
 }
 
 func setCondition(cond condition.Cond, cluster *provv1.Cluster, value bool, reason, message string) {

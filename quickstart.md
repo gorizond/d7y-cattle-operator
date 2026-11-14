@@ -168,7 +168,7 @@ kubectl -n <cluster-ns> get helmop   # none for this cluster
 ```
 
 Expected: HelmOps are gone; the `scheduler-cluster-id` annotation remains; the
-mTLS Secret remains. The Cluster conditions show `RolesResolved=False` with
+mTLS Secret remains. The Cluster conditions show `d7y.io/RolesResolved=False` with
 reason `LabelMissing`, and the seed conditions show `SeedDisabled` if they
 existed before the label was removed.
 

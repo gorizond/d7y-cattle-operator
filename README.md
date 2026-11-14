@@ -29,11 +29,12 @@ verification remains deferred.
   thread-safe scheduler ID allocator (`pkg/registry`) for seed registration:
   auto mode writes the server-assigned ID to both `scheduler-cluster-id` and
   the durable `scheduler-cluster-id-auto` marker; user-owned IDs are never
-  overwritten and mismatches are reported via the `IdMismatch` condition.
+  overwritten and mismatches are reported via the `d7y.io/IdMismatch` condition.
   Missing records are recreated and relinked on every reconcile.
-- Publishes role/registration state as Cluster conditions (`RolesResolved`,
-  `KeyDBReady`, `ControlReady`, `DataReady`, `NydusReady`, `Registered`) and
-  updates them only when they change.
+- Publishes role/registration state as Cluster conditions
+  (`d7y.io/RolesResolved`, `d7y.io/KeyDBReady`, `d7y.io/ControlReady`,
+  `d7y.io/DataReady`, `d7y.io/NydusReady`, `d7y.io/Registered`) and updates
+  them only when they change.
 - Runs until it receives `SIGINT`/`SIGTERM`.
 
 ## Follow-ups
@@ -119,17 +120,17 @@ only when the value, reason, or message changes:
 
 | Condition | True when |
 |---|---|
-| `RolesResolved` | The Cluster has the `p2p-dragonfly-io: "true"` label; the role annotations are parsed. |
-| `KeyDBReady` | The `<cluster>-keydb` HelmOp was applied. |
-| `ControlReady` | The seed scheduler HelmOp was applied (`seed: "true"`). |
-| `DataReady` | The seedClient/client HelmOp was applied (`seed: "true"`). |
-| `NydusReady` | The nydus-snapshotter HelmOp was applied (`seed: "true"`). |
-| `Registered` | Scheduler and seed-peer records were ensured and linked in the manager. |
-| `RegistrationFailed` | Registration failed permanently; `Retrying` marks transient failures. |
-| `IdMismatch` | The user-provided `scheduler-cluster-id` differs from the manager server ID; the annotation is preserved. |
+| `d7y.io/RolesResolved` | The Cluster has the `p2p-dragonfly-io: "true"` label; the role annotations are parsed. |
+| `d7y.io/KeyDBReady` | The `<cluster>-keydb` HelmOp was applied. |
+| `d7y.io/ControlReady` | The seed scheduler HelmOp was applied (`seed: "true"`). |
+| `d7y.io/DataReady` | The seedClient/client HelmOp was applied (`seed: "true"`). |
+| `d7y.io/NydusReady` | The nydus-snapshotter HelmOp was applied (`seed: "true"`). |
+| `d7y.io/Registered` | Scheduler and seed-peer records were ensured and linked in the manager. |
+| `d7y.io/RegistrationFailed` | Registration failed permanently; `d7y.io/Retrying` marks transient failures. |
+| `d7y.io/IdMismatch` | The user-provided `scheduler-cluster-id` differs from the manager server ID; the annotation is preserved. |
 
-A label-only Cluster reports `ControlReady=False`, `DataReady=False`, and
-`NydusReady=False` with reason `SeedDisabled`; a seed Cluster whose mTLS Secret
+A label-only Cluster reports `d7y.io/ControlReady=False`, `d7y.io/DataReady=False`, and
+`d7y.io/NydusReady=False` with reason `SeedDisabled`; a seed Cluster whose mTLS Secret
 is missing reports `MTLSSecretUnavailable`. Conditions never contain Secret
 values or certificate material.
 
@@ -233,8 +234,8 @@ writes the server-assigned ID to `scheduler-cluster-id` plus the durable
 `scheduler-cluster-id-auto` marker in auto mode. If the marker equals
 `scheduler-cluster-id`, the ID is auto-owned and may be updated after manager DB
 loss; if the marker is absent or different, the ID is user-owned and is never
-overwritten (`IdMismatch` on server mismatch). This decision survives operator
-restarts. Registration failures set `RegistrationFailed` or `Retrying` and block
+overwritten (`d7y.io/IdMismatch` on server mismatch). This decision survives operator
+restarts. Registration failures set `d7y.io/RegistrationFailed` or `d7y.io/Retrying` and block
 control/data/nydus without blocking manager/KeyDB.
 
 ## Bootstrap static chart

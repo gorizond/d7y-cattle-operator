@@ -73,13 +73,18 @@ func Register(ctx context.Context, clusters provctl.ClusterController, secrets c
 	clusters.OnChange(ctx, controllerName, c.reconcile)
 }
 
-func (c *Controller) reconcile(key string, cluster *provv1.Cluster) (*provv1.Cluster, error) {
+func (c *Controller) reconcile(key string, cluster *provv1.Cluster) (result *provv1.Cluster, retErr error) {
 	if cluster == nil {
 		return nil, nil
 	}
 
 	status := c.newStatus(cluster)
-	defer status.apply()
+	defer func() {
+		_, err := status.apply()
+		if err != nil {
+			retErr = errors.Join(retErr, err)
+		}
+	}()
 
 	roles := ResolveRoles(cluster)
 	if !roles.Enabled {
