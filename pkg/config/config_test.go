@@ -17,6 +17,12 @@ var envKeys = []string{
 	"EXTRAS_CHART_REPO",
 	"EXTRAS_CHART_NAME",
 	"EXTRAS_CHART_VERSION",
+	"EXTRAS_INGRESS_CONTROLLER",
+	"EXTRAS_INGRESS_CLASS_NAME",
+	"EXTRAS_INGRESS_GRPC_ENABLED",
+	"EXTRAS_INGRESS_REST_ENABLED",
+	"EXTRAS_INGRESS_TLS_SECRET",
+	"EXTRAS_TRAEFIK_SERVERS_TRANSPORT_ENABLED",
 	"POD_NAMESPACE",
 	"WEBHOOK_PORT",
 	"WEBHOOK_CERT_DIR",
@@ -66,6 +72,21 @@ func TestLoadDefaults(t *testing.T) {
 	}
 	if cfg.ExtrasChartVersion != DefaultExtrasChartVersion {
 		t.Errorf("ExtrasChartVersion = %q, want %q", cfg.ExtrasChartVersion, DefaultExtrasChartVersion)
+	}
+	if cfg.ExtrasIngressController != DefaultExtrasIngressController {
+		t.Errorf("ExtrasIngressController = %q, want %q", cfg.ExtrasIngressController, DefaultExtrasIngressController)
+	}
+	if cfg.ExtrasIngressClassName != "" {
+		t.Errorf("ExtrasIngressClassName = %q, want empty", cfg.ExtrasIngressClassName)
+	}
+	if !cfg.ExtrasIngressGRPCEnabled || !cfg.ExtrasIngressRESTEnabled {
+		t.Errorf("extras ingress toggles = grpc:%v rest:%v, want both true", cfg.ExtrasIngressGRPCEnabled, cfg.ExtrasIngressRESTEnabled)
+	}
+	if cfg.ExtrasIngressTLSSecret != "" {
+		t.Errorf("ExtrasIngressTLSSecret = %q, want empty", cfg.ExtrasIngressTLSSecret)
+	}
+	if !cfg.ExtrasTraefikTransport {
+		t.Error("ExtrasTraefikTransport = false, want true")
 	}
 	if cfg.Namespace != DefaultNamespace {
 		t.Errorf("Namespace = %q, want %q", cfg.Namespace, DefaultNamespace)
@@ -128,6 +149,9 @@ func TestLoadInvalidValues(t *testing.T) {
 		"invalid chart version":             "--dragonfly-chart-version=latest",
 		"invalid extras chart version":      "--extras-chart-version=latest",
 		"invalid extras chart repo":         "--extras-chart-repo=not-a-url",
+		"invalid extras ingress controller": "--extras-ingress-controller=haproxy",
+		"invalid extras ingress class":      "--extras-ingress-class-name=Bad_Name",
+		"invalid extras ingress TLS Secret": "--extras-ingress-tls-secret=Bad_Name",
 		"webhook port zero":                 "--webhook-port=0",
 		"webhook port too large":            "--webhook-port=70000",
 		"empty webhook cert dir":            "--webhook-cert-dir=",
@@ -159,6 +183,12 @@ func TestLoadEnvOverride(t *testing.T) {
 	t.Setenv("EXTRAS_CHART_REPO", "https://extras.env.example.com")
 	t.Setenv("EXTRAS_CHART_NAME", "dragonfly-extras-env")
 	t.Setenv("EXTRAS_CHART_VERSION", "1.2.3")
+	t.Setenv("EXTRAS_INGRESS_CONTROLLER", "traefik")
+	t.Setenv("EXTRAS_INGRESS_CLASS_NAME", "traefik")
+	t.Setenv("EXTRAS_INGRESS_GRPC_ENABLED", "false")
+	t.Setenv("EXTRAS_INGRESS_REST_ENABLED", "true")
+	t.Setenv("EXTRAS_INGRESS_TLS_SECRET", "dragonfly-p2p-mtls")
+	t.Setenv("EXTRAS_TRAEFIK_SERVERS_TRANSPORT_ENABLED", "false")
 	t.Setenv("POD_NAMESPACE", "env-namespace")
 	t.Setenv("WEBHOOK_PORT", "10443")
 	t.Setenv("WEBHOOK_CERT_DIR", "/tmp/webhook-certs")
@@ -203,6 +233,24 @@ func TestLoadEnvOverride(t *testing.T) {
 	if cfg.ExtrasChartVersion != "1.2.3" {
 		t.Errorf("ExtrasChartVersion = %q", cfg.ExtrasChartVersion)
 	}
+	if cfg.ExtrasIngressController != "traefik" {
+		t.Errorf("ExtrasIngressController = %q", cfg.ExtrasIngressController)
+	}
+	if cfg.ExtrasIngressClassName != "traefik" {
+		t.Errorf("ExtrasIngressClassName = %q", cfg.ExtrasIngressClassName)
+	}
+	if cfg.ExtrasIngressGRPCEnabled {
+		t.Error("ExtrasIngressGRPCEnabled = true, want false")
+	}
+	if !cfg.ExtrasIngressRESTEnabled {
+		t.Error("ExtrasIngressRESTEnabled = false, want true")
+	}
+	if cfg.ExtrasIngressTLSSecret != "dragonfly-p2p-mtls" {
+		t.Errorf("ExtrasIngressTLSSecret = %q", cfg.ExtrasIngressTLSSecret)
+	}
+	if cfg.ExtrasTraefikTransport {
+		t.Error("ExtrasTraefikTransport = true, want false")
+	}
 	if cfg.Namespace != "env-namespace" {
 		t.Errorf("Namespace = %q", cfg.Namespace)
 	}
@@ -246,5 +294,15 @@ func TestLoadInvalidEnvPort(t *testing.T) {
 	_, err := Load(nil)
 	if err == nil || !strings.Contains(err.Error(), "WEBHOOK_PORT") {
 		t.Fatalf("Load() error = %v, want an error mentioning WEBHOOK_PORT", err)
+	}
+}
+
+func TestLoadInvalidExtrasIngressBoolEnv(t *testing.T) {
+	clearEnv(t)
+	t.Setenv("EXTRAS_INGRESS_GRPC_ENABLED", "not-a-bool")
+
+	_, err := Load(requiredArgs())
+	if err == nil || !strings.Contains(err.Error(), "EXTRAS_INGRESS_GRPC_ENABLED") {
+		t.Fatalf("Load() error = %v, want an error mentioning EXTRAS_INGRESS_GRPC_ENABLED", err)
 	}
 }

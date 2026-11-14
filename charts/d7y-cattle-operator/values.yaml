@@ -46,6 +46,16 @@ extras:
     repo: https://gorizond.github.io/d7y-cattle-operator
     name: dragonfly-extras
     version: 0.1.0
+  ingress:
+    # nginx keeps the existing mTLS gRPC/REST annotations; traefik renders the
+    # REST Ingress with a CRD ServersTransport.
+    controller: nginx
+    className: ""
+    grpcEnabled: true
+    restEnabled: true
+    # Empty disables the Ingress TLS block.
+    tlsSecret: ""
+    traefikServersTransportEnabled: true
 
 webhook:
   # Admission webhook server and MutatingWebhookConfiguration.

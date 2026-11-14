@@ -3,8 +3,8 @@
 Kubernetes operator that runs [Dragonfly](https://d7y.io) P2P on Rancher-managed
 RKE2 clusters.
 
-**Status**: MR-5 (status conditions, version guard, release workflow, and
-English documentation). The Cluster controller, role resolution, KeyDB,
+**Status**: MR-6 (traefik-compatible extras REST Ingress and per-Ingress
+toggles; MR-5 status/release foundations). The Cluster controller, role resolution, KeyDB,
 manager, seed role, manager registration, `dragonfly-extras`, the `p2p-static`
 chart, and the admission webhook are implemented. Live envtest/pilot
 verification remains deferred.
@@ -87,10 +87,18 @@ not used until the p2p-static and registration MRs.
 | `extras.chart.repo` | `EXTRAS_CHART_REPO` | Helm repository URL of the dragonfly-extras chart |
 | `extras.chart.name` | `EXTRAS_CHART_NAME` | dragonfly-extras chart name |
 | `extras.chart.version` | `EXTRAS_CHART_VERSION` | dragonfly-extras chart version |
+| `extras.ingress.controller` | `EXTRAS_INGRESS_CONTROLLER` | `nginx` (default) or `traefik` |
+| `extras.ingress.className` | `EXTRAS_INGRESS_CLASS_NAME` | Ingress class; empty uses the cluster default |
+| `extras.ingress.grpcEnabled` | `EXTRAS_INGRESS_GRPC_ENABLED` | Render the gRPC Ingress when the manager role is active; default `true` |
+| `extras.ingress.restEnabled` | `EXTRAS_INGRESS_REST_ENABLED` | Render the REST Ingress when the manager role is active; default `true` |
+| `extras.ingress.tlsSecret` | `EXTRAS_INGRESS_TLS_SECRET` | Ingress TLS Secret; empty disables the TLS block |
+| `extras.ingress.traefikServersTransportEnabled` | `EXTRAS_TRAEFIK_SERVERS_TRANSPORT_ENABLED` | Render the Traefik `ServersTransport`; default `true` |
 
 Defaults: `mtlsSecretName=dragonfly-p2p-mtls`, `dragonfly.chart.name=dragonfly`,
 `dragonfly.chart.version=1.10.1`, `extras.chart.name=dragonfly-extras`,
-`extras.chart.version=0.1.0`, `webhook.port=9443`, `leaderElect=false`.
+`extras.chart.version=0.1.0`, `extras.ingress.controller=nginx`,
+`extras.ingress.grpcEnabled=true`, `extras.ingress.restEnabled=true`,
+`webhook.port=9443`, `leaderElect=false`.
 
 ## Roles and HelmOps
 
@@ -179,9 +187,33 @@ The `dragonfly-extras` chart owns the manager gRPC/REST Ingresses and the
 recommendation-only VPAs. The operator only creates the `<cluster>-extras`
 HelmOp:
 
-- `ingress.enabled` is true only for the manager role. gRPC uses port 65003 with
-  `GRPCS`, client mTLS verification from `dragonfly-p2p-mtls`, and no SSL
-  redirect. REST uses port 8080 over HTTPS.
+- `ingress.enabled` is true only for the manager role. The per-Ingress toggles
+  are `ingress.grpc.enabled` and `ingress.rest.enabled`; both default to `true`.
+- `ingress.controller=nginx` (default) keeps the existing behavior: gRPC uses
+  `GRPCS` with client mTLS verification from `dragonfly-p2p-mtls` and no SSL
+  redirect; REST uses `backend-protocol: HTTPS`.
+- `ingress.controller=traefik` renders the REST Ingress with
+  `traefik.ingress.kubernetes.io/service.serversscheme: https` and, when
+  enabled, a `ServersTransport` (`traefik.io/v1alpha1`) named
+  `<release>-manager-rest` in the release namespace. The annotation references
+  `<namespace>-<release>-manager-rest@kubernetescrd` and uses
+  `insecureSkipVerify: true`. No nginx annotations are added in Traefik mode.
+  The gRPC Ingress is suppressed unless `ingress.grpc.enabled=true`; the
+  manager-only canary keeps it disabled.
+- `ingress.tls.enabled` adds a TLS block using `ingress.tls.secretName`. The
+  manager-only canary uses `dragonfly-p2p-mtls` for
+  `manager-api.koldun.negash.ru`.
+- Operator chart settings for the canary:
+
+  ```yaml
+  extras:
+    ingress:
+      controller: traefik
+      className: traefik
+      grpcEnabled: false
+      restEnabled: true
+      tlsSecret: dragonfly-p2p-mtls
+  ```
 - `vpa.enabled` is set from API discovery for `autoscaling.k8s.io/v1`; the
   chart additionally checks `Capabilities.APIVersions.Has`. Target names are
   `<cluster>-keydb`, `<cluster>-manager`, `<cluster>-control-scheduler`,
@@ -308,9 +340,10 @@ enabling the seed role on a production cluster.
 | MR-3 | Scheduler ID allocation, manager REST client, registration | merged |
 | MR-4a | `p2p-static` chart and bootstrap payload | merged |
 | MR-4b | CREATE-only admission webhook and userData injection | merged |
-| MR-5 | Status conditions, chart version guard, release workflow, docs | this change |
+| MR-5 | Status conditions, chart version guard, release workflow, docs | merged |
+| MR-6 | Traefik extras REST Ingress, per-Ingress toggles, manager-only canary | this change |
 
-Live envtest/pilot items remain deferred for the MR-5 follow-up list.
+Live envtest/pilot items remain deferred for the MR-6 follow-up list.
 
 ## Development
 

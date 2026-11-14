@@ -40,6 +40,12 @@ type Options struct {
 	ManagerAPICredentialsSecret string
 	DragonflyChart              helmop.Chart
 	ExtrasChart                 helmop.Chart
+	ExtrasIngressController     string
+	ExtrasIngressClassName      string
+	ExtrasIngressGRPCEnabled    bool
+	ExtrasIngressRESTEnabled    bool
+	ExtrasIngressTLSSecret      string
+	ExtrasTraefikTransport      bool
 	VPAEnabled                  bool
 }
 
@@ -185,10 +191,16 @@ func (c *Controller) reconcile(key string, cluster *provv1.Cluster) (result *pro
 	}
 
 	if err := c.applyHelmOp(cluster, helmop.Extras(hc, helmop.ExtrasOptions{
-		IngressEnabled: roles.Manager && mtlsReady,
-		VPAEnabled:     c.opts.VPAEnabled,
-		Manager:        roles.Manager && mtlsReady,
-		Seed:           seedReady,
+		IngressEnabled:                 roles.Manager && mtlsReady,
+		IngressController:              c.opts.ExtrasIngressController,
+		IngressClassName:               c.opts.ExtrasIngressClassName,
+		GRPCEnabled:                    c.opts.ExtrasIngressGRPCEnabled,
+		RESTEnabled:                    c.opts.ExtrasIngressRESTEnabled,
+		TLSSecret:                      c.opts.ExtrasIngressTLSSecret,
+		TraefikServersTransportEnabled: c.opts.ExtrasTraefikTransport,
+		VPAEnabled:                     c.opts.VPAEnabled,
+		Manager:                        roles.Manager && mtlsReady,
+		Seed:                           seedReady,
 	})); err != nil {
 		errs = append(errs, err)
 	}

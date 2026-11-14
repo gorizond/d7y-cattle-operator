@@ -107,7 +107,13 @@ func run() error {
 			Name:    cfg.ExtrasChartName,
 			Version: cfg.ExtrasChartVersion,
 		},
-		VPAEnabled: vpaEnabled,
+		ExtrasIngressController:  cfg.ExtrasIngressController,
+		ExtrasIngressClassName:   cfg.ExtrasIngressClassName,
+		ExtrasIngressGRPCEnabled: cfg.ExtrasIngressGRPCEnabled,
+		ExtrasIngressRESTEnabled: cfg.ExtrasIngressRESTEnabled,
+		ExtrasIngressTLSSecret:   cfg.ExtrasIngressTLSSecret,
+		ExtrasTraefikTransport:   cfg.ExtrasTraefikTransport,
+		VPAEnabled:               vpaEnabled,
 	})
 
 	if err := start.All(ctx, 1, coreFactory, provisioningFactory, admissionFactory, apiextensionsFactory); err != nil {

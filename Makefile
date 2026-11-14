@@ -1,7 +1,7 @@
 IMAGE ?= ghcr.io/gorizond/d7y-cattle-operator
 TAG ?= dev
 
-.PHONY: build docker-build test docker-test lint helm-lint helm-template
+.PHONY: build docker-build test docker-test lint helm-lint helm-template chart-test
 
 # Docker is the source of truth for builds and tests.
 build: docker-build
@@ -29,3 +29,6 @@ helm-template:
 	helm template d7y-cattle-operator charts/d7y-cattle-operator --set webhook.enabled=true
 	helm template dragonfly-extras charts/dragonfly-extras --set ingress.enabled=true --set vpa.enabled=true --api-versions autoscaling.k8s.io/v1
 	helm template p2p-static charts/p2p-static
+
+chart-test:
+	bash scripts/test-extras-ingress.sh

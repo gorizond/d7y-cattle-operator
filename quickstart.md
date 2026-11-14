@@ -116,6 +116,44 @@ Checks:
     -o jsonpath='{.webhooks[0].clientConfig.caBundle}'
   ```
 
+### Manager-only Traefik canary
+
+For a manager-only Cluster with Traefik as the ingress controller, keep gRPC
+internal and expose only REST HTTPS:
+
+```yaml
+extras:
+  ingress:
+    controller: traefik
+    className: traefik
+    grpcEnabled: false
+    restEnabled: true
+    tlsSecret: dragonfly-p2p-mtls
+```
+
+The equivalent direct chart check is:
+
+```bash
+helm template e charts/dragonfly-extras \
+  --set ingress.enabled=true \
+  --set ingress.controller=traefik \
+  --set ingress.className=traefik \
+  --set ingress.grpc.enabled=false \
+  --set ingress.rest.enabled=true \
+  --set ingress.rest.host=manager-api.koldun.negash.ru \
+  --set ingress.rest.service=poligon-manager \
+  --set ingress.tls.enabled=true \
+  --set ingress.tls.secretName=dragonfly-p2p-mtls \
+  --api-versions traefik.io/v1alpha1
+```
+
+Expected: one `Ingress` named `<release>-manager-api`, no gRPC Ingress,
+`ingressClassName: traefik`, a TLS block with `dragonfly-p2p-mtls`, the Traefik
+`service.serversscheme: https` and `service.serverstransport` annotations, and a
+`ServersTransport` named `<release>-manager-rest` in the release namespace.
+`--api-versions` is required for Helm to render the CRD object in a static
+template; on a live cluster the CRD must already exist.
+
 ## 4. Seed role and a new node
 
 ```bash
