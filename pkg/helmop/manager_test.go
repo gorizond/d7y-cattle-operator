@@ -8,7 +8,7 @@ func testCluster() Cluster {
 		Namespace:          "fleet-default",
 		MTLSSecretName:     "dragonfly-p2p-mtls",
 		Chart:              Chart{Repo: "https://charts.example.com", Name: "dragonfly", Version: "1.10.1"},
-		ExtrasChart:        Chart{Repo: "https://charts.example.com", Name: "dragonfly-extras", Version: "0.1.2"},
+		ExtrasChart:        Chart{Repo: "https://charts.example.com", Name: "dragonfly-extras", Version: "0.1.3"},
 		ManagerGRPCDomain:  "grpc.example.com",
 		ManagerAPIHost:     "api.example.com",
 		SchedulerClusterID: 42,
@@ -41,28 +41,6 @@ func nested(t *testing.T, value any, keys ...string) map[string]any {
 		t.Fatalf("value at %v is not a map", keys)
 	}
 	return result
-}
-
-func managerVolume(t *testing.T, values any, name string) map[string]any {
-	t.Helper()
-	for _, volume := range valueAt(t, values, "manager", "extraVolumes").([]any) {
-		volumeMap, ok := volume.(map[string]any)
-		if ok && volumeMap["name"] == name {
-			return volumeMap
-		}
-	}
-	return nil
-}
-
-func managerVolumeMount(t *testing.T, values any, name string) map[string]any {
-	t.Helper()
-	for _, mount := range valueAt(t, values, "manager", "extraVolumeMounts").([]any) {
-		mountMap, ok := mount.(map[string]any)
-		if ok && mountMap["name"] == name {
-			return mountMap
-		}
-	}
-	return nil
 }
 
 func TestManagerHelmOp(t *testing.T) {
@@ -158,50 +136,6 @@ func TestManagerHelmOp(t *testing.T) {
 		foundMTLS = true
 	}
 	if !foundMTLS {
-		t.Error("manager values have no mTLS volume")
-	}
-	if managerVolume(t, values, "public-tls") != nil {
-		t.Error("manager values have a public-tls volume without ManagerPublicTLSSecret")
-	}
-	if managerVolumeMount(t, values, "public-tls") != nil {
-		t.Error("manager values have a public-tls mount without ManagerPublicTLSSecret")
-	}
-}
-
-func TestManagerPublicTLSSecret(t *testing.T) {
-	cluster := testCluster()
-	cluster.ManagerPublicTLSSecret = "poligon-manager-public-tls"
-	values := Manager(cluster).Spec.Helm.Values.Data
-
-	grpcTLS := nested(t, values, "manager", "config", "server", "grpc", "tls")
-	if grpcTLS["caCert"] != CertDir+"/ca.crt" {
-		t.Errorf("gRPC caCert = %v, want the internal client CA", grpcTLS["caCert"])
-	}
-	if grpcTLS["cert"] != PublicTLSDir+"/tls.crt" || grpcTLS["key"] != PublicTLSDir+"/tls.key" {
-		t.Errorf("gRPC TLS = %v, want public certificate paths", grpcTLS)
-	}
-
-	restTLS := nested(t, values, "manager", "config", "server", "rest", "tls")
-	if restTLS["cert"] != CertDir+"/tls.crt" || restTLS["key"] != CertDir+"/tls.key" {
-		t.Errorf("REST TLS = %v, want internal certificate paths", restTLS)
-	}
-
-	volume := managerVolume(t, values, "public-tls")
-	if volume == nil {
-		t.Fatal("manager values have no public-tls volume")
-	}
-	secret := nested(t, volume, "secret")
-	if secret["secretName"] != "poligon-manager-public-tls" {
-		t.Errorf("public-tls volume secret = %v", secret)
-	}
-	mount := managerVolumeMount(t, values, "public-tls")
-	if mount == nil {
-		t.Fatal("manager values have no public-tls mount")
-	}
-	if mount["mountPath"] != PublicTLSDir || mount["readOnly"] != true {
-		t.Errorf("public-tls mount = %v, want %s readOnly", mount, PublicTLSDir)
-	}
-	if managerVolume(t, values, "mtls") == nil {
 		t.Error("manager values have no mTLS volume")
 	}
 }

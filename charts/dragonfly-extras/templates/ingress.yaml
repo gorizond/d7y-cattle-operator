@@ -8,7 +8,7 @@ metadata:
     {{- include "dragonfly-extras.labels" . | nindent 4 }}
   {{- if eq $controller "nginx" }}
   annotations:
-    nginx.ingress.kubernetes.io/backend-protocol: GRPCS
+    nginx.ingress.kubernetes.io/backend-protocol: GRPC
     nginx.ingress.kubernetes.io/auth-tls-verify-client: "on"
     nginx.ingress.kubernetes.io/auth-tls-secret: {{ .Values.ingress.mtlsSecret | quote }}
     nginx.ingress.kubernetes.io/auth-tls-verify-depth: "1"
@@ -71,8 +71,8 @@ spec:
 {{- else if eq $controller "traefik" }}
 {{- if .Capabilities.APIVersions.Has "traefik.io/v1alpha1" }}
 # Traefik v3 ignores the service.serversscheme annotation for REST backends,
-# so the HTTPS backend is declared with an IngressRoute. Traefik gRPC uses an
-# IngressRouteTCP with TLS passthrough (see ingressroute-tcp.yaml).
+# so the HTTPS backend is declared with an IngressRoute. Traefik gRPC likewise
+# uses an IngressRoute with an h2c backend (see ingressroute-grpc.yaml).
 apiVersion: traefik.io/v1alpha1
 kind: IngressRoute
 metadata:

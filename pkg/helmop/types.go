@@ -22,10 +22,6 @@ const (
 	// CertDir is where the mTLS Secret is mounted in Dragonfly pods.
 	CertDir = "/etc/dragonfly/certs"
 
-	// PublicTLSDir is where the optional public TLS Secret is mounted in the
-	// manager pod.
-	PublicTLSDir = "/etc/dragonfly/public-tls"
-
 	// VerifiedDragonflyChartVersion is the Dragonfly chart version this
 	// operator is tested against. Other versions are allowed but warn.
 	VerifiedDragonflyChartVersion = "1.10.1"
@@ -53,18 +49,17 @@ type Chart struct {
 
 // Cluster carries the per-cluster inputs shared by the HelmOp builders.
 type Cluster struct {
-	Name                   string
-	Namespace              string
-	MTLSSecretName         string
-	ManagerPublicTLSSecret string
-	Chart                  Chart
-	ExtrasChart            Chart
-	ManagerGRPCDomain      string
-	ManagerAPIHost         string
-	SchedulerClusterID     int
-	SchedulerReplicas      string
-	SeedClientReplicas     string
-	Labels                 map[string]string
+	Name               string
+	Namespace          string
+	MTLSSecretName     string
+	Chart              Chart
+	ExtrasChart        Chart
+	ManagerGRPCDomain  string
+	ManagerAPIHost     string
+	SchedulerClusterID int
+	SchedulerReplicas  string
+	SeedClientReplicas string
+	Labels             map[string]string
 }
 
 // KeyDBName returns the KeyDB HelmOp and release name.

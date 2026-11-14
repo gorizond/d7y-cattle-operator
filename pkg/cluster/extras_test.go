@@ -48,6 +48,9 @@ func TestReconcileManagerExtrasIngress(t *testing.T) {
 	if got := valueAtPath(t, values, "ingress", "mtlsSecret"); got != "dragonfly-p2p-mtls" {
 		t.Errorf("ingress.mtlsSecret = %v", got)
 	}
+	if got := valueAtPath(t, values, "ingress", "mtlsCASecret"); got != "dragonfly-p2p-mtls-ca" {
+		t.Errorf("ingress.mtlsCASecret = %v", got)
+	}
 	if got := valueAtPath(t, values, "ingress", "controller"); got != "nginx" {
 		t.Errorf("ingress.controller = %v", got)
 	}
@@ -160,6 +163,7 @@ func TestReconcileManagerOnlyTraefikExtras(t *testing.T) {
 		"rest.enabled":                     true,
 		"tls.enabled":                      true,
 		"tls.secretName":                   "dragonfly-p2p-mtls",
+		"mtlsCASecret":                     "dragonfly-p2p-mtls-ca",
 		"traefik.serversTransport.enabled": true,
 		"traefik.serversTransport.insecureSkipVerify": true,
 	} {

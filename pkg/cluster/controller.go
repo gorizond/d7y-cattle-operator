@@ -38,7 +38,6 @@ type Options struct {
 	ManagerAPIHost              string
 	ManagerAPIURL               string
 	ManagerAPICredentialsSecret string
-	ManagerPublicTLSSecret      string
 	DragonflyChart              helmop.Chart
 	ExtrasChart                 helmop.Chart
 	ExtrasIngressController     string
@@ -258,23 +257,32 @@ func (c *Controller) ensureMTLSSecret(cluster *provv1.Cluster) error {
 		c.event(cluster, corev1.EventTypeWarning, "SecretReplicationFailed", err.Error())
 		return err
 	}
+
+	caSecret, err := apply.CAOnlySecret(source, apply.CAOnlySecretName(c.opts.MTLSSecretName))
+	if err != nil {
+		c.event(cluster, corev1.EventTypeWarning, "SecretReplicationFailed", err.Error())
+		return err
+	}
+	if _, err := apply.ReplicateSecret(caSecret, cluster.Namespace, c.secrets); err != nil {
+		c.event(cluster, corev1.EventTypeWarning, "SecretReplicationFailed", err.Error())
+		return err
+	}
 	return nil
 }
 
 func (c *Controller) helmopCluster(cluster *provv1.Cluster) helmop.Cluster {
 	return helmop.Cluster{
-		Name:                   cluster.Name,
-		Namespace:              cluster.Namespace,
-		MTLSSecretName:         c.opts.MTLSSecretName,
-		ManagerPublicTLSSecret: c.opts.ManagerPublicTLSSecret,
-		Chart:                  c.opts.DragonflyChart,
-		ExtrasChart:            c.opts.ExtrasChart,
-		ManagerGRPCDomain:      c.opts.ManagerGRPCDomain,
-		ManagerAPIHost:         c.opts.ManagerAPIHost,
-		SchedulerClusterID:     schedulerClusterID(cluster),
-		SchedulerReplicas:      helmop.ReplicasOrOne(AnnotationSchedulerReplicas, cluster.Annotations[AnnotationSchedulerReplicas]),
-		SeedClientReplicas:     helmop.ReplicasOrOne(AnnotationSeedClientReplicas, cluster.Annotations[AnnotationSeedClientReplicas]),
-		Labels:                 apply.Labels(cluster.Namespace, cluster.Name),
+		Name:               cluster.Name,
+		Namespace:          cluster.Namespace,
+		MTLSSecretName:     c.opts.MTLSSecretName,
+		Chart:              c.opts.DragonflyChart,
+		ExtrasChart:        c.opts.ExtrasChart,
+		ManagerGRPCDomain:  c.opts.ManagerGRPCDomain,
+		ManagerAPIHost:     c.opts.ManagerAPIHost,
+		SchedulerClusterID: schedulerClusterID(cluster),
+		SchedulerReplicas:  helmop.ReplicasOrOne(AnnotationSchedulerReplicas, cluster.Annotations[AnnotationSchedulerReplicas]),
+		SeedClientReplicas: helmop.ReplicasOrOne(AnnotationSeedClientReplicas, cluster.Annotations[AnnotationSeedClientReplicas]),
+		Labels:             apply.Labels(cluster.Namespace, cluster.Name),
 	}
 }
 

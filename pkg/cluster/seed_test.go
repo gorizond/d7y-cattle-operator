@@ -94,7 +94,7 @@ func newTestController(t *testing.T) (*Controller, *fakeHelmOpStore, *fakeEventS
 	secrets.put(&corev1.Secret{
 		ObjectMeta: metav1.ObjectMeta{Name: "dragonfly-p2p-mtls", Namespace: "dragonfly-system"},
 		Type:       corev1.SecretTypeTLS,
-		Data:       map[string][]byte{"tls.crt": []byte("cert")},
+		Data:       map[string][]byte{"ca.crt": []byte("ca"), "tls.crt": []byte("cert")},
 	})
 	store := newFakeHelmOpStore()
 	events := &fakeEventStore{}
@@ -112,7 +112,7 @@ func newTestController(t *testing.T) (*Controller, *fakeHelmOpStore, *fakeEventS
 			ManagerGRPCDomain:        "grpc.example.com",
 			ManagerAPIHost:           "api.example.com",
 			DragonflyChart:           helmop.Chart{Repo: "https://charts.example.com", Name: "dragonfly", Version: "1.10.1"},
-			ExtrasChart:              helmop.Chart{Repo: "https://charts.example.com", Name: "dragonfly-extras", Version: "0.1.2"},
+			ExtrasChart:              helmop.Chart{Repo: "https://charts.example.com", Name: "dragonfly-extras", Version: "0.1.3"},
 			ExtrasIngressController:  "nginx",
 			ExtrasIngressGRPCEnabled: true,
 			ExtrasIngressRESTEnabled: true,
@@ -269,4 +269,30 @@ func (f *fakeSecretStore) Update(secret *corev1.Secret) (*corev1.Secret, error) 
 	}
 	f.secrets[key] = secret.DeepCopy()
 	return secret.DeepCopy(), nil
+}
+
+func TestEnsureMTLSSecretReplicatesCAOnlySecret(t *testing.T) {
+	controller, _, _ := newTestController(t)
+	cluster := testSeedCluster("42")
+
+	if _, err := controller.reconcile("", cluster); err != nil {
+		t.Fatalf("reconcile() error = %v", err)
+	}
+
+	secret, err := controller.secrets.Get("fleet-default", "dragonfly-p2p-mtls-ca", metav1.GetOptions{})
+	if err != nil {
+		t.Fatalf("get CA-only secret: %v", err)
+	}
+	if secret.Type != corev1.SecretTypeOpaque {
+		t.Errorf("CA-only secret type = %q, want Opaque", secret.Type)
+	}
+	if string(secret.Data["tls.ca"]) != "ca" {
+		t.Errorf("tls.ca = %q, want ca", secret.Data["tls.ca"])
+	}
+	if _, ok := secret.Data["tls.key"]; ok {
+		t.Error("CA-only secret contains tls.key")
+	}
+	if secret.Labels["p2p.dragonfly.io/cluster-name"] != "c1" {
+		t.Errorf("CA-only secret labels = %v, want cluster labels", secret.Labels)
+	}
 }

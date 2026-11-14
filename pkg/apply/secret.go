@@ -66,3 +66,31 @@ func copyData(data map[string][]byte) map[string][]byte {
 	}
 	return copied
 }
+
+// CACertKey is the key Traefik TLSOption clientAuth reads from its CA Secret.
+const CACertKey = "tls.ca"
+
+// CAOnlySecretName returns the name of the CA-only Secret derived from an mTLS
+// Secret.
+func CAOnlySecretName(name string) string { return name + "-ca" }
+
+// CAOnlySecret returns an Opaque Secret holding the source ca.crt under the
+// Traefik TLSOption key. The leaf certificate and private key are not copied.
+func CAOnlySecret(source *corev1.Secret, name string) (*corev1.Secret, error) {
+	if source == nil {
+		return nil, errors.New("apply: source secret is nil")
+	}
+	ca := source.Data["ca.crt"]
+	if len(ca) == 0 {
+		return nil, errors.New("apply: source secret has no ca.crt")
+	}
+	return &corev1.Secret{
+		ObjectMeta: metav1.ObjectMeta{
+			Name:      name,
+			Namespace: source.Namespace,
+			Labels:    source.Labels,
+		},
+		Type: corev1.SecretTypeOpaque,
+		Data: map[string][]byte{CACertKey: append([]byte(nil), ca...)},
+	}, nil
+}

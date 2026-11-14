@@ -63,7 +63,8 @@ func Extras(c Cluster, opts ExtrasOptions) *fleetv1alpha1.HelmOp {
 					"insecureSkipVerify": true,
 				},
 			},
-			"mtlsSecret": c.MTLSSecretName,
+			"mtlsSecret":   c.MTLSSecretName,
+			"mtlsCASecret": c.MTLSSecretName + "-ca",
 		},
 		"vpa": map[string]any{
 			"enabled":     opts.VPAEnabled,
@@ -83,7 +84,16 @@ func Extras(c Cluster, opts ExtrasOptions) *fleetv1alpha1.HelmOp {
 	if opts.IngressEnabled {
 		dependsOn = []string{ManagerName(c.Name)}
 	}
-	return newHelmOp(ExtrasName(c.Name), c, c.ExtrasChart, "extras", values, dependsOn)
+	op := newHelmOp(ExtrasName(c.Name), c, c.ExtrasChart, "extras", values, dependsOn)
+	if opts.IngressEnabled {
+		// The gRPC TLSOption reads the CA from this Secret in the target
+		// namespace; the operator replicates it next to the mTLS Secret.
+		op.Spec.DownstreamResources = []fleetv1alpha1.DownstreamResource{{
+			Kind: "Secret",
+			Name: c.MTLSSecretName + "-ca",
+		}}
+	}
+	return op
 }
 
 func vpaTarget(enabled bool, kind, name string) map[string]any {
