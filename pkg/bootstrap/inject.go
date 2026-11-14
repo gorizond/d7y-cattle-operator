@@ -18,8 +18,21 @@ func InjectionLine(staticURL, payload string) string {
 }
 
 // InjectUserData appends line to runcmd in plain or base64-encoded cloud-init
-// userData. It returns changed=false when the marker is already present.
+// userData. Non-cloud-config content is treated as a plain shell script. Empty
+// content keeps the historical cloud-config output. It returns changed=false
+// when the marker is already present.
 func InjectUserData(raw, line string) (string, bool, error) {
+	return inject(raw, line, true)
+}
+
+// InjectScript appends line to a plain shell script. Cloud-config content still
+// uses runcmd, but empty content becomes a shell script instead of cloud-init.
+// It returns changed=false when the marker is already present.
+func InjectScript(raw, line string) (string, bool, error) {
+	return inject(raw, line, false)
+}
+
+func inject(raw, line string, emptyCloudConfig bool) (string, bool, error) {
 	if strings.Contains(raw, Marker) {
 		return raw, false, nil
 	}
@@ -29,7 +42,20 @@ func InjectUserData(raw, line string) (string, bool, error) {
 		return raw, false, nil
 	}
 
-	patched, err := appendRunCmd(decoded, line)
+	var patched string
+	var err error
+	switch {
+	case strings.TrimSpace(decoded) == "":
+		if emptyCloudConfig {
+			patched, err = appendRunCmd(decoded, line)
+		} else {
+			patched = appendShellLine(decoded, line)
+		}
+	case isCloudConfig(decoded):
+		patched, err = appendRunCmd(decoded, line)
+	default:
+		patched = appendShellLine(decoded, line)
+	}
 	if err != nil {
 		return "", false, err
 	}
@@ -37,6 +63,28 @@ func InjectUserData(raw, line string) (string, bool, error) {
 		return base64.StdEncoding.EncodeToString([]byte(patched)), true, nil
 	}
 	return patched, true, nil
+}
+
+func isCloudConfig(raw string) bool {
+	trimmed := strings.TrimSpace(raw)
+	if strings.HasPrefix(trimmed, "#cloud-config") {
+		return true
+	}
+	var document yaml.Node
+	if err := yaml.Unmarshal([]byte(raw), &document); err != nil {
+		return false
+	}
+	return len(document.Content) > 0 && document.Content[0].Kind == yaml.MappingNode
+}
+
+func appendShellLine(raw, line string) string {
+	if raw == "" {
+		return line + "\n"
+	}
+	if strings.HasSuffix(raw, "\n") {
+		return raw + line + "\n"
+	}
+	return raw + "\n" + line + "\n"
 }
 
 func decodeUserData(raw string) (string, bool) {
