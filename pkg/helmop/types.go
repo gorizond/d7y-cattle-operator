@@ -22,9 +22,13 @@ const (
 	// CertDir is where the mTLS Secret is mounted in Dragonfly pods.
 	CertDir = "/etc/dragonfly/certs"
 
-	KeyDBChartRepo    = "https://gorizond.github.io/d7y-cattle-operator"
+	// VerifiedDragonflyChartVersion is the Dragonfly chart version this
+	// operator is tested against. Other versions are allowed but warn.
+	VerifiedDragonflyChartVersion = "1.10.1"
+
+	KeyDBChartRepo    = "https://enapter.github.io/charts/"
 	KeyDBChartName    = "keydb"
-	KeyDBChartVersion = "0.1.0"
+	KeyDBChartVersion = "0.48.0"
 
 	NydusChartRepo    = "https://dragonflyoss.github.io/helm-charts"
 	NydusChartName    = "nydus-snapshotter"

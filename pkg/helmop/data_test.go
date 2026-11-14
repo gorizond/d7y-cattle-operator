@@ -71,6 +71,11 @@ func TestDataHelmOp(t *testing.T) {
 	if clientStorage["tcpPort"] != 4005 || clientStorage["quicPort"] != 4006 {
 		t.Errorf("client storage ports = %v", clientStorage)
 	}
+	for _, component := range []string{"proxy", "metrics", "health", "stats"} {
+		if got := valueAt(t, client, "config", component, "ip"); got != "127.0.0.1" {
+			t.Errorf("client %s ip = %v", component, got)
+		}
+	}
 
 	uploadServer := nested(t, seedClient, "config", "upload", "server")
 	if uploadServer["caCert"] != CertDir+"/ca.crt" ||
