@@ -4,6 +4,7 @@ on:
   push:
     tags:
       - "v*"
+  workflow_dispatch:
 
 permissions:
   contents: write
@@ -11,6 +12,9 @@ permissions:
 
 jobs:
   image:
+    # Image builds only for release tags. Manual dispatch is for chart
+    # publishing when a release already exists.
+    if: startsWith(github.ref, 'refs/tags/')
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v4
@@ -31,6 +35,12 @@ jobs:
           tags: ghcr.io/gorizond/d7y-cattle-operator:${{ github.ref_name }}
 
   chart:
+    # The first tag has no previous tag to diff against, so chart-releaser-action
+    # v1.7.0 reported "Nothing to do. No chart changes detected" and published
+    # nothing. Publish explicitly instead: package every chart, create/update
+    # chart releases, and push index.yaml to gh-pages. This job is also runnable
+    # by workflow_dispatch without rebuilding the existing image.
+    if: startsWith(github.ref, 'refs/tags/') || github.event_name == 'workflow_dispatch'
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v4
@@ -42,10 +52,27 @@ jobs:
       - name: Lint charts
         run: helm lint charts/*
 
-      - uses: helm/chart-releaser-action@v1.7.0
-        with:
-          charts_dir: charts
-          pages_branch: gh-pages
-          skip_existing: true
+      - name: Install chart-releaser
+        run: |
+          curl -fsSL -o cr.tar.gz https://github.com/helm/chart-releaser/releases/download/v1.7.0/chart-releaser_1.7.0_linux_amd64.tar.gz
+          tar -xzf cr.tar.gz cr
+          sudo install -m 0755 cr /usr/local/bin/cr
+
+      - name: Package charts
+        run: cr package charts/*
+
+      - name: Upload chart releases
         env:
           CR_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        run: |
+          cr upload -o gorizond -r d7y-cattle-operator \
+            -p .cr-release-packages --token "$CR_TOKEN" --skip-existing
+
+      - name: Update chart index
+        env:
+          CR_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        run: |
+          mkdir -p .cr-index
+          cr index -o gorizond -r d7y-cattle-operator \
+            -p .cr-release-packages -i .cr-index/index.yaml \
+            --push --pages-branch gh-pages --token "$CR_TOKEN"
