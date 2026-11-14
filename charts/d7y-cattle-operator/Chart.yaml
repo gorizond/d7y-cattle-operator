@@ -2,8 +2,8 @@ apiVersion: v2
 name: d7y-cattle-operator
 description: Dragonfly P2P operator for Rancher-managed RKE2 clusters
 type: application
-version: 0.1.1
-appVersion: "0.1.1"
+version: 0.1.2
+appVersion: "0.1.2"
 kubeVersion: ">=1.28.0-0"
 home: https://github.com/gorizond/d7y-cattle-operator
 sources:

@@ -45,10 +45,10 @@ extras:
   chart:
     repo: https://gorizond.github.io/d7y-cattle-operator
     name: dragonfly-extras
-    version: 0.1.0
+    version: 0.1.1
   ingress:
-    # nginx keeps the existing mTLS gRPC/REST annotations; traefik renders the
-    # REST Ingress with a CRD ServersTransport.
+    # nginx keeps the existing mTLS gRPC/REST annotations; traefik renders a
+    # REST IngressRoute with a CRD ServersTransport.
     controller: nginx
     className: ""
     grpcEnabled: true

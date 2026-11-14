@@ -19,6 +19,8 @@ ingress:
     enabled: false
     secretName: ""
   traefik:
+    # Entry points used by the REST IngressRoute.
+    entryPoints: ["websecure"]
     serversTransport:
       enabled: true
       insecureSkipVerify: true
