@@ -3,9 +3,9 @@
 Kubernetes operator that runs [Dragonfly](https://d7y.io) P2P on Rancher-managed
 RKE2 clusters.
 
-**Status**: MR-8 (edge TLS termination for gRPC with h2c backends; MR-7
-operator-managed gRPC ingress for nginx and Traefik). The Cluster controller,
-role resolution, KeyDB, manager, seed role, manager registration,
+**Status**: MR-9 (CA-only Secret rendered by the `dragonfly-extras` chart; MR-8
+edge TLS termination for gRPC with h2c backends). The Cluster controller, role
+resolution, KeyDB, manager, seed role, manager registration,
 `dragonfly-extras`, the `p2p-static` chart, and the admission webhook are
 implemented. Live envtest/pilot verification remains deferred.
 
@@ -14,9 +14,10 @@ implemented. Live envtest/pilot verification remains deferred.
 - Parses and validates the operator configuration from flags/environment variables.
 - Ensures a single mTLS CA and leaf certificate Secret (`dragonfly-p2p-mtls` by
   default) in the operator namespace. The Secret is created once and never
-  overwritten, and is replicated into each Cluster namespace together with a
-  CA-only `dragonfly-p2p-mtls-ca` Secret (key `tls.ca`) for edge client
-  verification.
+  overwritten and is replicated into each Cluster namespace. The internal CA
+  PEM is passed to the extras HelmOp values; the chart renders the CA-only
+  `dragonfly-p2p-mtls-ca` Secret (key `tls.ca`) in the release namespace for
+  edge client verification.
 - Reconciles `provisioning.cattle.io/v1` Clusters selected by the
   `p2p-dragonfly-io: "true"` label.
 - Deploys KeyDB and the Dragonfly manager through Fleet HelmOps, without
@@ -96,7 +97,7 @@ not used until the p2p-static and registration MRs.
 
 Defaults: `mtlsSecretName=dragonfly-p2p-mtls`, `dragonfly.chart.name=dragonfly`,
 `dragonfly.chart.version=1.10.1`, `extras.chart.name=dragonfly-extras`,
-`extras.chart.version=0.1.3`, `extras.ingress.controller=nginx`,
+`extras.chart.version=0.1.4`, `extras.ingress.controller=nginx`,
 `extras.ingress.grpcEnabled=true`, `extras.ingress.restEnabled=true`,
 `webhook.port=9443`, `leaderElect=false`.
 
@@ -178,8 +179,10 @@ DaemonSets may run on the same node, seedClient ports are shifted to
 All releases target `dragonfly-system` and depend on each other through
 `spec.dependsOn`: control and nydus depend on KeyDB, data depends on control and
 KeyDB, manager depends on KeyDB, and extras depends on manager when Ingress is
-enabled. The mTLS Secret and its CA-only derivative are copied into the Cluster
-namespace and delivered downstream through `spec.downstreamResources`.
+enabled. The mTLS Secret is copied into the Cluster namespace and delivered
+downstream through `spec.downstreamResources`; the CA-only Secret is rendered
+by the extras chart from `ingress.mtlsCA` instead of Fleet
+`downstreamResources`.
 
 ### Extras chart
 
@@ -206,8 +209,10 @@ HelmOp:
   `ingress.tls.secretName` (the public Let's Encrypt Secret created directly on
   the cluster) and the `<release>-manager-grpc` `TLSOption`, whose
   `RequireAndVerifyClientCert` client auth reads the internal CA from the
-  CA-only `dragonfly-p2p-mtls-ca` Secret (`tls.ca`). The nginx gRPC Ingress is
-  not rendered in Traefik mode; the REST IngressRoute is unchanged.
+  CA-only `dragonfly-p2p-mtls-ca` Secret (`tls.ca`). The chart renders that
+  Secret from `ingress.mtlsCA` (the internal CA PEM passed by the operator);
+  it is not a Fleet downstream resource. The nginx gRPC Ingress is not rendered
+  in Traefik mode; the REST IngressRoute is unchanged.
 - `ingress.tls.enabled` adds a TLS block using `ingress.tls.secretName`. The
   manager-only canary uses `dragonfly-p2p-mtls` for
   `manager-api.koldun.negash.ru`.
@@ -232,8 +237,9 @@ HelmOp:
   `<cluster>-keydb`, `<cluster>-manager`, `<cluster>-control-scheduler`,
   `<cluster>-data-seed-client`, and `<cluster>-nydus-snapshotter`; each target
   is enabled only for its active role.
-- The chart creates no PVC and no Secrets; the operator creates and replicates
-  the mTLS and CA-only Secrets. The operator RBAC remains limited to Clusters,
+- The chart creates no PVC. It renders the CA-only Secret (`tls.ca`) when
+  `ingress.mtlsCA` and `ingress.mtlsCASecret` are set; the operator creates and
+  replicates the mTLS Secret. The operator RBAC remains limited to Clusters,
   HelmOps, Secrets, and Events.
 
 ## Cluster annotations
@@ -390,9 +396,10 @@ enabling the seed role on a production cluster.
 | MR-5 | Status conditions, chart version guard, release workflow, docs | merged |
 | MR-6 | Traefik extras REST Ingress, per-Ingress toggles, manager-only canary | merged |
 | MR-7 | Operator-managed gRPC ingress (nginx and Traefik) | merged |
-| MR-8 | Edge TLS termination, h2c backend, and CA-only Secret for Traefik clientAuth | this change |
+| MR-8 | Edge TLS termination, h2c backend, and CA-only Secret for Traefik clientAuth | merged |
+| MR-9 | Render the CA-only Secret in the extras chart instead of Fleet downstreamResources | this change |
 
-Live envtest/pilot items remain deferred for the MR-8 follow-up list.
+Live envtest/pilot items remain deferred for the MR-9 follow-up list.
 
 ## Development
 
