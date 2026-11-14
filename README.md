@@ -247,6 +247,7 @@ The operator only acts on Clusters labeled `p2p-dragonfly-io: "true"`.
 | `p2p.dragonfly.io/scheduler-cluster-id` | integer | Scheduler cluster ID; required by the seed role until MR-3 auto-allocates it |
 | `p2p.dragonfly.io/scheduler-replicas` | integer | Scheduler replicas (default `1`) |
 | `p2p.dragonfly.io/seedclient-replicas` | integer | Seed client replicas (default `1`) |
+| `p2p.dragonfly.io/node-config-key` | field name | Machine-config `spec` field patched by the webhook (default `userData`, e.g. `postBootScript`) |
 
 ## Manager API client and scheduler ID allocator
 
@@ -306,9 +307,41 @@ A new machine config is patched only when its target Cluster (resolved by the
 `p2p.dragonfly.io/cluster-namespace` annotations) has the
 `p2p-dragonfly-io: "true"` label and `p2p.dragonfly.io/seed: "true"` annotation,
 or the config itself carries them. The payload is the base64url env-file from
-`contracts/bootstrap-payload.md`; userData is patched in plain YAML or
-base64-encoded form with the marker
+`contracts/bootstrap-payload.md`; the node-config field is patched in plain YAML,
+plain shell, or base64-encoded cloud-config form with the marker
 `# d7y-cattle-operator:p2p-install`. Reapplying does not add a second call.
+
+The patched spec field defaults to `userData`. Set the target Cluster annotation
+`p2p.dragonfly.io/node-config-key` to choose a different single field name
+(`postBootScript`, `userdata`, ...). The value must match
+`^[A-Za-z][A-Za-z0-9]*$` and is interpreted as a field name under `spec`, not a
+JSON path. Invalid values emit a `NodeConfigKeyInvalid` warning event and the
+webhook does not patch. Cloud-config content keeps the existing `runcmd`
+insertion; plain shell content, such as CloudblastConfig `postBootScript`, is
+preserved and the bootstrap line is appended as a new shell line.
+
+```yaml
+apiVersion: provisioning.cattle.io/v1
+kind: Cluster
+metadata:
+  name: c1
+  namespace: fleet-default
+  labels:
+    p2p-dragonfly-io: "true"
+  annotations:
+    p2p.dragonfly.io/seed: "true"
+    p2p.dragonfly.io/node-config-key: postBootScript
+---
+apiVersion: rke-machine-config.cattle.io/v1
+kind: CloudblastConfig
+metadata:
+  name: c1-pool1
+  namespace: fleet-default
+spec:
+  postBootScript: |
+    #!/bin/bash
+    echo "before bootstrap"
+```
 
 Serving TLS comes from Wrangler needacert: the webhook Service carries
 `need-a-cert.cattle.io/secret-name`; needacert creates/rotates the TLS Secret

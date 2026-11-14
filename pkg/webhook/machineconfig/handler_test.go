@@ -165,6 +165,60 @@ func TestNonConfigKindNoPatch(t *testing.T) {
 	}
 }
 
+func TestCustomNodeConfigKeyPostBootScript(t *testing.T) {
+	handler, clusters, _ := newTestHandler()
+	clusters.clusters["fleet-default/c1"].Annotations[AnnotationNodeConfigKey] = "postBootScript"
+	raw := "#!/bin/bash\necho hello\n"
+	req := testRequestWithNodeConfig(admissionv1.Create, "c1-pool1", "CloudblastConfig", "postBootScript", raw, nil, nil)
+	resp := &wranglerwebhook.Response{AdmissionResponse: admissionv1.AdmissionResponse{Allowed: true}}
+
+	if err := handler.Admit(resp, req); err != nil {
+		t.Fatalf("Admit() error = %v", err)
+	}
+	patched := patchedNodeConfig(t, resp, "postBootScript")
+	if !strings.HasPrefix(patched, raw) {
+		t.Errorf("existing postBootScript was modified: %q", patched)
+	}
+	if !strings.Contains(patched, "d7y-cattle-operator:p2p-install") {
+		t.Errorf("patched postBootScript = %q", patched)
+	}
+	if strings.Contains(patched, "runcmd:") {
+		t.Errorf("postBootScript was converted to cloud-config: %q", patched)
+	}
+}
+
+func TestInvalidNodeConfigKeyNoPatch(t *testing.T) {
+	handler, clusters, events := newTestHandler()
+	clusters.clusters["fleet-default/c1"].Annotations[AnnotationNodeConfigKey] = "bad-key"
+	req := testRequest(admissionv1.Create, "c1-pool1", "Amazonec2Config", testUserData, nil, nil)
+	resp := &wranglerwebhook.Response{AdmissionResponse: admissionv1.AdmissionResponse{Allowed: true}}
+
+	if err := handler.Admit(resp, req); err != nil {
+		t.Fatalf("Admit() error = %v", err)
+	}
+	if len(resp.Patch) != 0 {
+		t.Errorf("invalid node-config key returned patch %s", resp.Patch)
+	}
+	if len(events.events) != 1 || events.events[0].Reason != "NodeConfigKeyInvalid" {
+		t.Errorf("events = %+v", events.events)
+	}
+}
+
+func TestAbsentClusterDefaultsToUserData(t *testing.T) {
+	handler, _, _ := newTestHandler()
+	req := testRequest(admissionv1.Create, "other-pool1", "Amazonec2Config", testUserData, nil,
+		map[string]string{AnnotationSeed: "true", AnnotationSchedulerCluster: "2"})
+	resp := &wranglerwebhook.Response{AdmissionResponse: admissionv1.AdmissionResponse{Allowed: true}}
+
+	if err := handler.Admit(resp, req); err != nil {
+		t.Fatalf("Admit() error = %v", err)
+	}
+	userData := patchedUserData(t, resp)
+	if !strings.Contains(userData, "d7y-cattle-operator:p2p-install") {
+		t.Errorf("default userData was not patched: %q", userData)
+	}
+}
+
 func newTestHandler() (*Handler, *fakeClusters, *fakeEvents) {
 	clusters := &fakeClusters{clusters: map[string]*provv1.Cluster{
 		"fleet-default/c1": {
@@ -200,6 +254,10 @@ func newTestHandler() (*Handler, *fakeClusters, *fakeEvents) {
 }
 
 func testRequest(operation admissionv1.Operation, name, kind, userData string, extraLabels, extraAnnotations map[string]string) *wranglerwebhook.Request {
+	return testRequestWithNodeConfig(operation, name, kind, "userData", userData, extraLabels, extraAnnotations)
+}
+
+func testRequestWithNodeConfig(operation admissionv1.Operation, name, kind, nodeConfigKey, nodeConfig string, extraLabels, extraAnnotations map[string]string) *wranglerwebhook.Request {
 	labelsMap := map[string]any{"p2p-dragonfly-io": "true"}
 	annotations := map[string]any{}
 	for key, value := range extraLabels {
@@ -217,7 +275,7 @@ func testRequest(operation admissionv1.Operation, name, kind, userData string, e
 			"labels":      labelsMap,
 			"annotations": annotations,
 		},
-		"spec": map[string]any{"userData": userData},
+		"spec": map[string]any{nodeConfigKey: nodeConfig},
 	}
 	raw, _ := json.Marshal(object)
 	return &wranglerwebhook.Request{
@@ -236,6 +294,11 @@ func testRequest(operation admissionv1.Operation, name, kind, userData string, e
 
 func patchedUserData(t *testing.T, resp *wranglerwebhook.Response) string {
 	t.Helper()
+	return patchedNodeConfig(t, resp, "userData")
+}
+
+func patchedNodeConfig(t *testing.T, resp *wranglerwebhook.Response, key string) string {
+	t.Helper()
 	if len(resp.Patch) == 0 {
 		t.Fatal("response has no patch")
 	}
@@ -247,11 +310,11 @@ func patchedUserData(t *testing.T, resp *wranglerwebhook.Response) string {
 	if !ok {
 		t.Fatalf("patch spec = %#v", patch["spec"])
 	}
-	userData, ok := spec["userData"].(string)
+	nodeConfig, ok := spec[key].(string)
 	if !ok {
-		t.Fatalf("patch userData = %#v", spec["userData"])
+		t.Fatalf("patch %s = %#v", key, spec[key])
 	}
-	return userData
+	return nodeConfig
 }
 
 func extractCFG(t *testing.T, userData string) string {

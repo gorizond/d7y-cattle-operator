@@ -1,9 +1,12 @@
 // Package machineconfig implements the CREATE-only machine-config webhook.
+// It patches one spec field, userData by default, chosen per Cluster with the
+// p2p.dragonfly.io/node-config-key annotation.
 package machineconfig
 
 import (
 	"fmt"
 	"log/slog"
+	"regexp"
 	"strings"
 	"time"
 
@@ -29,9 +32,15 @@ const (
 	AnnotationCluster          = "p2p.dragonfly.io/cluster"
 	AnnotationClusterName      = "p2p.dragonfly.io/cluster-name"
 	AnnotationClusterNamespace = "p2p.dragonfly.io/cluster-namespace"
+	// AnnotationNodeConfigKey selects a single spec field to patch on CREATE.
+	AnnotationNodeConfigKey = "p2p.dragonfly.io/node-config-key"
+
+	defaultNodeConfigKey = "userData"
 
 	managerGRPCPort = 65003
 )
+
+var nodeConfigKeyPattern = regexp.MustCompile(`^[A-Za-z][A-Za-z0-9]*$`)
 
 // ClusterCache is the subset of Wrangler's provisioning Cluster cache used by
 // the webhook.
@@ -105,6 +114,17 @@ func (h *Handler) Admit(resp *wranglerwebhook.Response, req *wranglerwebhook.Req
 		return nil
 	}
 
+	nodeConfigKey := defaultNodeConfigKey
+	if cluster != nil {
+		if key := strings.TrimSpace(cluster.Annotations[AnnotationNodeConfigKey]); key != "" {
+			if !nodeConfigKeyPattern.MatchString(key) {
+				h.event(req, "NodeConfigKeyInvalid", fmt.Errorf("cluster annotation %s=%q must match %s", AnnotationNodeConfigKey, key, nodeConfigKeyPattern))
+				return nil
+			}
+			nodeConfigKey = key
+		}
+	}
+
 	schedulerID := strings.TrimSpace(config.GetAnnotations()[AnnotationSchedulerCluster])
 	if schedulerID == "" && cluster != nil {
 		schedulerID = strings.TrimSpace(cluster.Annotations[AnnotationSchedulerCluster])
@@ -136,22 +156,28 @@ func (h *Handler) Admit(resp *wranglerwebhook.Response, req *wranglerwebhook.Req
 		return nil
 	}
 
-	userData, _, err := unstructured.NestedString(config.Object, "spec", "userData")
+	nodeConfig, _, err := unstructured.NestedString(config.Object, "spec", nodeConfigKey)
 	if err != nil {
-		h.event(req, "UserDataMalformed", err)
+		h.event(req, "NodeConfigMalformed", err)
 		return nil
 	}
 	line := bootstrap.InjectionLine(h.StaticURL, payload)
-	patched, changed, err := bootstrap.InjectUserData(userData, line)
+	var patched string
+	var changed bool
+	if nodeConfigKey == defaultNodeConfigKey {
+		patched, changed, err = bootstrap.InjectUserData(nodeConfig, line)
+	} else {
+		patched, changed, err = bootstrap.InjectScript(nodeConfig, line)
+	}
 	if err != nil {
-		h.event(req, "UserDataPatchFailed", err)
+		h.event(req, "NodeConfigPatchFailed", err)
 		return nil
 	}
 	if !changed {
 		return nil
 	}
-	if err := unstructured.SetNestedField(config.Object, patched, "spec", "userData"); err != nil {
-		h.event(req, "UserDataPatchFailed", err)
+	if err := unstructured.SetNestedField(config.Object, patched, "spec", nodeConfigKey); err != nil {
+		h.event(req, "NodeConfigPatchFailed", err)
 		return nil
 	}
 	if err := resp.CreatePatch(req, config); err != nil {

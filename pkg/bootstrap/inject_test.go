@@ -111,3 +111,48 @@ func TestInjectEmptyRuncmd(t *testing.T) {
 		t.Errorf("patched userData = %q", patched)
 	}
 }
+
+func TestInjectPlainShellScript(t *testing.T) {
+	raw := "#!/bin/bash\necho hello\n"
+	patched, changed, err := InjectUserData(raw, testLine)
+	if err != nil || !changed {
+		t.Fatalf("InjectUserData() = changed %v, err %v", changed, err)
+	}
+	if !strings.HasPrefix(patched, raw) {
+		t.Errorf("existing script was modified: %q", patched)
+	}
+	if !strings.Contains(patched, Marker) {
+		t.Errorf("patched script = %q", patched)
+	}
+	if strings.Contains(patched, "runcmd:") {
+		t.Errorf("shell script was converted to cloud-config: %q", patched)
+	}
+
+	again, changed, err := InjectUserData(patched, testLine)
+	if err != nil || changed || again != patched {
+		t.Fatalf("repeat injection = changed %v, err %v", changed, err)
+	}
+}
+
+func TestInjectScriptEmpty(t *testing.T) {
+	patched, changed, err := InjectScript("", testLine)
+	if err != nil || !changed {
+		t.Fatalf("InjectScript() = changed %v, err %v", changed, err)
+	}
+	if strings.Contains(patched, "#cloud-config") || strings.Contains(patched, "runcmd:") {
+		t.Errorf("empty script became cloud-config: %q", patched)
+	}
+	if !strings.Contains(patched, Marker) {
+		t.Errorf("patched empty script = %q", patched)
+	}
+}
+
+func TestInjectScriptCloudConfig(t *testing.T) {
+	patched, changed, err := InjectScript("#cloud-config\nruncmd:\n  - echo hi\n", testLine)
+	if err != nil || !changed {
+		t.Fatalf("InjectScript() = changed %v, err %v", changed, err)
+	}
+	if !strings.Contains(patched, "runcmd:") || !strings.Contains(patched, Marker) {
+		t.Errorf("patched cloud-config = %q", patched)
+	}
+}
