@@ -1,0 +1,44 @@
+replicaCount: 1
+
+image:
+  repository: nginx
+  tag: "1.27-alpine"
+  pullPolicy: IfNotPresent
+
+nameOverride: ""
+fullnameOverride: ""
+
+service:
+  type: ClusterIP
+  port: 80
+
+ingress:
+  # When enabled, each hosts[].host must be set and must match the published
+  # static URL.
+  enabled: false
+  className: ""
+  annotations: {}
+  hosts:
+    - host: ""
+      paths:
+        - path: /
+          pathType: Prefix
+  tls: []
+
+# The /bin directory is populated externally (GitOps, an init job, or a
+# pre-populated existingClaim). The chart never ships binaries and creates no
+# PVC by default.
+static:
+  existingClaim: ""
+  sizeLimit: ""
+
+resources:
+  requests:
+    cpu: 50m
+    memory: 64Mi
+  limits:
+    cpu: 500m
+    memory: 256Mi
+
+nodeSelector: {}
+tolerations: []

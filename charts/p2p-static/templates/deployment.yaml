@@ -1,0 +1,64 @@
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: {{ include "p2p-static.fullname" . }}
+  labels:
+    {{- include "p2p-static.labels" . | nindent 4 }}
+spec:
+  replicas: {{ .Values.replicaCount }}
+  selector:
+    matchLabels:
+      {{- include "p2p-static.selectorLabels" . | nindent 6 }}
+  template:
+    metadata:
+      labels:
+        {{- include "p2p-static.selectorLabels" . | nindent 8 }}
+    spec:
+      automountServiceAccountToken: false
+      {{- with .Values.nodeSelector }}
+      nodeSelector:
+        {{- toYaml . | nindent 8 }}
+      {{- end }}
+      {{- with .Values.tolerations }}
+      tolerations:
+        {{- toYaml . | nindent 8 }}
+      {{- end }}
+      containers:
+        - name: nginx
+          image: "{{ .Values.image.repository }}:{{ .Values.image.tag }}"
+          imagePullPolicy: {{ .Values.image.pullPolicy }}
+          ports:
+            - name: http
+              containerPort: 8080
+              protocol: TCP
+          readinessProbe:
+            httpGet:
+              path: /healthz
+              port: http
+          livenessProbe:
+            httpGet:
+              path: /healthz
+              port: http
+          resources:
+            {{- toYaml .Values.resources | nindent 12 }}
+          volumeMounts:
+            - name: config
+              mountPath: /etc/nginx/conf.d
+              readOnly: true
+            - name: static
+              mountPath: /usr/share/nginx/static
+              readOnly: true
+      volumes:
+        - name: config
+          configMap:
+            name: {{ include "p2p-static.fullname" . }}-config
+        - name: static
+          {{- if .Values.static.existingClaim }}
+          persistentVolumeClaim:
+            claimName: {{ .Values.static.existingClaim | quote }}
+          {{- else if .Values.static.sizeLimit }}
+          emptyDir:
+            sizeLimit: {{ .Values.static.sizeLimit | quote }}
+          {{- else }}
+          emptyDir: {}
+          {{- end }}

@@ -1,0 +1,43 @@
+apiVersion: v1
+kind: ConfigMap
+metadata:
+  name: {{ include "p2p-static.fullname" . }}-config
+  labels:
+    {{- include "p2p-static.labels" . | nindent 4 }}
+data:
+  default.conf: |-
+    large_client_header_buffers 4 32k;
+    client_header_buffer_size 32k;
+
+    server {
+        listen 8080;
+        server_name _;
+        server_tokens off;
+        root /usr/share/nginx/static;
+
+        location = /healthz {
+            access_log off;
+            add_header Content-Type text/plain;
+            return 200 "ok\n";
+        }
+
+        location = /p2p-install.sh {
+            alias /etc/nginx/conf.d/p2p-install.sh.tmpl;
+            default_type text/x-shellscript;
+            sub_filter_types text/x-shellscript;
+            sub_filter '__CFG__' "$arg_cfg";
+            sub_filter_once on;
+            add_header Cache-Control "no-store" always;
+        }
+
+        location /bin/ {
+            try_files $uri =404;
+            autoindex off;
+        }
+
+        location / {
+            return 404;
+        }
+    }
+  p2p-install.sh.tmpl: |-
+{{ .Files.Get "files/p2p-install.sh" | nindent 4 }}
