@@ -16,6 +16,7 @@ import (
 
 func TestReconcileSetsRoleConditions(t *testing.T) {
 	controller, _, _ := newTestController(t)
+	controller.opts.NydusEnabled = true
 	clusterStore := controller.clusters.(*fakeClusterStore)
 	clusterStore.set(testSeedCluster("42"))
 

@@ -94,6 +94,7 @@ func run() error {
 		OperatorNamespace:           cfg.Namespace,
 		MTLSSecretName:              cfg.MTLSSecretName,
 		ManagerGRPCDomain:           cfg.ManagerGRPCDomain,
+		ManagerGRPCPort:             cfg.ManagerGRPCPort,
 		ManagerAPIHost:              apiHost,
 		ManagerAPIURL:               cfg.ManagerAPIURL,
 		ManagerAPICredentialsSecret: cfg.ManagerAPICredentialsSecret,
@@ -113,6 +114,7 @@ func run() error {
 		ExtrasIngressRESTEnabled: cfg.ExtrasIngressRESTEnabled,
 		ExtrasIngressTLSSecret:   cfg.ExtrasIngressTLSSecret,
 		ExtrasTraefikTransport:   cfg.ExtrasTraefikTransport,
+		NydusEnabled:             cfg.NydusEnabled,
 		VPAEnabled:               vpaEnabled,
 	})
 

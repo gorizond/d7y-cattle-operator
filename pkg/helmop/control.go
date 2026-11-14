@@ -5,6 +5,10 @@ import fleetv1alpha1 "github.com/rancher/fleet/pkg/apis/fleet.cattle.io/v1alpha1
 // Control returns the scheduler HelmOp. It is the only Dragonfly release that
 // talks to the manager and keeps all scheduler TLS wiring.
 func Control(c Cluster) *fleetv1alpha1.HelmOp {
+	grpcPort := c.ManagerGRPCPort
+	if grpcPort == 0 {
+		grpcPort = ManagerGRPCEdgePort
+	}
 	values := map[string]any{
 		"fullnameOverride": ControlName(c.Name),
 		"manager":          map[string]any{"enable": false},
@@ -13,7 +17,7 @@ func Control(c Cluster) *fleetv1alpha1.HelmOp {
 		"externalRedis":    map[string]any{"addrs": []any{KeyDBName(c.Name) + ":6379"}},
 		"externalManager": map[string]any{
 			"host":     c.ManagerGRPCDomain,
-			"grpcPort": ManagerGRPCPort,
+			"grpcPort": grpcPort,
 		},
 		"scheduler": map[string]any{
 			"enable":      true,

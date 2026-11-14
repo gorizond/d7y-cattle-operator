@@ -35,6 +35,7 @@ type Options struct {
 	OperatorNamespace           string
 	MTLSSecretName              string
 	ManagerGRPCDomain           string
+	ManagerGRPCPort             int
 	ManagerAPIHost              string
 	ManagerAPIURL               string
 	ManagerAPICredentialsSecret string
@@ -46,6 +47,7 @@ type Options struct {
 	ExtrasIngressRESTEnabled    bool
 	ExtrasIngressTLSSecret      string
 	ExtrasTraefikTransport      bool
+	NydusEnabled                bool
 	VPAEnabled                  bool
 }
 
@@ -172,7 +174,11 @@ func (c *Controller) reconcile(key string, cluster *provv1.Cluster) (result *pro
 				controlErr, dataErr, nydusErr := c.ensureSeed(cluster, hc)
 				setSeedCondition(status, conditionControlReady, controlErr)
 				setSeedCondition(status, conditionDataReady, dataErr)
-				setSeedCondition(status, conditionNydusReady, nydusErr)
+				if c.opts.NydusEnabled {
+					setSeedCondition(status, conditionNydusReady, nydusErr)
+				} else {
+					status.nydusDeferred()
+				}
 				for _, err := range []error{controlErr, dataErr, nydusErr} {
 					if err != nil {
 						errs = append(errs, err)
@@ -199,6 +205,7 @@ func (c *Controller) reconcile(key string, cluster *provv1.Cluster) (result *pro
 		TLSSecret:                      c.opts.ExtrasIngressTLSSecret,
 		TraefikServersTransportEnabled: c.opts.ExtrasTraefikTransport,
 		VPAEnabled:                     c.opts.VPAEnabled,
+		NydusEnabled:                   c.opts.NydusEnabled,
 		Manager:                        roles.Manager && mtlsReady,
 		Seed:                           seedReady,
 	})); err != nil {
@@ -273,6 +280,7 @@ func (c *Controller) helmopCluster(cluster *provv1.Cluster) helmop.Cluster {
 		Chart:              c.opts.DragonflyChart,
 		ExtrasChart:        c.opts.ExtrasChart,
 		ManagerGRPCDomain:  c.opts.ManagerGRPCDomain,
+		ManagerGRPCPort:    c.opts.ManagerGRPCPort,
 		ManagerAPIHost:     c.opts.ManagerAPIHost,
 		SchedulerClusterID: schedulerClusterID(cluster),
 		SchedulerReplicas:  helmop.ReplicasOrOne(AnnotationSchedulerReplicas, cluster.Annotations[AnnotationSchedulerReplicas]),

@@ -2,7 +2,10 @@ package helmop
 
 import fleetv1alpha1 "github.com/rancher/fleet/pkg/apis/fleet.cattle.io/v1alpha1"
 
-// Nydus returns the nydus-snapshotter HelmOp for RKE2 nodes.
+// Nydus returns the nydus-snapshotter HelmOp for RKE2 nodes. It is disabled by
+// default (NYDUS_ENABLED=false) until a containerd-2.x-compatible path exists;
+// chart 0.0.10 targets containerd 1.x. Do not add enable_oci_tar or
+// snapshotter.config.daemon: chart 0.0.10 has no such values.
 //
 // Known pilot risk: chart 0.0.10 does not expose hostSocket, initContainer
 // command/privileged, or runtimeClass values, so it ignores those settings and

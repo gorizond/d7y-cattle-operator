@@ -11,6 +11,7 @@ func testCluster() Cluster {
 		Chart:              Chart{Repo: "https://charts.example.com", Name: "dragonfly", Version: "1.10.1"},
 		ExtrasChart:        Chart{Repo: "https://charts.example.com", Name: "dragonfly-extras", Version: "0.1.4"},
 		ManagerGRPCDomain:  "grpc.example.com",
+		ManagerGRPCPort:    ManagerGRPCEdgePort,
 		ManagerAPIHost:     "api.example.com",
 		SchedulerClusterID: 42,
 		SchedulerReplicas:  ReplicasTemplate("p2p.dragonfly.io/scheduler-replicas"),
