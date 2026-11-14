@@ -24,6 +24,8 @@ const (
 	DefaultExtrasChartVersion    = "0.1.0"
 	DefaultNamespace             = "dragonfly-system"
 	DefaultWebhookPort           = 9443
+	DefaultWebhookCertDir        = "/etc/webhook/certs"
+	DefaultWebhookServiceName    = "d7y-cattle-operator-webhook"
 )
 
 var chartVersionPattern = regexp.MustCompile(`^v?[0-9]+\.[0-9]+\.[0-9]+(?:[-+][0-9A-Za-z.-]+)?$`)
@@ -43,6 +45,8 @@ type Config struct {
 	ExtrasChartVersion          string
 	Namespace                   string
 	WebhookPort                 int
+	WebhookCertDir              string
+	WebhookServiceName          string
 	LeaderElect                 bool
 	Kubeconfig                  string
 }
@@ -70,6 +74,8 @@ func Load(args []string) (*Config, error) {
 	fs.StringVar(&cfg.ExtrasChartVersion, "extras-chart-version", envOr("EXTRAS_CHART_VERSION", DefaultExtrasChartVersion), "dragonfly-extras chart version")
 	fs.StringVar(&cfg.Namespace, "namespace", envOr("POD_NAMESPACE", DefaultNamespace), "namespace where the operator stores its Secret")
 	fs.IntVar(&cfg.WebhookPort, "webhook-port", defaultWebhookPort, "admission webhook port")
+	fs.StringVar(&cfg.WebhookCertDir, "webhook-cert-dir", envOr("WEBHOOK_CERT_DIR", DefaultWebhookCertDir), "directory containing the webhook tls.crt and tls.key")
+	fs.StringVar(&cfg.WebhookServiceName, "webhook-service-name", envOr("WEBHOOK_SERVICE_NAME", DefaultWebhookServiceName), "webhook Service name used for the serving certificate SANs")
 	fs.BoolVar(&cfg.LeaderElect, "leader-elect", false, "enable leader election")
 	fs.StringVar(&cfg.Kubeconfig, "kubeconfig", envOr("KUBECONFIG", ""), "path to a kubeconfig (in-cluster config when empty)")
 
@@ -147,6 +153,14 @@ func (c *Config) Validate() error {
 	}
 	if c.WebhookPort < 1 || c.WebhookPort > 65535 {
 		add("--webhook-port: %d is outside 1-65535", c.WebhookPort)
+	}
+	if c.WebhookCertDir == "" {
+		add("--webhook-cert-dir is required")
+	}
+	if c.WebhookServiceName == "" {
+		add("--webhook-service-name is required")
+	} else if msgs := validation.IsDNS1123Label(c.WebhookServiceName); len(msgs) > 0 {
+		add("--webhook-service-name: %s", strings.Join(msgs, "; "))
 	}
 
 	if len(errs) > 0 {

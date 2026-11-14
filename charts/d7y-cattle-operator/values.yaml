@@ -46,11 +46,12 @@ extras:
     version: 0.1.0
 
 webhook:
+  # Admission webhook server and MutatingWebhookConfiguration.
+  enabled: true
   # Admission webhook port served by the operator.
   port: 9443
-  # The MutatingWebhookConfiguration is registered by the operator in MR-4.
-  # Keep this disabled until the webhook server is implemented.
-  enabled: false
+  # Directory where needacert mounts tls.crt/tls.key.
+  certDir: /etc/webhook/certs
   failurePolicy: Ignore
 
 leaderElect: false

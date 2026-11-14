@@ -1,9 +1,13 @@
 apiVersion: v1
 kind: Service
 metadata:
-  name: {{ include "d7y-cattle-operator.fullname" . }}-webhook
+  name: {{ include "d7y-cattle-operator.webhookName" . }}
   labels:
     {{- include "d7y-cattle-operator.labels" . | nindent 4 }}
+  {{- if .Values.webhook.enabled }}
+  annotations:
+    need-a-cert.cattle.io/secret-name: {{ include "d7y-cattle-operator.webhookName" . }}-cert
+  {{- end }}
 spec:
   type: ClusterIP
   selector:
