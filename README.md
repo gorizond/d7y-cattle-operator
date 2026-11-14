@@ -66,9 +66,7 @@ helm install d7y-cattle-operator gorizond/d7y-cattle-operator \
 
 For local development use `charts/d7y-cattle-operator` instead of the repository
 chart. The release tag (`v<chart version>`) and the default image tag
-(`v<chart version>`) are kept in sync by the release workflow. See
-[quickstart.md](quickstart.md) for static checks and the live-pilot verification
-steps.
+(`v<chart version>`) are kept in sync by the release workflow.
 
 The operator reads credentials only from Secret names. No secret values are passed
 through flags or chart values. `nginx.staticURL` and
