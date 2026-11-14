@@ -41,8 +41,20 @@ func TestDataHelmOp(t *testing.T) {
 	if got := valueAt(t, seedClient, "dynconfig", "scheduler", "addr"); got != "c1-control-scheduler.dragonfly-system.svc:8002" {
 		t.Errorf("seedClient dynconfig addr = %v", got)
 	}
-	if got := valueAt(t, seedClient, "host", "schedulerClusterID"); got != 42 {
-		t.Errorf("seedClient schedulerClusterID = %v", got)
+	if got := valueAt(t, seedClient, "config", "host", "schedulerClusterID"); got != 42 {
+		t.Errorf("seedClient config.host.schedulerClusterID = %v", got)
+	}
+	if _, ok := seedClient["host"]; ok {
+		t.Error("seedClient has a top-level host key; schedulerClusterID must be under config.host")
+	}
+	seedScheduler := nested(t, seedClient, "config", "scheduler")
+	if seedScheduler["caCert"] != CertDir+"/ca.crt" ||
+		seedScheduler["cert"] != CertDir+"/tls.crt" ||
+		seedScheduler["key"] != CertDir+"/tls.key" {
+		t.Errorf("seedClient config.scheduler TLS = %v", seedScheduler)
+	}
+	if _, ok := seedScheduler["tls"]; ok {
+		t.Error("seedClient config.scheduler contains a nested tls key")
 	}
 
 	assertPorts(t, seedClient, 4100, 4101, 4102, 4103, 4104)
@@ -63,8 +75,23 @@ func TestDataHelmOp(t *testing.T) {
 	if got := valueAt(t, client, "dfinit", "enable"); got != false {
 		t.Errorf("client.dfinit.enable = %v", got)
 	}
-	if got := valueAt(t, client, "host", "schedulerClusterID"); got != 42 {
-		t.Errorf("client schedulerClusterID = %v", got)
+	if got := valueAt(t, client, "config", "host", "schedulerClusterID"); got != 42 {
+		t.Errorf("client config.host.schedulerClusterID = %v", got)
+	}
+	if _, ok := client["host"]; ok {
+		t.Error("client has a top-level host key; schedulerClusterID must be under config.host")
+	}
+	clientScheduler := nested(t, client, "config", "scheduler")
+	if clientScheduler["caCert"] != CertDir+"/ca.crt" ||
+		clientScheduler["cert"] != CertDir+"/tls.crt" ||
+		clientScheduler["key"] != CertDir+"/tls.key" {
+		t.Errorf("client config.scheduler TLS = %v", clientScheduler)
+	}
+	if _, ok := clientScheduler["tls"]; ok {
+		t.Error("client config.scheduler contains a nested tls key")
+	}
+	if got := valueAt(t, client, "priorityClassName"); got != "system-node-critical" {
+		t.Errorf("client.priorityClassName = %v", got)
 	}
 	assertPorts(t, client, 4000, 4001, 4002, 4003, 4004)
 	clientStorage := nested(t, client, "config", "storage", "server")
@@ -127,8 +154,8 @@ func TestControlHelmOp(t *testing.T) {
 	if got := valueAt(t, values, "externalManager", "host"); got != "grpc.example.com" {
 		t.Errorf("externalManager.host = %v", got)
 	}
-	if got := valueAt(t, values, "externalManager", "grpcPort"); got != ManagerGRPCPort {
-		t.Errorf("externalManager.grpcPort = %v", got)
+	if got := valueAt(t, values, "externalManager", "grpcPort"); got != ManagerGRPCEdgePort {
+		t.Errorf("externalManager.grpcPort = %v, want edge port %d", got, ManagerGRPCEdgePort)
 	}
 	for _, component := range []string{"seedClient", "client", "manager"} {
 		if got := valueAt(t, values, component, "enable"); got != false {

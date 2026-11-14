@@ -17,7 +17,10 @@ const (
 	TargetNamespace = "dragonfly-system"
 
 	ManagerGRPCPort = 65003
-	ManagerRESTPort = 8080
+	// ManagerGRPCEdgePort is the public gRPC port used by schedulers to reach
+	// the manager through the edge.
+	ManagerGRPCEdgePort = 443
+	ManagerRESTPort     = 8080
 
 	// CertDir is where the mTLS Secret is mounted in Dragonfly pods.
 	CertDir = "/etc/dragonfly/certs"
@@ -56,6 +59,7 @@ type Cluster struct {
 	Chart              Chart
 	ExtrasChart        Chart
 	ManagerGRPCDomain  string
+	ManagerGRPCPort    int
 	ManagerAPIHost     string
 	SchedulerClusterID int
 	SchedulerReplicas  string

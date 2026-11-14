@@ -10,6 +10,7 @@ func TestExtrasHelmOp(t *testing.T) {
 		RESTEnabled:                    true,
 		TraefikServersTransportEnabled: true,
 		VPAEnabled:                     true,
+		NydusEnabled:                   true,
 		Manager:                        true,
 		Seed:                           true,
 	})
@@ -119,6 +120,7 @@ func TestExtrasSeedOnly(t *testing.T) {
 	op := Extras(testCluster(), ExtrasOptions{
 		IngressEnabled: false,
 		VPAEnabled:     true,
+		NydusEnabled:   true,
 		Seed:           true,
 	})
 
@@ -138,6 +140,24 @@ func TestExtrasSeedOnly(t *testing.T) {
 	for _, component := range []string{"control", "data", "nydus"} {
 		if got := valueAt(t, values, "vpa", "targets", component, "enabled"); got != true {
 			t.Errorf("%s VPA enabled = %v", component, got)
+		}
+	}
+}
+
+func TestExtrasNydusVPADeferred(t *testing.T) {
+	op := Extras(testCluster(), ExtrasOptions{
+		IngressEnabled: false,
+		VPAEnabled:     true,
+		Seed:           true,
+	})
+
+	targets := nested(t, op.Spec.Helm.Values.Data, "vpa", "targets")
+	if got := valueAt(t, targets, "nydus", "enabled"); got != false {
+		t.Errorf("nydus VPA enabled = %v, want false when nydus is deferred", got)
+	}
+	for _, component := range []string{"control", "data"} {
+		if got := valueAt(t, targets, component, "enabled"); got != true {
+			t.Errorf("%s VPA enabled = %v, want true", component, got)
 		}
 	}
 }

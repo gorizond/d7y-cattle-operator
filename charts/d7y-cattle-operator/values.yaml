@@ -25,6 +25,8 @@ managerApiCredentialsSecret: ""
 manager:
   # Public hostname of the manager gRPC endpoint (no scheme).
   grpcDomain: ""
+  # Public gRPC port used by schedulers to reach the manager edge.
+  grpcPort: 443
   # Public HTTPS URL of the manager REST API.
   apiURL: ""
 
@@ -56,6 +58,11 @@ extras:
     # Empty disables the Ingress TLS block.
     tlsSecret: ""
     traefikServersTransportEnabled: true
+
+# nydus-snapshotter is deferred for the pilot: chart 0.0.10 targets containerd
+# 1.x and is incompatible with RKE2 containerd 2.2.
+nydus:
+  enabled: false
 
 webhook:
   # Admission webhook server and MutatingWebhookConfiguration.

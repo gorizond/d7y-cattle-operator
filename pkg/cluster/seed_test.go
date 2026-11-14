@@ -17,6 +17,7 @@ import (
 
 func TestReconcileSeedCreatesHelmOps(t *testing.T) {
 	controller, store, events := newTestController(t)
+	controller.opts.NydusEnabled = true
 	cluster := testSeedCluster("42")
 
 	if _, err := controller.reconcile("", cluster); err != nil {
@@ -50,14 +51,15 @@ func TestReconcileSeedCreatesHelmOps(t *testing.T) {
 		t.Errorf("data externalManager.host = %v, want empty", got)
 	}
 	for _, component := range []string{"seedClient", "client"} {
-		if got := valueAtPath(t, values, component, "host", "schedulerClusterID"); got != int64(42) {
-			t.Errorf("%s schedulerClusterID = %v", component, got)
+		if got := valueAtPath(t, values, component, "config", "host", "schedulerClusterID"); got != int64(42) {
+			t.Errorf("%s config.host.schedulerClusterID = %v", component, got)
 		}
 	}
 }
 
 func TestReconcileSeedRemovalAndLabelRemoval(t *testing.T) {
 	controller, store, _ := newTestController(t)
+	controller.opts.NydusEnabled = true
 	cluster := testSeedCluster("42")
 	if _, err := controller.reconcile("", cluster); err != nil {
 		t.Fatalf("reconcile(seed) error = %v", err)
@@ -88,6 +90,53 @@ func TestReconcileSeedRemovalAndLabelRemoval(t *testing.T) {
 	}
 }
 
+func TestReconcileSeedDefersNydus(t *testing.T) {
+	controller, store, events := newTestController(t)
+	clusterStore := controller.clusters.(*fakeClusterStore)
+	cluster := testSeedCluster("42")
+	clusterStore.set(cluster)
+
+	if _, err := controller.reconcile("", cluster); err != nil {
+		t.Fatalf("reconcile() error = %v", err)
+	}
+	if len(events.events) != 0 {
+		t.Errorf("events = %+v, want none", events.events)
+	}
+	for _, name := range []string{"c1-keydb", "c1-control", "c1-data"} {
+		if !store.has("fleet-default/" + name) {
+			t.Errorf("%s HelmOp was not created", name)
+		}
+	}
+	if store.has("fleet-default/c1-nydus-snapshotter") {
+		t.Error("nydus HelmOp was created while nydus is disabled")
+	}
+	if got := clusterStore.condition(string(conditionNydusReady)); got == nil || got.Status != corev1.ConditionFalse || got.Reason != "NydusDeferred" {
+		t.Errorf("NydusReady = %+v, want False/NydusDeferred", got)
+	}
+	values := helmValues(t, store.object("fleet-default/c1-extras"))
+	if got := valueAtPath(t, values, "vpa", "targets", "nydus", "enabled"); got != false {
+		t.Errorf("nydus VPA enabled = %v, want false", got)
+	}
+}
+
+func TestReconcileSeedDefersNydusDeletesExisting(t *testing.T) {
+	controller, store, _ := newTestController(t)
+	cluster := testSeedCluster("42")
+	if err := controller.applyHelmOp(cluster, helmop.Nydus(controller.helmopCluster(cluster))); err != nil {
+		t.Fatalf("apply existing nydus HelmOp: %v", err)
+	}
+	if !store.has("fleet-default/c1-nydus-snapshotter") {
+		t.Fatal("nydus HelmOp was not created for cleanup test")
+	}
+
+	if _, err := controller.reconcile("", cluster); err != nil {
+		t.Fatalf("reconcile() error = %v", err)
+	}
+	if store.has("fleet-default/c1-nydus-snapshotter") {
+		t.Error("existing nydus HelmOp was not deleted while nydus is disabled")
+	}
+}
+
 func newTestController(t *testing.T) (*Controller, *fakeHelmOpStore, *fakeEventStore) {
 	t.Helper()
 	secrets := newFakeSecretStore()
@@ -110,6 +159,7 @@ func newTestController(t *testing.T) (*Controller, *fakeHelmOpStore, *fakeEventS
 			OperatorNamespace:        "dragonfly-system",
 			MTLSSecretName:           "dragonfly-p2p-mtls",
 			ManagerGRPCDomain:        "grpc.example.com",
+			ManagerGRPCPort:          443,
 			ManagerAPIHost:           "api.example.com",
 			DragonflyChart:           helmop.Chart{Repo: "https://charts.example.com", Name: "dragonfly", Version: "1.10.1"},
 			ExtrasChart:              helmop.Chart{Repo: "https://charts.example.com", Name: "dragonfly-extras", Version: "0.1.4"},

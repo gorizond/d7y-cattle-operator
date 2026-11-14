@@ -15,12 +15,12 @@ func Data(c Cluster) *fleetv1alpha1.HelmOp {
 		"enable":      true,
 		"hostNetwork": true,
 		"replicas":    c.SeedClientReplicas,
-		"host":        map[string]any{"schedulerClusterID": c.SchedulerClusterID},
 		// The chart defaults to a 100Gi PVC; the seed client must stay PVC-free.
 		"persistence": map[string]any{"enable": false},
 		"dynconfig":   map[string]any{"scheduler": map[string]any{"addr": schedulerAddr}},
 		"config": map[string]any{
-			"scheduler": map[string]any{"tls": tlsPaths()},
+			"host":      map[string]any{"schedulerClusterID": c.SchedulerClusterID},
+			"scheduler": tlsPaths(),
 			"upload":    uploadConfig(4100),
 			"proxy":     map[string]any{"ip": "127.0.0.1", "server": map[string]any{"port": 4101}},
 			"metrics":   map[string]any{"ip": "127.0.0.1", "server": map[string]any{"port": 4102}},
@@ -32,13 +32,14 @@ func Data(c Cluster) *fleetv1alpha1.HelmOp {
 		"extraVolumeMounts": volumeMounts(logVolumeMount("/var/log/dragonfly/dfdaemon/")),
 	}
 	client := map[string]any{
-		"enable":      true,
-		"hostNetwork": true,
-		"dfinit":      map[string]any{"enable": false},
-		"host":        map[string]any{"schedulerClusterID": c.SchedulerClusterID},
-		"dynconfig":   map[string]any{"scheduler": map[string]any{"addr": schedulerAddr}},
+		"enable":            true,
+		"hostNetwork":       true,
+		"dfinit":            map[string]any{"enable": false},
+		"priorityClassName": "system-node-critical",
+		"dynconfig":         map[string]any{"scheduler": map[string]any{"addr": schedulerAddr}},
 		"config": map[string]any{
-			"scheduler": map[string]any{"tls": tlsPaths()},
+			"host":      map[string]any{"schedulerClusterID": c.SchedulerClusterID},
+			"scheduler": tlsPaths(),
 			"upload":    uploadConfig(4000),
 			"proxy":     map[string]any{"ip": "127.0.0.1", "server": map[string]any{"port": 4001}},
 			"metrics":   map[string]any{"ip": "127.0.0.1", "server": map[string]any{"port": 4002}},

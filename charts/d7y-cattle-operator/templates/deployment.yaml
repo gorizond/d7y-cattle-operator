@@ -30,6 +30,8 @@ spec:
           env:
             - name: MANAGER_GRPC_DOMAIN
               value: {{ .Values.manager.grpcDomain | quote }}
+            - name: MANAGER_GRPC_PORT
+              value: {{ .Values.manager.grpcPort | quote }}
             - name: MANAGER_API_URL
               value: {{ .Values.manager.apiURL | quote }}
             - name: NGINX_STATIC_URL
@@ -62,6 +64,8 @@ spec:
               value: {{ .Values.extras.ingress.tlsSecret | quote }}
             - name: EXTRAS_TRAEFIK_SERVERS_TRANSPORT_ENABLED
               value: {{ .Values.extras.ingress.traefikServersTransportEnabled | quote }}
+            - name: NYDUS_ENABLED
+              value: {{ .Values.nydus.enabled | quote }}
             - name: POD_NAMESPACE
               valueFrom:
                 fieldRef:

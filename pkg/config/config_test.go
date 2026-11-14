@@ -7,6 +7,8 @@ import (
 
 var envKeys = []string{
 	"MANAGER_GRPC_DOMAIN",
+	"MANAGER_GRPC_PORT",
+	"NYDUS_ENABLED",
 	"MANAGER_API_URL",
 	"NGINX_STATIC_URL",
 	"MTLS_SECRET_NAME",
@@ -55,6 +57,12 @@ func TestLoadDefaults(t *testing.T) {
 		t.Fatalf("Load() error = %v", err)
 	}
 
+	if cfg.ManagerGRPCPort != DefaultManagerGRPCPort {
+		t.Errorf("ManagerGRPCPort = %d, want %d", cfg.ManagerGRPCPort, DefaultManagerGRPCPort)
+	}
+	if cfg.NydusEnabled {
+		t.Error("NydusEnabled = true, want false")
+	}
 	if cfg.MTLSSecretName != DefaultMTLSSecretName {
 		t.Errorf("MTLSSecretName = %q, want %q", cfg.MTLSSecretName, DefaultMTLSSecretName)
 	}
@@ -145,6 +153,8 @@ func TestLoadInvalidValues(t *testing.T) {
 		"gRPC domain with scheme":           "--manager-grpc-domain=https://manager-grpc.example.com",
 		"gRPC domain with port":             "--manager-grpc-domain=manager-grpc.example.com:443",
 		"invalid Secret name":               "--mtls-secret-name=Bad_Name",
+		"manager gRPC port zero":            "--manager-grpc-port=0",
+		"manager gRPC port too large":       "--manager-grpc-port=70000",
 		"invalid namespace":                 "--namespace=Bad_Name",
 		"invalid chart version":             "--dragonfly-chart-version=latest",
 		"invalid extras chart version":      "--extras-chart-version=latest",
@@ -173,6 +183,8 @@ func TestLoadInvalidValues(t *testing.T) {
 func TestLoadEnvOverride(t *testing.T) {
 	clearEnv(t)
 	t.Setenv("MANAGER_GRPC_DOMAIN", "grpc.env.example.com")
+	t.Setenv("MANAGER_GRPC_PORT", "8443")
+	t.Setenv("NYDUS_ENABLED", "true")
 	t.Setenv("MANAGER_API_URL", "https://api.env.example.com")
 	t.Setenv("NGINX_STATIC_URL", "http://static.env.example.com")
 	t.Setenv("MTLS_SECRET_NAME", "env-mtls")
@@ -202,6 +214,12 @@ func TestLoadEnvOverride(t *testing.T) {
 
 	if cfg.ManagerGRPCDomain != "grpc.env.example.com" {
 		t.Errorf("ManagerGRPCDomain = %q", cfg.ManagerGRPCDomain)
+	}
+	if cfg.ManagerGRPCPort != 8443 {
+		t.Errorf("ManagerGRPCPort = %d", cfg.ManagerGRPCPort)
+	}
+	if !cfg.NydusEnabled {
+		t.Error("NydusEnabled = false, want true")
 	}
 	if cfg.ManagerAPIURL != "https://api.env.example.com" {
 		t.Errorf("ManagerAPIURL = %q", cfg.ManagerAPIURL)
@@ -272,13 +290,23 @@ func TestLoadFlagOverridesEnv(t *testing.T) {
 	clearEnv(t)
 	t.Setenv("MANAGER_GRPC_DOMAIN", "grpc.env.example.com")
 
-	args := append(requiredArgs(), "--manager-grpc-domain=grpc.flag.example.com")
+	args := append(requiredArgs(),
+		"--manager-grpc-domain=grpc.flag.example.com",
+		"--manager-grpc-port=9443",
+		"--nydus-enabled=true",
+	)
 	cfg, err := Load(args)
 	if err != nil {
 		t.Fatalf("Load() error = %v", err)
 	}
 	if cfg.ManagerGRPCDomain != "grpc.flag.example.com" {
 		t.Errorf("ManagerGRPCDomain = %q, want flag value", cfg.ManagerGRPCDomain)
+	}
+	if cfg.ManagerGRPCPort != 9443 {
+		t.Errorf("ManagerGRPCPort = %d, want flag value", cfg.ManagerGRPCPort)
+	}
+	if !cfg.NydusEnabled {
+		t.Error("NydusEnabled = false, want flag value true")
 	}
 }
 
@@ -304,5 +332,25 @@ func TestLoadInvalidExtrasIngressBoolEnv(t *testing.T) {
 	_, err := Load(requiredArgs())
 	if err == nil || !strings.Contains(err.Error(), "EXTRAS_INGRESS_GRPC_ENABLED") {
 		t.Fatalf("Load() error = %v, want an error mentioning EXTRAS_INGRESS_GRPC_ENABLED", err)
+	}
+}
+
+func TestLoadInvalidNydusBoolEnv(t *testing.T) {
+	clearEnv(t)
+	t.Setenv("NYDUS_ENABLED", "not-a-bool")
+
+	_, err := Load(requiredArgs())
+	if err == nil || !strings.Contains(err.Error(), "NYDUS_ENABLED") {
+		t.Fatalf("Load() error = %v, want an error mentioning NYDUS_ENABLED", err)
+	}
+}
+
+func TestLoadInvalidManagerGRPCPortEnv(t *testing.T) {
+	clearEnv(t)
+	t.Setenv("MANAGER_GRPC_PORT", "not-a-number")
+
+	_, err := Load(requiredArgs())
+	if err == nil || !strings.Contains(err.Error(), "MANAGER_GRPC_PORT") {
+		t.Fatalf("Load() error = %v, want an error mentioning MANAGER_GRPC_PORT", err)
 	}
 }

@@ -97,6 +97,7 @@ func writeJSONResponse(w http.ResponseWriter, status int, value any) {
 
 func TestReconcileAutoRegistrationWritesAnnotation(t *testing.T) {
 	controller, store, _ := newTestController(t)
+	controller.opts.NydusEnabled = true
 	registrar := controller.registrar.(*fakeRegistrar)
 	registrar.schedulerID = 5
 	registrar.seedPeerID = 7
@@ -130,7 +131,7 @@ func TestReconcileAutoRegistrationWritesAnnotation(t *testing.T) {
 	}
 	data := store.object("fleet-default/c1-data")
 	for _, component := range []string{"seedClient", "client"} {
-		if got := valueAtPath(t, helmValues(t, data), component, "host", "schedulerClusterID"); got != int64(5) {
+		if got := valueAtPath(t, helmValues(t, data), component, "config", "host", "schedulerClusterID"); got != int64(5) {
 			t.Errorf("data %s schedulerClusterID = %v, want 5", component, got)
 		}
 	}
@@ -176,7 +177,7 @@ func TestReconcileUserIDPreservedAndMismatch(t *testing.T) {
 		t.Errorf("control schedulerClusterID = %v, want annotation 42", got)
 	}
 	data := store.object("fleet-default/c1-data")
-	if got := valueAtPath(t, helmValues(t, data), "seedClient", "host", "schedulerClusterID"); got != int64(42) {
+	if got := valueAtPath(t, helmValues(t, data), "seedClient", "config", "host", "schedulerClusterID"); got != int64(42) {
 		t.Errorf("data schedulerClusterID = %v, want annotation 42", got)
 	}
 

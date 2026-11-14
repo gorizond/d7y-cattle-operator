@@ -9,13 +9,15 @@ import (
 	"github.com/gorizond/d7y-cattle-operator/pkg/helmop"
 )
 
-// ensureSeed reconciles the control, data, and nydus releases. Replica counts
-// stay Fleet templates and the scheduler cluster ID is read from the Cluster
-// annotation; allocation is handled by MR-3. Without an ID the seed releases
-// are not created, while manager and KeyDB reconciliation continues.
+// ensureSeed reconciles the control and data releases, plus nydus when
+// NydusEnabled is true. Replica counts stay Fleet templates and the scheduler
+// cluster ID is read from the Cluster annotation; allocation is handled by
+// MR-3. Without an ID the seed releases are not created, while manager and
+// KeyDB reconciliation continues.
 //
 // Each error is returned separately so the controller can report a precise
-// ControlReady/DataReady/NydusReady condition.
+// ControlReady/DataReady/NydusReady condition. Nydus is deferred by default and
+// any nydus error is intentionally not returned unless NydusEnabled is true.
 func (c *Controller) ensureSeed(cluster *provv1.Cluster, hc helmop.Cluster) (controlErr, dataErr, nydusErr error) {
 	if hc.SchedulerClusterID == 0 {
 		c.event(cluster, corev1.EventTypeWarning, "SchedulerClusterIDMissing",
@@ -25,8 +27,14 @@ func (c *Controller) ensureSeed(cluster *provv1.Cluster, hc helmop.Cluster) (con
 
 	controlErr = c.applyHelmOp(cluster, helmop.Control(hc))
 	dataErr = c.applyHelmOp(cluster, helmop.Data(hc))
-	nydusErr = c.applyHelmOp(cluster, helmop.Nydus(hc))
-	return controlErr, dataErr, nydusErr
+	if c.opts.NydusEnabled {
+		nydusErr = c.applyHelmOp(cluster, helmop.Nydus(hc))
+		return controlErr, dataErr, nydusErr
+	}
+	if err := c.deleteHelmOp(cluster, helmop.NydusName(cluster.Name)); err != nil {
+		c.event(cluster, corev1.EventTypeWarning, "NydusCleanupFailed", err.Error())
+	}
+	return controlErr, dataErr, nil
 }
 
 // deleteSeed removes all seed releases. The scheduler-cluster-id annotation is

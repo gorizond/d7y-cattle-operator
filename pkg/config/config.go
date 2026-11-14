@@ -17,6 +17,8 @@ import (
 // Defaults shared with the Helm chart.
 const (
 	DefaultMTLSSecretName                = "dragonfly-p2p-mtls"
+	DefaultManagerGRPCPort               = 443
+	DefaultNydusEnabled                  = false
 	DefaultDragonflyChartName            = "dragonfly"
 	DefaultDragonflyChartVersion         = "1.10.1"
 	DefaultExtrasChartRepo               = "https://gorizond.github.io/d7y-cattle-operator"
@@ -39,6 +41,7 @@ var chartVersionPattern = regexp.MustCompile(`^v?[0-9]+\.[0-9]+\.[0-9]+(?:[-+][0
 // Config is the operator configuration derived from flags and environment variables.
 type Config struct {
 	ManagerGRPCDomain           string
+	ManagerGRPCPort             int
 	ManagerAPIURL               string
 	NginxStaticURL              string
 	MTLSSecretName              string
@@ -55,6 +58,7 @@ type Config struct {
 	ExtrasIngressRESTEnabled    bool
 	ExtrasIngressTLSSecret      string
 	ExtrasTraefikTransport      bool
+	NydusEnabled                bool
 	Namespace                   string
 	WebhookPort                 int
 	WebhookCertDir              string
@@ -82,10 +86,19 @@ func Load(args []string) (*Config, error) {
 	if err != nil {
 		return nil, err
 	}
+	defaultManagerGRPCPort, err := envInt("MANAGER_GRPC_PORT", DefaultManagerGRPCPort)
+	if err != nil {
+		return nil, err
+	}
+	defaultNydusEnabled, err := envBool("NYDUS_ENABLED", DefaultNydusEnabled)
+	if err != nil {
+		return nil, err
+	}
 
 	cfg := &Config{}
 	fs := flag.NewFlagSet("d7y-cattle-operator", flag.ContinueOnError)
 	fs.StringVar(&cfg.ManagerGRPCDomain, "manager-grpc-domain", envOr("MANAGER_GRPC_DOMAIN", ""), "public hostname of the manager gRPC endpoint (no scheme)")
+	fs.IntVar(&cfg.ManagerGRPCPort, "manager-grpc-port", defaultManagerGRPCPort, "public port of the manager gRPC endpoint")
 	fs.StringVar(&cfg.ManagerAPIURL, "manager-api-url", envOr("MANAGER_API_URL", ""), "public HTTPS URL of the manager REST API")
 	fs.StringVar(&cfg.NginxStaticURL, "nginx-static-url", envOr("NGINX_STATIC_URL", ""), "base URL of the static asset server (http or https)")
 	fs.StringVar(&cfg.MTLSSecretName, "mtls-secret-name", envOr("MTLS_SECRET_NAME", DefaultMTLSSecretName), "name of the mTLS Secret")
@@ -102,6 +115,7 @@ func Load(args []string) (*Config, error) {
 	fs.BoolVar(&cfg.ExtrasIngressRESTEnabled, "extras-ingress-rest-enabled", defaultRESTEnabled, "render the extras REST Ingress")
 	fs.StringVar(&cfg.ExtrasIngressTLSSecret, "extras-ingress-tls-secret", envOr("EXTRAS_INGRESS_TLS_SECRET", DefaultExtrasIngressTLSSecret), "extras Ingress TLS Secret name (empty disables TLS)")
 	fs.BoolVar(&cfg.ExtrasTraefikTransport, "extras-traefik-servers-transport-enabled", defaultTraefikTransport, "render the Traefik ServersTransport for the REST Ingress")
+	fs.BoolVar(&cfg.NydusEnabled, "nydus-enabled", defaultNydusEnabled, "deploy the nydus-snapshotter HelmOp")
 	fs.StringVar(&cfg.Namespace, "namespace", envOr("POD_NAMESPACE", DefaultNamespace), "namespace where the operator stores its Secret")
 	fs.IntVar(&cfg.WebhookPort, "webhook-port", defaultWebhookPort, "admission webhook port")
 	fs.StringVar(&cfg.WebhookCertDir, "webhook-cert-dir", envOr("WEBHOOK_CERT_DIR", DefaultWebhookCertDir), "directory containing the webhook tls.crt and tls.key")
@@ -139,6 +153,9 @@ func (c *Config) Validate() error {
 		add("--nginx-static-url is required")
 	} else if err := validateURL(c.NginxStaticURL, "http", "https"); err != nil {
 		add("--nginx-static-url: %v", err)
+	}
+	if c.ManagerGRPCPort < 1 || c.ManagerGRPCPort > 65535 {
+		add("--manager-grpc-port: %d is outside 1-65535", c.ManagerGRPCPort)
 	}
 	if c.MTLSSecretName == "" {
 		add("--mtls-secret-name is required")

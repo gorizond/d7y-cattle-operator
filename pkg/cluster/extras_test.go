@@ -70,6 +70,7 @@ func TestReconcileManagerExtrasIngress(t *testing.T) {
 
 func TestReconcileSeedOnlyExtrasVPA(t *testing.T) {
 	controller, store, _ := newTestController(t)
+	controller.opts.NydusEnabled = true
 	cluster := testSeedCluster("42")
 
 	if _, err := controller.reconcile("", cluster); err != nil {
