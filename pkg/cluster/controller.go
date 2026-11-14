@@ -253,17 +253,12 @@ func (c *Controller) ensureMTLSSecret(cluster *provv1.Cluster) error {
 	for key, value := range apply.Labels(cluster.Namespace, cluster.Name) {
 		source.Labels[key] = value
 	}
+	if len(mtls.Data["ca.crt"]) == 0 {
+		err := fmt.Errorf("mTLS Secret %s/%s has no ca.crt", c.opts.OperatorNamespace, c.opts.MTLSSecretName)
+		c.event(cluster, corev1.EventTypeWarning, "MTLSSecretUnavailable", err.Error())
+		return err
+	}
 	if _, err := apply.ReplicateSecret(source, cluster.Namespace, c.secrets); err != nil {
-		c.event(cluster, corev1.EventTypeWarning, "SecretReplicationFailed", err.Error())
-		return err
-	}
-
-	caSecret, err := apply.CAOnlySecret(source, apply.CAOnlySecretName(c.opts.MTLSSecretName))
-	if err != nil {
-		c.event(cluster, corev1.EventTypeWarning, "SecretReplicationFailed", err.Error())
-		return err
-	}
-	if _, err := apply.ReplicateSecret(caSecret, cluster.Namespace, c.secrets); err != nil {
 		c.event(cluster, corev1.EventTypeWarning, "SecretReplicationFailed", err.Error())
 		return err
 	}
@@ -271,7 +266,7 @@ func (c *Controller) ensureMTLSSecret(cluster *provv1.Cluster) error {
 }
 
 func (c *Controller) helmopCluster(cluster *provv1.Cluster) helmop.Cluster {
-	return helmop.Cluster{
+	hc := helmop.Cluster{
 		Name:               cluster.Name,
 		Namespace:          cluster.Namespace,
 		MTLSSecretName:     c.opts.MTLSSecretName,
@@ -284,6 +279,14 @@ func (c *Controller) helmopCluster(cluster *provv1.Cluster) helmop.Cluster {
 		SeedClientReplicas: helmop.ReplicasOrOne(AnnotationSeedClientReplicas, cluster.Annotations[AnnotationSeedClientReplicas]),
 		Labels:             apply.Labels(cluster.Namespace, cluster.Name),
 	}
+	// The extras chart renders the CA-only Secret from this PEM. Readiness and
+	// missing ca.crt errors are reported by ensureMTLSSecret.
+	if c.secrets != nil {
+		if mtls, err := c.secrets.Get(c.opts.OperatorNamespace, c.opts.MTLSSecretName, metav1.GetOptions{}); err == nil {
+			hc.MTLSCA = string(mtls.Data["ca.crt"])
+		}
+	}
+	return hc
 }
 
 // schedulerClusterID returns the annotation value as the integer the Dragonfly

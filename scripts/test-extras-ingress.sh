@@ -72,7 +72,15 @@ if grep -q 'serversTransport:' "$tmp/traefik-no-transport.yaml"; then fail "Serv
 
 # Traefik gRPC terminates TLS at the edge and proxies plaintext h2c to the
 # manager. The nginx gRPC Ingress must not be rendered in Traefik mode.
+cat >"$tmp/mtls-ca.yaml" <<'YAML'
+ingress:
+  mtlsCA: |
+    -----BEGIN CERTIFICATE-----
+    ZmFrZQ==
+    -----END CERTIFICATE-----
+YAML
 helm template e "$extras" --namespace dragonfly-system \
+  -f "$tmp/mtls-ca.yaml" \
   --set ingress.enabled=true \
   --set ingress.controller=traefik \
   --set ingress.className=traefik \
@@ -103,6 +111,15 @@ grep -q 'clientAuthType: RequireAndVerifyClientCert' "$tmp/traefik-grpc.yaml" ||
 grep -q 'secretNames:' "$tmp/traefik-grpc.yaml" || fail "Traefik gRPC TLSOption CA reference missing"
 grep -q -- '- "dragonfly-p2p-mtls-ca"' "$tmp/traefik-grpc.yaml" || fail "Traefik gRPC TLSOption CA Secret missing"
 grep -q 'minVersion: VersionTLS13' "$tmp/traefik-grpc.yaml" || fail "Traefik gRPC TLSOption minVersion missing"
+if [ "$(grep -c '^kind: Secret$' "$tmp/traefik-grpc.yaml")" -ne 1 ]; then
+  fail "Traefik gRPC must render exactly one CA Secret"
+fi
+grep -q 'name: "dragonfly-p2p-mtls-ca"' "$tmp/traefik-grpc.yaml" || fail "Traefik gRPC CA Secret missing"
+ca_b64=$(grep 'tls.ca:' "$tmp/traefik-grpc.yaml" | awk '{print $2}' | tr -d '"')
+if [ -z "$ca_b64" ]; then fail "Traefik gRPC CA Secret has no tls.ca"; fi
+if [ "$(printf '%s' "$ca_b64" | base64 -d | head -n 1)" != "-----BEGIN CERTIFICATE-----" ]; then
+  fail "Traefik gRPC tls.ca is not the fake PEM"
+fi
 if grep -q '^kind: Ingress$' "$tmp/traefik-grpc.yaml"; then fail "Traefik gRPC rendered a plain Ingress"; fi
 if grep -q 'nginx.ingress.kubernetes.io' "$tmp/traefik-grpc.yaml"; then fail "Traefik gRPC output contains nginx annotations"; fi
 

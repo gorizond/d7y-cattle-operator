@@ -2,8 +2,8 @@ apiVersion: v2
 name: dragonfly-extras
 description: Manager Ingresses and optional VPAs for the Dragonfly P2P stack
 type: application
-version: 0.1.3
-appVersion: "0.1.3"
+version: 0.1.4
+appVersion: "0.1.4"
 kubeVersion: ">=1.28.0-0"
 home: https://github.com/gorizond/d7y-cattle-operator
 sources:

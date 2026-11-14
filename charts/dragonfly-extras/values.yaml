@@ -28,6 +28,9 @@ ingress:
   # Secret in this namespace that holds ca.crt for nginx client certificate
   # verification.
   mtlsSecret: dragonfly-p2p-mtls
+  # Internal CA PEM. When non-empty together with mtlsCASecret, the chart
+  # renders an Opaque Secret with key tls.ca for the Traefik TLSOption.
+  mtlsCA: ""
   # CA-only Secret (key tls.ca) used by the Traefik TLSOption clientAuth.
   mtlsCASecret: dragonfly-p2p-mtls-ca
 
