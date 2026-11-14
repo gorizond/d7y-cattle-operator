@@ -74,20 +74,3 @@ func logVolume() map[string]any {
 func logVolumeMount(path string) map[string]any {
 	return map[string]any{"name": "logs", "mountPath": path}
 }
-
-func publicTLSVolume(secretName string) map[string]any {
-	return map[string]any{
-		"name": "public-tls",
-		"secret": map[string]any{
-			"secretName": secretName,
-		},
-	}
-}
-
-func publicTLSVolumeMount() map[string]any {
-	return map[string]any{
-		"name":      "public-tls",
-		"mountPath": PublicTLSDir,
-		"readOnly":  true,
-	}
-}

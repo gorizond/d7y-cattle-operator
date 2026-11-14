@@ -1,9 +1,9 @@
 # Manager Ingresses (gRPC with client mTLS + REST over HTTPS).
 ingress:
   enabled: false
-  # nginx keeps the existing auth-tls/backend-protocol behavior. traefik uses
-  # an IngressRouteTCP with TLS passthrough for gRPC and a CRD ServersTransport
-  # for the HTTPS REST backend.
+  # nginx keeps the auth-tls/backend-protocol behavior with the manager's
+  # plaintext h2c gRPC backend. traefik terminates gRPC TLS at the edge (client
+  # mTLS) and uses a CRD ServersTransport for the HTTPS REST backend.
   controller: nginx
   className: ""
   grpc:
@@ -20,7 +20,7 @@ ingress:
     enabled: false
     secretName: ""
   traefik:
-    # Entry points used by the REST IngressRoute and gRPC IngressRouteTCP.
+    # Entry points used by the REST and gRPC IngressRoutes.
     entryPoints: ["websecure"]
     serversTransport:
       enabled: true
@@ -28,6 +28,8 @@ ingress:
   # Secret in this namespace that holds ca.crt for nginx client certificate
   # verification.
   mtlsSecret: dragonfly-p2p-mtls
+  # CA-only Secret (key tls.ca) used by the Traefik TLSOption clientAuth.
+  mtlsCASecret: dragonfly-p2p-mtls-ca
 
 # VerticalPodAutoscalers in recommendation-only mode. Rendered only when the
 # autoscaling.k8s.io/v1 CRD is installed and vpa.enabled is true.

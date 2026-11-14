@@ -23,10 +23,12 @@ func TestExtrasHelmOp(t *testing.T) {
 	if len(op.Spec.DependsOn) != 1 || op.Spec.DependsOn[0].Name != "c1-manager" {
 		t.Errorf("dependsOn = %+v", op.Spec.DependsOn)
 	}
-	if len(op.Spec.DownstreamResources) != 0 {
-		t.Errorf("downstreamResources = %+v, want none", op.Spec.DownstreamResources)
+	if len(op.Spec.DownstreamResources) != 1 ||
+		op.Spec.DownstreamResources[0].Kind != "Secret" ||
+		op.Spec.DownstreamResources[0].Name != "dragonfly-p2p-mtls-ca" {
+		t.Errorf("downstreamResources = %+v, want the CA-only Secret", op.Spec.DownstreamResources)
 	}
-	if op.Spec.Helm.Chart != "dragonfly-extras" || op.Spec.Helm.Version != "0.1.2" {
+	if op.Spec.Helm.Chart != "dragonfly-extras" || op.Spec.Helm.Version != "0.1.3" {
 		t.Errorf("chart = %s %s", op.Spec.Helm.Chart, op.Spec.Helm.Version)
 	}
 
@@ -54,6 +56,9 @@ func TestExtrasHelmOp(t *testing.T) {
 	}
 	if got := valueAt(t, values, "ingress", "mtlsSecret"); got != "dragonfly-p2p-mtls" {
 		t.Errorf("ingress.mtlsSecret = %v", got)
+	}
+	if got := valueAt(t, values, "ingress", "mtlsCASecret"); got != "dragonfly-p2p-mtls-ca" {
+		t.Errorf("ingress.mtlsCASecret = %v", got)
 	}
 	if got := valueAt(t, values, "ingress", "controller"); got != "nginx" {
 		t.Errorf("ingress.controller = %v", got)

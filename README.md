@@ -3,10 +3,9 @@
 Kubernetes operator that runs [Dragonfly](https://d7y.io) P2P on Rancher-managed
 RKE2 clusters.
 
-**Status**: MR-7 (operator-managed gRPC ingress for nginx and Traefik and an
-optional public TLS Secret for the manager gRPC server; MR-6 traefik-compatible
-extras REST Ingress and per-Ingress toggles). The Cluster controller, role
-resolution, KeyDB, manager, seed role, manager registration,
+**Status**: MR-8 (edge TLS termination for gRPC with h2c backends; MR-7
+operator-managed gRPC ingress for nginx and Traefik). The Cluster controller,
+role resolution, KeyDB, manager, seed role, manager registration,
 `dragonfly-extras`, the `p2p-static` chart, and the admission webhook are
 implemented. Live envtest/pilot verification remains deferred.
 
@@ -15,7 +14,9 @@ implemented. Live envtest/pilot verification remains deferred.
 - Parses and validates the operator configuration from flags/environment variables.
 - Ensures a single mTLS CA and leaf certificate Secret (`dragonfly-p2p-mtls` by
   default) in the operator namespace. The Secret is created once and never
-  overwritten, and is replicated into each Cluster namespace.
+  overwritten, and is replicated into each Cluster namespace together with a
+  CA-only `dragonfly-p2p-mtls-ca` Secret (key `tls.ca`) for edge client
+  verification.
 - Reconciles `provisioning.cattle.io/v1` Clusters selected by the
   `p2p-dragonfly-io: "true"` label.
 - Deploys KeyDB and the Dragonfly manager through Fleet HelmOps, without
@@ -82,7 +83,6 @@ not used until the p2p-static and registration MRs.
 | `manager.apiURL` | `MANAGER_API_URL` | Public manager REST API URL (`https://`) |
 | `nginx.staticURL` | `NGINX_STATIC_URL` | Base URL of the static asset server (`http` or `https`) |
 | `managerApiCredentialsSecret` | `MANAGER_API_CREDENTIALS_SECRET` | Secret with `username` and `password` keys for the manager API |
-| `manager.publicTLSSecret` | `MANAGER_PUBLIC_TLS_SECRET` | Optional Secret with `tls.crt`/`tls.key` for the manager gRPC server; empty keeps the internal mTLS certificate |
 | `dragonfly.chart.repo` | `DRAGONFLY_CHART_REPO` | Helm repository URL of the Dragonfly chart |
 | `extras.chart.repo` | `EXTRAS_CHART_REPO` | Helm repository URL of the dragonfly-extras chart |
 | `extras.chart.name` | `EXTRAS_CHART_NAME` | dragonfly-extras chart name |
@@ -96,9 +96,8 @@ not used until the p2p-static and registration MRs.
 
 Defaults: `mtlsSecretName=dragonfly-p2p-mtls`, `dragonfly.chart.name=dragonfly`,
 `dragonfly.chart.version=1.10.1`, `extras.chart.name=dragonfly-extras`,
-`extras.chart.version=0.1.2`, `extras.ingress.controller=nginx`,
+`extras.chart.version=0.1.3`, `extras.ingress.controller=nginx`,
 `extras.ingress.grpcEnabled=true`, `extras.ingress.restEnabled=true`,
-`manager.publicTLSSecret=""`,
 `webhook.port=9443`, `leaderElect=false`.
 
 ## Roles and HelmOps
@@ -167,7 +166,7 @@ security groups:
 | `4100` | seedClient upload | mTLS required; allow only cluster peers/scheduler |
 | `4101/4102/4103/4104` | seedClient proxy/metrics/health/stats | bind to `127.0.0.1`; do not expose |
 | `4105/4106` | seedClient storage TCP/QUIC | cluster network only |
-| `65003` | manager gRPC | mTLS required; public Ingress is allowed |
+| `65003` | manager gRPC | plaintext h2c behind the Ingress; edge TLS + client mTLS |
 | `8080` | manager REST | JWT required; public Ingress is allowed |
 
 Do not use `proxy.basicAuth` for peer authentication: chart 1.10.1 places it in
@@ -179,8 +178,8 @@ DaemonSets may run on the same node, seedClient ports are shifted to
 All releases target `dragonfly-system` and depend on each other through
 `spec.dependsOn`: control and nydus depend on KeyDB, data depends on control and
 KeyDB, manager depends on KeyDB, and extras depends on manager when Ingress is
-enabled. The mTLS Secret is copied into the Cluster namespace and delivered
-downstream through `spec.downstreamResources`.
+enabled. The mTLS Secret and its CA-only derivative are copied into the Cluster
+namespace and delivered downstream through `spec.downstreamResources`.
 
 ### Extras chart
 
@@ -190,8 +189,9 @@ HelmOp:
 
 - `ingress.enabled` is true only for the manager role. The per-Ingress toggles
   are `ingress.grpc.enabled` and `ingress.rest.enabled`; both default to `true`.
-- `ingress.controller=nginx` (default) keeps the existing behavior: gRPC uses
-  `GRPCS` with client mTLS verification from `dragonfly-p2p-mtls` and no SSL
+- `ingress.controller=nginx` (default) terminates gRPC TLS at the edge and
+  proxies plaintext h2c to the manager: gRPC uses `backend-protocol: GRPC` with
+  client certificate verification from `dragonfly-p2p-mtls` and no SSL
   redirect; REST uses `backend-protocol: HTTPS`.
 - `ingress.controller=traefik` renders a `traefik.io/v1alpha1` `IngressRoute`
   named `<release>-manager-api` for the REST backend (Traefik v3 ignores
@@ -200,11 +200,13 @@ HelmOp:
   `<release>-manager-rest` in the release namespace; that resource uses
   `insecureSkipVerify: true`. The REST Ingress is not rendered in Traefik mode,
   and no nginx annotations are added.
-- In Traefik mode the gRPC endpoint is an `IngressRouteTCP` named
+- In Traefik mode the gRPC endpoint is an `IngressRoute` named
   `<release>-manager-grpc` (CRD `traefik.io/v1alpha1`, entry point `websecure`)
-  with `HostSNI` matching `ingress.grpc.host` and TLS passthrough. gRPC mTLS
-  must reach the manager, so the manager presents the public certificate (see
-  below) and the internal CA remains the client CA. The nginx gRPC Ingress is
+  with `Host` matching `ingress.grpc.host` and an `h2c` backend. TLS uses
+  `ingress.tls.secretName` (the public Let's Encrypt Secret created directly on
+  the cluster) and the `<release>-manager-grpc` `TLSOption`, whose
+  `RequireAndVerifyClientCert` client auth reads the internal CA from the
+  CA-only `dragonfly-p2p-mtls-ca` Secret (`tls.ca`). The nginx gRPC Ingress is
   not rendered in Traefik mode; the REST IngressRoute is unchanged.
 - `ingress.tls.enabled` adds a TLS block using `ingress.tls.secretName`. The
   manager-only canary uses `dragonfly-p2p-mtls` for
@@ -220,23 +222,19 @@ HelmOp:
       restEnabled: true
       tlsSecret: dragonfly-p2p-mtls
   ```
-- `manager.publicTLSSecret` (operator value, `MANAGER_PUBLIC_TLS_SECRET`) points
-  at a Secret with a public `tls.crt`/`tls.key`, for example
-  `poligon-manager-public-tls` created directly on the cluster. When set, the
-  manager gRPC server serves that certificate while `manager.config.server.grpc.tls.caCert`
-  stays the internal `/etc/dragonfly/certs/ca.crt` client CA, and the Secret is
-  mounted read-only at `/etc/dragonfly/public-tls`. REST keeps the internal
-  certificate because Traefik terminates public TLS for REST. The Secret is not
-  managed by this repo (no cert-manager or Let's Encrypt chart/CRs); after
-  renewal, update the Secret and restart the manager to load the new
-  certificate.
+- The manager gRPC server stays plaintext on `:65003`; TLS and client mTLS are
+  enforced by the edge controller. The manager REST server keeps its internal
+  `/etc/dragonfly/certs` certificate because REST stays HTTPS between Traefik
+  and the manager. No cert-manager or Let's Encrypt resources are part of this
+  repo; the public TLS Secret is supplied directly on the cluster.
 - `vpa.enabled` is set from API discovery for `autoscaling.k8s.io/v1`; the
   chart additionally checks `Capabilities.APIVersions.Has`. Target names are
   `<cluster>-keydb`, `<cluster>-manager`, `<cluster>-control-scheduler`,
   `<cluster>-data-seed-client`, and `<cluster>-nydus-snapshotter`; each target
   is enabled only for its active role.
-- The chart creates no PVC and no Secrets. The operator RBAC remains limited to
-  Clusters, HelmOps, Secrets, and Events.
+- The chart creates no PVC and no Secrets; the operator creates and replicates
+  the mTLS and CA-only Secrets. The operator RBAC remains limited to Clusters,
+  HelmOps, Secrets, and Events.
 
 ## Cluster annotations
 
@@ -358,9 +356,10 @@ enabling the seed role on a production cluster.
 | MR-4b | CREATE-only admission webhook and userData injection | merged |
 | MR-5 | Status conditions, chart version guard, release workflow, docs | merged |
 | MR-6 | Traefik extras REST Ingress, per-Ingress toggles, manager-only canary | merged |
-| MR-7 | Operator-managed gRPC ingress (nginx and Traefik) and manager public TLS Secret | this change |
+| MR-7 | Operator-managed gRPC ingress (nginx and Traefik) | merged |
+| MR-8 | Edge TLS termination, h2c backend, and CA-only Secret for Traefik clientAuth | this change |
 
-Live envtest/pilot items remain deferred for the MR-7 follow-up list.
+Live envtest/pilot items remain deferred for the MR-8 follow-up list.
 
 ## Development
 

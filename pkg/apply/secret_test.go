@@ -111,3 +111,52 @@ func (f *fakeSecretStore) Update(secret *corev1.Secret) (*corev1.Secret, error) 
 	f.secrets[key] = secret.DeepCopy()
 	return secret.DeepCopy(), nil
 }
+
+func TestCAOnlySecret(t *testing.T) {
+	source := &corev1.Secret{
+		ObjectMeta: metav1.ObjectMeta{
+			Name:      "dragonfly-p2p-mtls",
+			Namespace: "dragonfly-system",
+			Labels:    map[string]string{"p2p": "enabled"},
+		},
+		Type: corev1.SecretTypeTLS,
+		Data: map[string][]byte{
+			"ca.crt":                []byte("ca"),
+			corev1.TLSCertKey:       []byte("cert"),
+			corev1.TLSPrivateKeyKey: []byte("key"),
+		},
+	}
+
+	secret, err := CAOnlySecret(source, CAOnlySecretName(source.Name))
+	if err != nil {
+		t.Fatalf("CAOnlySecret() error = %v", err)
+	}
+	if secret.Name != "dragonfly-p2p-mtls-ca" || secret.Namespace != "dragonfly-system" {
+		t.Errorf("name/namespace = %s/%s", secret.Name, secret.Namespace)
+	}
+	if secret.Type != corev1.SecretTypeOpaque {
+		t.Errorf("type = %q, want Opaque", secret.Type)
+	}
+	if string(secret.Data[CACertKey]) != "ca" {
+		t.Errorf("tls.ca = %q, want ca", secret.Data[CACertKey])
+	}
+	if _, ok := secret.Data[corev1.TLSCertKey]; ok {
+		t.Error("CA-only Secret contains tls.crt")
+	}
+	if _, ok := secret.Data[corev1.TLSPrivateKeyKey]; ok {
+		t.Error("CA-only Secret contains tls.key")
+	}
+	if secret.Labels["p2p"] != "enabled" {
+		t.Errorf("labels = %v", secret.Labels)
+	}
+}
+
+func TestCAOnlySecretMissingCA(t *testing.T) {
+	source := &corev1.Secret{Data: map[string][]byte{"tls.crt": []byte("cert")}}
+	if _, err := CAOnlySecret(source, "ca"); err == nil {
+		t.Fatal("CAOnlySecret() error = nil, want an error")
+	}
+	if _, err := CAOnlySecret(nil, "ca"); err == nil {
+		t.Fatal("CAOnlySecret(nil) error = nil, want an error")
+	}
+}

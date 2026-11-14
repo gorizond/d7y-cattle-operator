@@ -1,0 +1,18 @@
+{{- $controller := .Values.ingress.controller | default "nginx" -}}
+{{- if and .Values.ingress.enabled .Values.ingress.grpc.enabled (eq $controller "traefik") (.Capabilities.APIVersions.Has "traefik.io/v1alpha1") }}
+# Traefik TLSOption clientAuth reads the CA from tls.ca in the referenced
+# Secret. The operator derives that Secret from the internal mTLS CA.
+apiVersion: traefik.io/v1alpha1
+kind: TLSOption
+metadata:
+  name: {{ .Release.Name }}-manager-grpc
+  namespace: {{ .Release.Namespace }}
+  labels:
+    {{- include "dragonfly-extras.labels" . | nindent 4 }}
+spec:
+  minVersion: VersionTLS13
+  clientAuth:
+    clientAuthType: RequireAndVerifyClientCert
+    secretNames:
+      - {{ .Values.ingress.mtlsCASecret | quote }}
+{{- end }}
