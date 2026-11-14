@@ -1,0 +1,11 @@
+email: i@negash.ru
+server: https://acme-v02.api.letsencrypt.org/directory
+ingressClassName: traefik
+secretName: poligon-manager-public-tls
+dnsNames:
+  - manager-api.koldun.negash.ru
+  - manager-grpc.koldun.negash.ru
+issuerName: letsencrypt-prod
+accountSecretName: letsencrypt-prod-account-key
+privateKeyAlgorithm: ECDSA
+privateKeySize: 256

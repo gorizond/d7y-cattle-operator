@@ -1,0 +1,23 @@
+apiVersion: fleet.cattle.io/v1alpha1
+kind: HelmOp
+metadata:
+  name: poligon-letsencrypt
+  namespace: fleet-default
+spec:
+  defaultNamespace: dragonfly-system
+  dependsOn:
+    - name: poligon-cert-manager
+  helm:
+    repo: https://raw.githubusercontent.com/gorizond/d7y-cattle-operator/gh-pages
+    chart: d7y-letsencrypt
+    version: 0.1.0
+    values:
+      email: i@negash.ru
+      server: https://acme-v02.api.letsencrypt.org/directory
+      ingressClassName: traefik
+      secretName: poligon-manager-public-tls
+      dnsNames:
+        - manager-api.koldun.negash.ru
+        - manager-grpc.koldun.negash.ru
+  targets:
+    - clusterName: poligon
