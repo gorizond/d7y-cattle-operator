@@ -14,27 +14,54 @@ var VPAGVR = schema.GroupVersionResource{
 // ExtrasOptions selects which extras resources the chart renders.
 type ExtrasOptions struct {
 	IngressEnabled bool
-	VPAEnabled     bool
-	Manager        bool
-	Seed           bool
+	// IngressController is "nginx" or "traefik"; empty defaults to nginx.
+	IngressController string
+	IngressClassName  string
+	GRPCEnabled       bool
+	RESTEnabled       bool
+	TLSSecret         string
+	// TraefikServersTransportEnabled renders the Traefik ServersTransport and
+	// its REST Ingress annotation.
+	TraefikServersTransportEnabled bool
+	VPAEnabled                     bool
+	Manager                        bool
+	Seed                           bool
 }
 
 // Extras returns the dragonfly-extras HelmOp. The Ingress and
 // VerticalPodAutoscaler objects are rendered by the chart; the operator only
 // creates this HelmOp and needs no Ingress/VPA RBAC.
 func Extras(c Cluster, opts ExtrasOptions) *fleetv1alpha1.HelmOp {
+	controller := opts.IngressController
+	if controller == "" {
+		controller = "nginx"
+	}
 	values := map[string]any{
 		"ingress": map[string]any{
-			"enabled": opts.IngressEnabled,
+			"enabled":    opts.IngressEnabled,
+			"controller": controller,
+			"className":  opts.IngressClassName,
 			"grpc": map[string]any{
+				"enabled": opts.GRPCEnabled,
 				"host":    c.ManagerGRPCDomain,
 				"service": ManagerServiceName(c.Name),
 				"port":    ManagerGRPCPort,
 			},
 			"rest": map[string]any{
+				"enabled": opts.RESTEnabled,
 				"host":    c.ManagerAPIHost,
 				"service": ManagerServiceName(c.Name),
 				"port":    ManagerRESTPort,
+			},
+			"tls": map[string]any{
+				"enabled":    opts.TLSSecret != "",
+				"secretName": opts.TLSSecret,
+			},
+			"traefik": map[string]any{
+				"serversTransport": map[string]any{
+					"enabled":            opts.TraefikServersTransportEnabled,
+					"insecureSkipVerify": true,
+				},
 			},
 			"mtlsSecret": c.MTLSSecretName,
 		},

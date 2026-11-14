@@ -16,16 +16,22 @@ import (
 
 // Defaults shared with the Helm chart.
 const (
-	DefaultMTLSSecretName        = "dragonfly-p2p-mtls"
-	DefaultDragonflyChartName    = "dragonfly"
-	DefaultDragonflyChartVersion = "1.10.1"
-	DefaultExtrasChartRepo       = "https://gorizond.github.io/d7y-cattle-operator"
-	DefaultExtrasChartName       = "dragonfly-extras"
-	DefaultExtrasChartVersion    = "0.1.0"
-	DefaultNamespace             = "dragonfly-system"
-	DefaultWebhookPort           = 9443
-	DefaultWebhookCertDir        = "/etc/webhook/certs"
-	DefaultWebhookServiceName    = "d7y-cattle-operator-webhook"
+	DefaultMTLSSecretName                = "dragonfly-p2p-mtls"
+	DefaultDragonflyChartName            = "dragonfly"
+	DefaultDragonflyChartVersion         = "1.10.1"
+	DefaultExtrasChartRepo               = "https://gorizond.github.io/d7y-cattle-operator"
+	DefaultExtrasChartName               = "dragonfly-extras"
+	DefaultExtrasChartVersion            = "0.1.0"
+	DefaultExtrasIngressController       = "nginx"
+	DefaultExtrasIngressClassName        = ""
+	DefaultExtrasIngressGRPCEnabled      = true
+	DefaultExtrasIngressRESTEnabled      = true
+	DefaultExtrasIngressTLSSecret        = ""
+	DefaultExtrasTraefikTransportEnabled = true
+	DefaultNamespace                     = "dragonfly-system"
+	DefaultWebhookPort                   = 9443
+	DefaultWebhookCertDir                = "/etc/webhook/certs"
+	DefaultWebhookServiceName            = "d7y-cattle-operator-webhook"
 )
 
 var chartVersionPattern = regexp.MustCompile(`^v?[0-9]+\.[0-9]+\.[0-9]+(?:[-+][0-9A-Za-z.-]+)?$`)
@@ -43,6 +49,12 @@ type Config struct {
 	ExtrasChartRepo             string
 	ExtrasChartName             string
 	ExtrasChartVersion          string
+	ExtrasIngressController     string
+	ExtrasIngressClassName      string
+	ExtrasIngressGRPCEnabled    bool
+	ExtrasIngressRESTEnabled    bool
+	ExtrasIngressTLSSecret      string
+	ExtrasTraefikTransport      bool
 	Namespace                   string
 	WebhookPort                 int
 	WebhookCertDir              string
@@ -55,6 +67,18 @@ type Config struct {
 // Each flag falls back to its environment variable when the flag is not set.
 func Load(args []string) (*Config, error) {
 	defaultWebhookPort, err := envInt("WEBHOOK_PORT", DefaultWebhookPort)
+	if err != nil {
+		return nil, err
+	}
+	defaultGRPCEnabled, err := envBool("EXTRAS_INGRESS_GRPC_ENABLED", DefaultExtrasIngressGRPCEnabled)
+	if err != nil {
+		return nil, err
+	}
+	defaultRESTEnabled, err := envBool("EXTRAS_INGRESS_REST_ENABLED", DefaultExtrasIngressRESTEnabled)
+	if err != nil {
+		return nil, err
+	}
+	defaultTraefikTransport, err := envBool("EXTRAS_TRAEFIK_SERVERS_TRANSPORT_ENABLED", DefaultExtrasTraefikTransportEnabled)
 	if err != nil {
 		return nil, err
 	}
@@ -72,6 +96,12 @@ func Load(args []string) (*Config, error) {
 	fs.StringVar(&cfg.ExtrasChartRepo, "extras-chart-repo", envOr("EXTRAS_CHART_REPO", DefaultExtrasChartRepo), "Helm repository URL of the dragonfly-extras chart")
 	fs.StringVar(&cfg.ExtrasChartName, "extras-chart-name", envOr("EXTRAS_CHART_NAME", DefaultExtrasChartName), "dragonfly-extras chart name")
 	fs.StringVar(&cfg.ExtrasChartVersion, "extras-chart-version", envOr("EXTRAS_CHART_VERSION", DefaultExtrasChartVersion), "dragonfly-extras chart version")
+	fs.StringVar(&cfg.ExtrasIngressController, "extras-ingress-controller", envOr("EXTRAS_INGRESS_CONTROLLER", DefaultExtrasIngressController), "extras Ingress controller: nginx or traefik")
+	fs.StringVar(&cfg.ExtrasIngressClassName, "extras-ingress-class-name", envOr("EXTRAS_INGRESS_CLASS_NAME", DefaultExtrasIngressClassName), "extras Ingress class name (empty uses the cluster default)")
+	fs.BoolVar(&cfg.ExtrasIngressGRPCEnabled, "extras-ingress-grpc-enabled", defaultGRPCEnabled, "render the extras gRPC Ingress")
+	fs.BoolVar(&cfg.ExtrasIngressRESTEnabled, "extras-ingress-rest-enabled", defaultRESTEnabled, "render the extras REST Ingress")
+	fs.StringVar(&cfg.ExtrasIngressTLSSecret, "extras-ingress-tls-secret", envOr("EXTRAS_INGRESS_TLS_SECRET", DefaultExtrasIngressTLSSecret), "extras Ingress TLS Secret name (empty disables TLS)")
+	fs.BoolVar(&cfg.ExtrasTraefikTransport, "extras-traefik-servers-transport-enabled", defaultTraefikTransport, "render the Traefik ServersTransport for the REST Ingress")
 	fs.StringVar(&cfg.Namespace, "namespace", envOr("POD_NAMESPACE", DefaultNamespace), "namespace where the operator stores its Secret")
 	fs.IntVar(&cfg.WebhookPort, "webhook-port", defaultWebhookPort, "admission webhook port")
 	fs.StringVar(&cfg.WebhookCertDir, "webhook-cert-dir", envOr("WEBHOOK_CERT_DIR", DefaultWebhookCertDir), "directory containing the webhook tls.crt and tls.key")
@@ -146,6 +176,21 @@ func (c *Config) Validate() error {
 	if !chartVersionPattern.MatchString(c.ExtrasChartVersion) {
 		add("--extras-chart-version: %q is not a valid chart version", c.ExtrasChartVersion)
 	}
+	switch c.ExtrasIngressController {
+	case "nginx", "traefik":
+	default:
+		add("--extras-ingress-controller: must be nginx or traefik")
+	}
+	if c.ExtrasIngressClassName != "" {
+		if msgs := validation.IsDNS1123Subdomain(c.ExtrasIngressClassName); len(msgs) > 0 {
+			add("--extras-ingress-class-name: %s", strings.Join(msgs, "; "))
+		}
+	}
+	if c.ExtrasIngressTLSSecret != "" {
+		if msgs := validation.IsDNS1123Subdomain(c.ExtrasIngressTLSSecret); len(msgs) > 0 {
+			add("--extras-ingress-tls-secret: %s", strings.Join(msgs, "; "))
+		}
+	}
 	if c.Namespace == "" {
 		add("--namespace is required")
 	} else if msgs := validation.IsDNS1123Label(c.Namespace); len(msgs) > 0 {
@@ -203,6 +248,18 @@ func envOr(key, fallback string) string {
 		return value
 	}
 	return fallback
+}
+
+func envBool(key string, fallback bool) (bool, error) {
+	raw := os.Getenv(key)
+	if raw == "" {
+		return fallback, nil
+	}
+	value, err := strconv.ParseBool(raw)
+	if err != nil {
+		return false, fmt.Errorf("environment variable %s: %w", key, err)
+	}
+	return value, nil
 }
 
 func envInt(key string, fallback int) (int, error) {

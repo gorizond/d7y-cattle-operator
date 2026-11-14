@@ -1,17 +1,29 @@
-{{- if .Values.ingress.enabled }}
+{{- $controller := .Values.ingress.controller | default "nginx" -}}
+{{- if and .Values.ingress.enabled .Values.ingress.grpc.enabled }}
 apiVersion: networking.k8s.io/v1
 kind: Ingress
 metadata:
   name: {{ .Release.Name }}-manager-grpc
   labels:
     {{- include "dragonfly-extras.labels" . | nindent 4 }}
+  {{- if eq $controller "nginx" }}
   annotations:
     nginx.ingress.kubernetes.io/backend-protocol: GRPCS
     nginx.ingress.kubernetes.io/auth-tls-verify-client: "on"
     nginx.ingress.kubernetes.io/auth-tls-secret: {{ .Values.ingress.mtlsSecret | quote }}
     nginx.ingress.kubernetes.io/auth-tls-verify-depth: "1"
     nginx.ingress.kubernetes.io/ssl-redirect: "false"
+  {{- end }}
 spec:
+  {{- with .Values.ingress.className }}
+  ingressClassName: {{ . | quote }}
+  {{- end }}
+  {{- if .Values.ingress.tls.enabled }}
+  tls:
+    - hosts:
+        - {{ .Values.ingress.grpc.host | quote }}
+      secretName: {{ .Values.ingress.tls.secretName | quote }}
+  {{- end }}
   rules:
     - host: {{ .Values.ingress.grpc.host | quote }}
       http:
@@ -24,15 +36,34 @@ spec:
                 port:
                   number: {{ .Values.ingress.grpc.port }}
 ---
+{{- end }}
+{{- if and .Values.ingress.enabled .Values.ingress.rest.enabled }}
 apiVersion: networking.k8s.io/v1
 kind: Ingress
 metadata:
   name: {{ .Release.Name }}-manager-api
   labels:
     {{- include "dragonfly-extras.labels" . | nindent 4 }}
+  {{- if eq $controller "nginx" }}
   annotations:
     nginx.ingress.kubernetes.io/backend-protocol: HTTPS
+  {{- else if eq $controller "traefik" }}
+  annotations:
+    traefik.ingress.kubernetes.io/service.serversscheme: https
+    {{- if .Values.ingress.traefik.serversTransport.enabled }}
+    traefik.ingress.kubernetes.io/service.serverstransport: {{ printf "%s-%s-manager-rest@kubernetescrd" .Release.Namespace .Release.Name | quote }}
+    {{- end }}
+  {{- end }}
 spec:
+  {{- with .Values.ingress.className }}
+  ingressClassName: {{ . | quote }}
+  {{- end }}
+  {{- if .Values.ingress.tls.enabled }}
+  tls:
+    - hosts:
+        - {{ .Values.ingress.rest.host | quote }}
+      secretName: {{ .Values.ingress.tls.secretName | quote }}
+  {{- end }}
   rules:
     - host: {{ .Values.ingress.rest.host | quote }}
       http:
@@ -44,4 +75,16 @@ spec:
                 name: {{ .Values.ingress.rest.service | quote }}
                 port:
                   number: {{ .Values.ingress.rest.port }}
+{{- end }}
+{{- if and .Values.ingress.enabled .Values.ingress.rest.enabled (eq $controller "traefik") .Values.ingress.traefik.serversTransport.enabled (.Capabilities.APIVersions.Has "traefik.io/v1alpha1") }}
+---
+apiVersion: traefik.io/v1alpha1
+kind: ServersTransport
+metadata:
+  name: {{ .Release.Name }}-manager-rest
+  namespace: {{ .Release.Namespace }}
+  labels:
+    {{- include "dragonfly-extras.labels" . | nindent 4 }}
+spec:
+  insecureSkipVerify: {{ .Values.ingress.traefik.serversTransport.insecureSkipVerify }}
 {{- end }}

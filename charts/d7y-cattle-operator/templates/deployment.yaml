@@ -50,6 +50,18 @@ spec:
               value: {{ .Values.extras.chart.name | quote }}
             - name: EXTRAS_CHART_VERSION
               value: {{ .Values.extras.chart.version | quote }}
+            - name: EXTRAS_INGRESS_CONTROLLER
+              value: {{ .Values.extras.ingress.controller | quote }}
+            - name: EXTRAS_INGRESS_CLASS_NAME
+              value: {{ .Values.extras.ingress.className | quote }}
+            - name: EXTRAS_INGRESS_GRPC_ENABLED
+              value: {{ .Values.extras.ingress.grpcEnabled | quote }}
+            - name: EXTRAS_INGRESS_REST_ENABLED
+              value: {{ .Values.extras.ingress.restEnabled | quote }}
+            - name: EXTRAS_INGRESS_TLS_SECRET
+              value: {{ .Values.extras.ingress.tlsSecret | quote }}
+            - name: EXTRAS_TRAEFIK_SERVERS_TRANSPORT_ENABLED
+              value: {{ .Values.extras.ingress.traefikServersTransportEnabled | quote }}
             - name: POD_NAMESPACE
               valueFrom:
                 fieldRef:

@@ -4,10 +4,14 @@ import "testing"
 
 func TestExtrasHelmOp(t *testing.T) {
 	op := Extras(testCluster(), ExtrasOptions{
-		IngressEnabled: true,
-		VPAEnabled:     true,
-		Manager:        true,
-		Seed:           true,
+		IngressEnabled:                 true,
+		IngressController:              "nginx",
+		GRPCEnabled:                    true,
+		RESTEnabled:                    true,
+		TraefikServersTransportEnabled: true,
+		VPAEnabled:                     true,
+		Manager:                        true,
+		Seed:                           true,
 	})
 
 	if op.Name != "c1-extras" || op.Namespace != "fleet-default" {
@@ -50,6 +54,30 @@ func TestExtrasHelmOp(t *testing.T) {
 	}
 	if got := valueAt(t, values, "ingress", "mtlsSecret"); got != "dragonfly-p2p-mtls" {
 		t.Errorf("ingress.mtlsSecret = %v", got)
+	}
+	if got := valueAt(t, values, "ingress", "controller"); got != "nginx" {
+		t.Errorf("ingress.controller = %v", got)
+	}
+	if got := valueAt(t, values, "ingress", "className"); got != "" {
+		t.Errorf("ingress.className = %v", got)
+	}
+	if got := valueAt(t, values, "ingress", "grpc", "enabled"); got != true {
+		t.Errorf("ingress.grpc.enabled = %v", got)
+	}
+	if got := valueAt(t, values, "ingress", "rest", "enabled"); got != true {
+		t.Errorf("ingress.rest.enabled = %v", got)
+	}
+	if got := valueAt(t, values, "ingress", "tls", "enabled"); got != false {
+		t.Errorf("ingress.tls.enabled = %v", got)
+	}
+	if got := valueAt(t, values, "ingress", "tls", "secretName"); got != "" {
+		t.Errorf("ingress.tls.secretName = %v", got)
+	}
+	if got := valueAt(t, values, "ingress", "traefik", "serversTransport", "enabled"); got != true {
+		t.Errorf("traefik ServersTransport enabled = %v", got)
+	}
+	if got := valueAt(t, values, "ingress", "traefik", "serversTransport", "insecureSkipVerify"); got != true {
+		t.Errorf("traefik insecureSkipVerify = %v", got)
 	}
 
 	if got := valueAt(t, values, "vpa", "enabled"); got != true {
@@ -112,5 +140,41 @@ func TestExtrasVPADisabled(t *testing.T) {
 	op := Extras(testCluster(), ExtrasOptions{IngressEnabled: true, Manager: true})
 	if got := valueAt(t, op.Spec.Helm.Values.Data, "vpa", "enabled"); got != false {
 		t.Errorf("vpa.enabled = %v", got)
+	}
+}
+
+func TestExtrasTraefikManagerOnly(t *testing.T) {
+	op := Extras(testCluster(), ExtrasOptions{
+		IngressEnabled:                 true,
+		IngressController:              "traefik",
+		IngressClassName:               "traefik",
+		GRPCEnabled:                    false,
+		RESTEnabled:                    true,
+		TLSSecret:                      "dragonfly-p2p-mtls",
+		TraefikServersTransportEnabled: true,
+		Manager:                        true,
+	})
+
+	values := op.Spec.Helm.Values.Data
+	if got := valueAt(t, values, "ingress", "controller"); got != "traefik" {
+		t.Errorf("ingress.controller = %v", got)
+	}
+	if got := valueAt(t, values, "ingress", "className"); got != "traefik" {
+		t.Errorf("ingress.className = %v", got)
+	}
+	if got := valueAt(t, values, "ingress", "grpc", "enabled"); got != false {
+		t.Errorf("ingress.grpc.enabled = %v", got)
+	}
+	if got := valueAt(t, values, "ingress", "rest", "enabled"); got != true {
+		t.Errorf("ingress.rest.enabled = %v", got)
+	}
+	if got := valueAt(t, values, "ingress", "tls", "enabled"); got != true {
+		t.Errorf("ingress.tls.enabled = %v", got)
+	}
+	if got := valueAt(t, values, "ingress", "tls", "secretName"); got != "dragonfly-p2p-mtls" {
+		t.Errorf("ingress.tls.secretName = %v", got)
+	}
+	if got := valueAt(t, values, "ingress", "traefik", "serversTransport", "enabled"); got != true {
+		t.Errorf("traefik ServersTransport enabled = %v", got)
 	}
 }
