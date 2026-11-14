@@ -2,6 +2,20 @@ apiVersion: v1
 entries:
   d7y-cattle-operator:
   - apiVersion: v2
+    appVersion: 0.1.9
+    created: "2026-11-14T23:12:26.75566636Z"
+    description: Dragonfly P2P operator for Rancher-managed RKE2 clusters
+    digest: 8b3113b61939c9278280c9d325b4c5393acaa29d6b93c3a0eb4e174f86df542f
+    home: https://github.com/gorizond/d7y-cattle-operator
+    kubeVersion: '>=1.28.0-0'
+    name: d7y-cattle-operator
+    sources:
+    - https://github.com/gorizond/d7y-cattle-operator
+    type: application
+    urls:
+    - https://github.com/gorizond/d7y-cattle-operator/releases/download/d7y-cattle-operator-0.1.9/d7y-cattle-operator-0.1.9.tgz
+    version: 0.1.9
+  - apiVersion: v2
     appVersion: 0.1.8
     created: "2026-11-14T22:43:00.116471958Z"
     description: Dragonfly P2P operator for Rancher-managed RKE2 clusters
@@ -213,4 +227,4 @@ entries:
     urls:
     - https://github.com/gorizond/d7y-cattle-operator/releases/download/p2p-static-0.1.0/p2p-static-0.1.0.tgz
     version: 0.1.0
-generated: "2026-11-14T22:43:00.454226638Z"
+generated: "2026-11-14T23:12:27.18946657Z"
