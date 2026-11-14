@@ -440,6 +440,74 @@ func TestListSeedPeerClustersSelfLinkTerminates(t *testing.T) {
 	}
 }
 
+func TestListSchedulerClustersStopsOnEmptyPage(t *testing.T) {
+	var requests atomic.Int32
+	client := newTestClient(t, http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		switch r.URL.Path {
+		case SignInPath:
+			writeJSON(w, http.StatusOK, SignInResponse{Token: "token"})
+		case SchedulerClustersPath:
+			requests.Add(1)
+			// A manager can advertise rel=next on an empty page; following it
+			// chains through empty pages until the page cap.
+			next := (&url.URL{
+				Scheme:   "https",
+				Host:     r.Host,
+				Path:     SchedulerClustersPath,
+				RawQuery: "page=2&per_page=50",
+			}).String()
+			w.Header().Set("Link", "<"+next+">; rel=\"next\"")
+			writeJSON(w, http.StatusOK, []SchedulerCluster{})
+		default:
+			t.Errorf("unexpected path %s", r.URL.Path)
+		}
+	}))
+
+	clusters, err := client.ListSchedulerClusters(context.Background())
+	if err != nil {
+		t.Fatalf("ListSchedulerClusters() error = %v", err)
+	}
+	if len(clusters) != 0 {
+		t.Errorf("clusters = %+v, want empty", clusters)
+	}
+	if requests.Load() != 1 {
+		t.Errorf("requests = %d, want 1", requests.Load())
+	}
+}
+
+func TestListSeedPeerClustersStopsOnEmptyPage(t *testing.T) {
+	var requests atomic.Int32
+	client := newTestClient(t, http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		switch r.URL.Path {
+		case SignInPath:
+			writeJSON(w, http.StatusOK, SignInResponse{Token: "token"})
+		case SeedPeerClustersPath:
+			requests.Add(1)
+			next := (&url.URL{
+				Scheme:   "https",
+				Host:     r.Host,
+				Path:     SeedPeerClustersPath,
+				RawQuery: "page=2&per_page=50",
+			}).String()
+			w.Header().Set("Link", "<"+next+">; rel=\"next\"")
+			writeJSON(w, http.StatusOK, []SeedPeerCluster{})
+		default:
+			t.Errorf("unexpected path %s", r.URL.Path)
+		}
+	}))
+
+	clusters, err := client.ListSeedPeerClusters(context.Background())
+	if err != nil {
+		t.Fatalf("ListSeedPeerClusters() error = %v", err)
+	}
+	if len(clusters) != 0 {
+		t.Errorf("clusters = %+v, want empty", clusters)
+	}
+	if requests.Load() != 1 {
+		t.Errorf("requests = %d, want 1", requests.Load())
+	}
+}
+
 func TestListNullIsEmpty(t *testing.T) {
 	client := newTestClient(t, http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		if r.URL.Path == SignInPath {

@@ -224,6 +224,11 @@ func (c *Client) listSchedulerClusters(ctx context.Context, name string) ([]Sche
 			return nil, err
 		}
 		all = append(all, batch...)
+		if len(batch) == 0 {
+			// An empty page ends the list. Some managers still advertise rel=next
+			// on it, which would otherwise chain through empty pages forever.
+			return all, nil
+		}
 
 		next, ok, err := c.nextLink(headers, endpoint)
 		if err != nil {
@@ -262,6 +267,11 @@ func (c *Client) listSeedPeerClusters(ctx context.Context, name string) ([]SeedP
 			return nil, err
 		}
 		all = append(all, batch...)
+		if len(batch) == 0 {
+			// An empty page ends the list. Some managers still advertise rel=next
+			// on it, which would otherwise chain through empty pages forever.
+			return all, nil
+		}
 
 		next, ok, err := c.nextLink(headers, endpoint)
 		if err != nil {
