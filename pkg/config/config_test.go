@@ -19,6 +19,8 @@ var envKeys = []string{
 	"EXTRAS_CHART_VERSION",
 	"POD_NAMESPACE",
 	"WEBHOOK_PORT",
+	"WEBHOOK_CERT_DIR",
+	"WEBHOOK_SERVICE_NAME",
 	"KUBECONFIG",
 }
 
@@ -71,6 +73,12 @@ func TestLoadDefaults(t *testing.T) {
 	if cfg.WebhookPort != DefaultWebhookPort {
 		t.Errorf("WebhookPort = %d, want %d", cfg.WebhookPort, DefaultWebhookPort)
 	}
+	if cfg.WebhookCertDir != DefaultWebhookCertDir {
+		t.Errorf("WebhookCertDir = %q, want %q", cfg.WebhookCertDir, DefaultWebhookCertDir)
+	}
+	if cfg.WebhookServiceName != DefaultWebhookServiceName {
+		t.Errorf("WebhookServiceName = %q, want %q", cfg.WebhookServiceName, DefaultWebhookServiceName)
+	}
 	if cfg.LeaderElect {
 		t.Error("LeaderElect = true, want false")
 	}
@@ -122,6 +130,8 @@ func TestLoadInvalidValues(t *testing.T) {
 		"invalid extras chart repo":         "--extras-chart-repo=not-a-url",
 		"webhook port zero":                 "--webhook-port=0",
 		"webhook port too large":            "--webhook-port=70000",
+		"empty webhook cert dir":            "--webhook-cert-dir=",
+		"invalid webhook service name":      "--webhook-service-name=Bad_Name",
 	}
 
 	for name, override := range tests {
@@ -151,6 +161,8 @@ func TestLoadEnvOverride(t *testing.T) {
 	t.Setenv("EXTRAS_CHART_VERSION", "1.2.3")
 	t.Setenv("POD_NAMESPACE", "env-namespace")
 	t.Setenv("WEBHOOK_PORT", "10443")
+	t.Setenv("WEBHOOK_CERT_DIR", "/tmp/webhook-certs")
+	t.Setenv("WEBHOOK_SERVICE_NAME", "env-webhook")
 	t.Setenv("KUBECONFIG", "/tmp/kubeconfig")
 
 	cfg, err := Load(nil)
@@ -196,6 +208,12 @@ func TestLoadEnvOverride(t *testing.T) {
 	}
 	if cfg.WebhookPort != 10443 {
 		t.Errorf("WebhookPort = %d", cfg.WebhookPort)
+	}
+	if cfg.WebhookCertDir != "/tmp/webhook-certs" {
+		t.Errorf("WebhookCertDir = %q", cfg.WebhookCertDir)
+	}
+	if cfg.WebhookServiceName != "env-webhook" {
+		t.Errorf("WebhookServiceName = %q", cfg.WebhookServiceName)
 	}
 	if cfg.Kubeconfig != "/tmp/kubeconfig" {
 		t.Errorf("Kubeconfig = %q", cfg.Kubeconfig)

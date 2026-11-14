@@ -10,6 +10,7 @@ webhooks:
     admissionReviewVersions: ["v1"]
     sideEffects: None
     failurePolicy: {{ .Values.webhook.failurePolicy }}
+    timeoutSeconds: 10
     rules:
       - apiGroups: ["rke-machine-config.cattle.io"]
         apiVersions: ["v1"]
@@ -19,7 +20,7 @@ webhooks:
     clientConfig:
       caBundle: ""
       service:
-        name: {{ include "d7y-cattle-operator.fullname" . }}-webhook
+        name: {{ include "d7y-cattle-operator.webhookName" . }}
         namespace: {{ .Release.Namespace }}
         path: /mutate
         port: 443

@@ -3,10 +3,10 @@
 Kubernetes operator that runs [Dragonfly](https://d7y.io) P2P on Rancher-managed
 RKE2 clusters.
 
-**Status**: MR-4a (p2p-static chart + bootstrap generator). The Cluster
+**Status**: MR-4b (CREATE-only webhook + userData injection). The Cluster
 controller, role resolution, KeyDB, manager, seed role, manager registration,
-`dragonfly-extras`, and the `p2p-static` Nginx/bootstrap chart are implemented.
-The admission webhook and operator-side bootstrap injection follow in MR-4b.
+`dragonfly-extras`, the `p2p-static` chart, and the admission webhook are
+implemented. Live envtest/pilot verification remains deferred.
 
 ## What it does today
 
@@ -34,7 +34,7 @@ The admission webhook and operator-side bootstrap injection follow in MR-4b.
 
 ## Follow-ups
 
-- MR-4b: admission webhook and userData bootstrap injection.
+- Live envtest/pilot verification of the CREATE-only webhook and node bootstrap.
 - The extras chart's VPA targetRef names must be verified against live workload
   names in the pilot.
 
@@ -170,6 +170,30 @@ node). Containerd keeps **overlayfs as the global snapshotter** and selects Nydu
 per runtime with `runtimeClass: nydus`; do **not** set
 `machineGlobalConfig.snapshotter: nydus`. See `charts/p2p-static/README.md` for
 values, payload keys, containerd templates, and pilot risks.
+
+## Admission webhook
+
+The operator serves `/mutate` on port 9443. The `MutatingWebhookConfiguration`
+matches `rke-machine-config.cattle.io/v1` wildcard resources with
+`operations: ["CREATE"]`, `failurePolicy: Ignore`, `sideEffects: None`, and
+`admissionReviewVersions: ["v1"]`. Updates are never mutated.
+
+A new machine config is patched only when its target Cluster (resolved by the
+`<cluster>-<pool>` name prefix, or by the `p2p.dragonfly.io/cluster`
+(`namespace/name` or name), `p2p.dragonfly.io/cluster-name`, and
+`p2p.dragonfly.io/cluster-namespace` annotations) has the
+`p2p-dragonfly-io: "true"` label and `p2p.dragonfly.io/seed: "true"` annotation,
+or the config itself carries them. The payload is the base64url env-file from
+`contracts/bootstrap-payload.md`; userData is patched in plain YAML or
+base64-encoded form with the marker
+`# d7y-cattle-operator:p2p-install`. Reapplying does not add a second call.
+
+Serving TLS comes from Wrangler needacert: the webhook Service carries
+`need-a-cert.cattle.io/secret-name`; needacert creates/rotates the TLS Secret
+and injects the CA bundle into the MutatingWebhookConfiguration. The mounted
+Secret is optional, and the server falls back to an in-memory self-signed
+certificate only until needacert is available; `failurePolicy: Ignore` keeps
+node creation unblocked.
 
 ## Known pilot risk: extras target names
 
