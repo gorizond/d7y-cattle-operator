@@ -15,8 +15,11 @@ func TestExtrasHelmOp(t *testing.T) {
 		Seed:                           true,
 		SchedulerPublicEnabled:         true,
 		SchedulerPublicIP:              "62.83.79.230",
-		SchedulerHost:                  "d7y-scheduler.c1.koldun.negash.ru",
-		SchedulerService:               "c1-control-scheduler-client",
+		SchedulerDomain:                "example.com",
+		SchedulerClusterID:             "c-m-test",
+		SchedulerServiceName:           "c1-control-scheduler-client",
+		SchedulerServiceIP:             "10.43.79.230",
+		SchedulerSelectorApp:           "c1-control",
 		SchedulerPort:                  SchedulerPort,
 	})
 
@@ -100,20 +103,29 @@ func TestExtrasHelmOp(t *testing.T) {
 	if got := valueAt(t, values, "ingress", "traefik", "serversTransport", "insecureSkipVerify"); got != true {
 		t.Errorf("traefik insecureSkipVerify = %v", got)
 	}
-	if got := valueAt(t, values, "ingress", "scheduler", "enabled"); got != true {
-		t.Errorf("ingress.scheduler.enabled = %v", got)
+	if got := valueAt(t, values, "scheduler", "enabled"); got != true {
+		t.Errorf("scheduler.enabled = %v", got)
 	}
-	if got := valueAt(t, values, "ingress", "scheduler", "publicIP"); got != "62.83.79.230" {
-		t.Errorf("ingress.scheduler.publicIP = %v", got)
+	if got := valueAt(t, values, "scheduler", "publicIP"); got != "62.83.79.230" {
+		t.Errorf("scheduler.publicIP = %v", got)
 	}
-	if got := valueAt(t, values, "ingress", "scheduler", "host"); got != "d7y-scheduler.c1.koldun.negash.ru" {
-		t.Errorf("ingress.scheduler.host = %v", got)
+	if got := valueAt(t, values, "scheduler", "domain"); got != "example.com" {
+		t.Errorf("scheduler.domain = %v", got)
 	}
-	if got := valueAt(t, values, "ingress", "scheduler", "service"); got != "c1-control-scheduler-client" {
-		t.Errorf("ingress.scheduler.service = %v", got)
+	if got := valueAt(t, values, "scheduler", "clusterID"); got != "c-m-test" {
+		t.Errorf("scheduler.clusterID = %v", got)
 	}
-	if got := valueAt(t, values, "ingress", "scheduler", "port"); got != SchedulerPort {
-		t.Errorf("ingress.scheduler.port = %v", got)
+	if got := valueAt(t, values, "scheduler", "clientService", "name"); got != "c1-control-scheduler-client" {
+		t.Errorf("scheduler.clientService.name = %v", got)
+	}
+	if got := valueAt(t, values, "scheduler", "clientService", "clusterIP"); got != "10.43.79.230" {
+		t.Errorf("scheduler.clientService.clusterIP = %v", got)
+	}
+	if got := valueAt(t, values, "scheduler", "clientService", "selector", "app"); got != "c1-control" {
+		t.Errorf("scheduler.clientService.selector.app = %v", got)
+	}
+	if got := valueAt(t, values, "scheduler", "clientService", "selector", "component"); got != "scheduler" {
+		t.Errorf("scheduler.clientService.selector.component = %v", got)
 	}
 
 	if got := valueAt(t, values, "vpa", "enabled"); got != true {

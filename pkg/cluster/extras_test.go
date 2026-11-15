@@ -27,7 +27,7 @@ func TestReconcileManagerExtrasIngress(t *testing.T) {
 	if got := valueAtPath(t, values, "ingress", "enabled"); got != true {
 		t.Errorf("ingress.enabled = %v", got)
 	}
-	if got := valueAtPath(t, values, "ingress", "scheduler", "enabled"); got != false {
+	if got := valueAtPath(t, values, "scheduler", "enabled"); got != false {
 		t.Errorf("manager-only scheduler front enabled = %v, want false", got)
 	}
 	if got := valueAtPath(t, values, "ingress", "grpc", "host"); got != "grpc.example.com" {
@@ -101,17 +101,29 @@ func TestReconcileSeedOnlyExtrasVPA(t *testing.T) {
 	if got := valueAtPath(t, values, "ingress", "enabled"); got != false {
 		t.Errorf("seed-only ingress.enabled = %v", got)
 	}
-	if got := valueAtPath(t, values, "ingress", "scheduler", "enabled"); got != true {
+	if got := valueAtPath(t, values, "scheduler", "enabled"); got != true {
 		t.Errorf("seed-only scheduler front enabled = %v", got)
 	}
-	if got := valueAtPath(t, values, "ingress", "scheduler", "publicIP"); got != "62.83.79.230" {
+	if got := valueAtPath(t, values, "scheduler", "publicIP"); got != "62.83.79.230" {
 		t.Errorf("seed-only scheduler publicIP = %v", got)
 	}
-	if got := valueAtPath(t, values, "ingress", "scheduler", "host"); got != "d7y-scheduler.c1.koldun.negash.ru" {
-		t.Errorf("seed-only scheduler host = %v", got)
+	if got := valueAtPath(t, values, "scheduler", "domain"); got != "example.com" {
+		t.Errorf("seed-only scheduler domain = %v", got)
 	}
-	if got := valueAtPath(t, values, "ingress", "scheduler", "service"); got != "c1-control-scheduler-client" {
-		t.Errorf("seed-only scheduler service = %v", got)
+	if got := valueAtPath(t, values, "scheduler", "clusterID"); got != "c1" {
+		t.Errorf("seed-only scheduler clusterID = %v", got)
+	}
+	if got := valueAtPath(t, values, "scheduler", "clientService", "name"); got != "c1-control-scheduler-client" {
+		t.Errorf("seed-only scheduler clientService.name = %v", got)
+	}
+	if got := valueAtPath(t, values, "scheduler", "clientService", "clusterIP"); got != "10.43.79.230" {
+		t.Errorf("seed-only scheduler clusterIP = %v", got)
+	}
+	if got := valueAtPath(t, values, "scheduler", "clientService", "selector", "app"); got != "c1-control" {
+		t.Errorf("seed-only scheduler selector.app = %v", got)
+	}
+	if got := valueAtPath(t, values, "scheduler", "clientService", "selector", "component"); got != "scheduler" {
+		t.Errorf("seed-only scheduler selector.component = %v", got)
 	}
 	for component, want := range map[string]bool{
 		"keydb": true, "manager": false, "control": true, "data": true, "nydus": true,
@@ -201,24 +213,5 @@ func TestReconcileManagerOnlyTraefikExtras(t *testing.T) {
 		if got != want {
 			t.Errorf("ingress.%s = %v, want %v", path, got, want)
 		}
-	}
-}
-
-func TestSchedulerHost(t *testing.T) {
-	tests := map[string]struct {
-		domain  string
-		cluster string
-		want    string
-	}{
-		"pilot":  {"koldun.negash.ru", "c-m-jwxnbl2r", "d7y-scheduler.c-m-jwxnbl2r.koldun.negash.ru"},
-		"dotted": {".example.com.", "c1", "d7y-scheduler.c1.example.com"},
-		"empty":  {"", "c1", ""},
-	}
-	for name, tc := range tests {
-		t.Run(name, func(t *testing.T) {
-			if got := schedulerHost(tc.domain, tc.cluster); got != tc.want {
-				t.Errorf("schedulerHost(%q, %q) = %q, want %q", tc.domain, tc.cluster, got, tc.want)
-			}
-		})
 	}
 }

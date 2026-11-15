@@ -8,9 +8,10 @@ func TestDataHelmOp(t *testing.T) {
 	if op.Name != "c1-data" || op.Namespace != "fleet-default" {
 		t.Errorf("name/namespace = %s/%s", op.Name, op.Namespace)
 	}
-	if len(op.Spec.DependsOn) != 2 ||
+	if len(op.Spec.DependsOn) != 3 ||
 		op.Spec.DependsOn[0].Name != "c1-control" ||
-		op.Spec.DependsOn[1].Name != "c1-keydb" {
+		op.Spec.DependsOn[1].Name != "c1-keydb" ||
+		op.Spec.DependsOn[2].Name != "c1-extras" {
 		t.Errorf("dependsOn = %+v", op.Spec.DependsOn)
 	}
 	if len(op.Spec.DownstreamResources) != 1 || op.Spec.DownstreamResources[0].Name != "dragonfly-p2p-mtls" {
@@ -182,15 +183,6 @@ func TestControlHelmOp(t *testing.T) {
 	}
 	if got := valueAt(t, values, "scheduler", "config", "server", "advertiseIP"); got != "62.83.79.230" {
 		t.Errorf("scheduler advertiseIP = %v, want public LB IP", got)
-	}
-	if got := valueAt(t, values, "scheduler", "clientService", "enabled"); got != true {
-		t.Errorf("scheduler clientService.enabled = %v", got)
-	}
-	if got := valueAt(t, values, "scheduler", "clientService", "clusterIP"); got != "10.43.79.230" {
-		t.Errorf("scheduler clientService.clusterIP = %v", got)
-	}
-	if got := valueAt(t, values, "scheduler", "clientService", "port"); got != SchedulerPort {
-		t.Errorf("scheduler clientService.port = %v, want %d", got, SchedulerPort)
 	}
 	if got := valueAt(t, values, "scheduler", "podAnnotations", certRevisionAnnotation); got != "rev1" {
 		t.Errorf("scheduler podAnnotations revision = %v", got)

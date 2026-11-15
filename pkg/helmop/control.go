@@ -23,14 +23,6 @@ func Control(c Cluster) *fleetv1alpha1.HelmOp {
 			"enable":      true,
 			"hostNetwork": true,
 			"replicas":    c.SchedulerReplicas,
-			// A non-headless Service with a pinned ClusterIP is the stable
-			// in-cluster front for DaemonSets. The headless peer Service is
-			// kept for peer discovery.
-			"clientService": map[string]any{
-				"enabled":   true,
-				"clusterIP": c.SchedulerServiceIP,
-				"port":      SchedulerPort,
-			},
 			"config": map[string]any{
 				"manager": map[string]any{
 					"schedulerClusterID": c.SchedulerClusterID,

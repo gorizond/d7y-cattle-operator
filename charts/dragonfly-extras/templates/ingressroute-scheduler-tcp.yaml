@@ -1,12 +1,16 @@
 {{- $controller := .Values.ingress.controller | default "nginx" -}}
-{{- $scheduler := .Values.ingress.scheduler -}}
-{{- if and $scheduler.enabled (eq $controller "traefik") $scheduler.service (.Capabilities.APIVersions.Has "traefik.io/v1alpha1") }}
+{{- $scheduler := .Values.scheduler -}}
+{{- $host := "" -}}
+{{- if and $scheduler.clusterID $scheduler.domain -}}
+{{- $host = printf "d7y-scheduler.%s.%s" $scheduler.clusterID $scheduler.domain -}}
+{{- end -}}
+{{- if and $scheduler.enabled $scheduler.clientService.name (eq $controller "traefik") (.Capabilities.APIVersions.Has "traefik.io/v1alpha1") }}
 # Public scheduler front: TCP TLS passthrough on websecure. The scheduler
 # terminates mTLS itself, so Traefik must not attach a certificate, a
 # TLSOption, or a ServersTransport here. Public IP clients have no SNI; the
-# dynamic DNS alias d7y-scheduler.<cluster>.<domain> resolves to the same
-# public LB IP and uses that hostname as SNI, so the router defaults to the
-# catch-all matcher.
+# DNS alias built from clusterID and domain resolves to the same public LB IP
+# and uses that hostname as SNI, so the router defaults to the catch-all
+# matcher.
 apiVersion: traefik.io/v1alpha1
 kind: IngressRouteTCP
 metadata:
@@ -14,12 +18,13 @@ metadata:
   namespace: {{ .Release.Namespace }}
   labels:
     {{- include "dragonfly-extras.labels" . | nindent 4 }}
-  {{- if and $scheduler.host $scheduler.publicIP }}
+    component: scheduler
+  {{- if and $host $scheduler.publicIP }}
   annotations:
     # Keeps the per-cluster DNS alias pointed at the public Traefik LB IP when
-    # external-dns is configured for Traefik CRDs. The alias already resolves
-    # through the zone wildcard in the pilot.
-    external-dns.alpha.kubernetes.io/hostname: {{ $scheduler.host | quote }}
+    # external-dns is configured for Traefik CRDs. The alias may also resolve
+    # through a zone wildcard.
+    external-dns.alpha.kubernetes.io/hostname: {{ $host | quote }}
     external-dns.alpha.kubernetes.io/target: {{ $scheduler.publicIP | quote }}
   {{- end }}
 spec:
@@ -31,8 +36,8 @@ spec:
   routes:
     - match: {{ printf "HostSNI(`%s`)" ($scheduler.hostSNI | default "*") | quote }}
       services:
-        - name: {{ $scheduler.service | quote }}
-          port: {{ $scheduler.port | default 8002 }}
+        - name: {{ $scheduler.clientService.name | quote }}
+          port: {{ $scheduler.clientService.port | default 8002 }}
   tls:
     passthrough: true
 {{- end }}

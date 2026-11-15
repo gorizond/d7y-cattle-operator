@@ -1,0 +1,29 @@
+{{- $scheduler := .Values.scheduler -}}
+{{- if and $scheduler.enabled $scheduler.clientService.name }}
+# Non-headless scheduler client front with a stable ClusterIP. DaemonSets use
+# it through their local dynconfig and the public Traefik TCP route uses it as
+# backend. The P2P certificate carries this ClusterIP as an IP SAN.
+apiVersion: v1
+kind: Service
+metadata:
+  name: {{ $scheduler.clientService.name }}
+  namespace: {{ .Release.Namespace }}
+  labels:
+    {{- include "dragonfly-extras.labels" . | nindent 4 }}
+    component: scheduler
+spec:
+  type: ClusterIP
+  {{- with $scheduler.clientService.clusterIP }}
+  clusterIP: {{ . | quote }}
+  {{- end }}
+  ports:
+    - port: {{ $scheduler.clientService.port | default 8002 }}
+      name: grpc
+      {{- if semverCompare ">=1.20" .Capabilities.KubeVersion.Version }}
+      appProtocol: grpc
+      {{- end }}
+      protocol: TCP
+      targetPort: {{ $scheduler.clientService.targetPort | default 8002 }}
+  selector:
+{{ toYaml $scheduler.clientService.selector | indent 4 }}
+{{- end }}

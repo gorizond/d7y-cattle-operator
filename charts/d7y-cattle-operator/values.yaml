@@ -41,7 +41,9 @@ nginx:
 scheduler:
   publicIP: "62.83.79.230"
   serviceIP: "10.43.79.230"
-  domain: "koldun.negash.ru"
+  # Required. No domain is hardcoded in this chart; set the deployment's
+  # base domain (for example via --set scheduler.domain=example.com).
+  domain: ""
 
 dragonfly:
   chart:

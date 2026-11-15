@@ -51,7 +51,7 @@ helm template e "$extras" --namespace dragonfly-system \
   --set ingress.className=traefik \
   --set ingress.grpc.enabled=false \
   --set ingress.rest.enabled=true \
-  --set ingress.rest.host=manager-api.koldun.negash.ru \
+  --set ingress.rest.host=manager-api.example.com \
   --set ingress.rest.service=poligon-manager \
   --set ingress.tls.enabled=true \
   --set ingress.tls.secretName=dragonfly-p2p-mtls \
@@ -197,25 +197,37 @@ echo "$grpc_route" | grep -q 'secretName: "dragonfly-p2p-mtls"' || fail "gRPC TL
 [ -n "$(doc ServersTransport e-manager-grpc "$tmp/traefik-grpc-only.yaml")" ] || fail "gRPC ServersTransport must render with the P2P secret"
 if echo "$rest_route" | grep -q 'secretName:'; then fail "REST TLS block rendered while public TLS is disabled"; fi
 
-# Public scheduler front: a Traefik TCP TLS-passthrough route on websecure.
-# The scheduler terminates mTLS itself and no LE certificate is attached.
+# Scheduler front: the extras chart owns both the non-headless ClusterIP
+# Service and the Traefik TCP TLS-passthrough route. The scheduler terminates
+# mTLS itself and no LE certificate is attached.
 helm template e "$extras" --namespace dragonfly-system \
   --set ingress.enabled=false \
   --set ingress.controller=traefik \
   --set ingress.className=traefik \
-  --set ingress.scheduler.enabled=true \
-  --set ingress.scheduler.publicIP=62.83.79.230 \
-  --set ingress.scheduler.host=d7y-scheduler.c-m-jwxnbl2r.koldun.negash.ru \
-  --set ingress.scheduler.service=c1-control-scheduler-client \
-  --set ingress.scheduler.port=8002 \
+  --set scheduler.enabled=true \
+  --set scheduler.publicIP=62.83.79.230 \
+  --set scheduler.clusterID=c-m-example \
+  --set scheduler.domain=example.com \
+  --set scheduler.clientService.name=c1-control-scheduler-client \
+  --set scheduler.clientService.clusterIP=10.43.79.230 \
+  --set scheduler.clientService.selector.app=c1-control \
+  --set scheduler.clientService.selector.component=scheduler \
   --api-versions traefik.io/v1alpha1 >"$tmp/scheduler-tcp.yaml"
+scheduler_svc=$(doc Service c1-control-scheduler-client "$tmp/scheduler-tcp.yaml")
 scheduler_route=$(doc IngressRouteTCP e-scheduler "$tmp/scheduler-tcp.yaml")
+[ -n "$scheduler_svc" ] || fail "scheduler client Service missing"
 [ -n "$scheduler_route" ] || fail "scheduler IngressRouteTCP missing"
+echo "$scheduler_svc" | grep -q 'type: ClusterIP' || fail "scheduler client Service type missing"
+echo "$scheduler_svc" | grep -q 'clusterIP: "10.43.79.230"' || fail "scheduler client Service clusterIP missing"
+echo "$scheduler_svc" | grep -q 'port: 8002' || fail "scheduler client Service port missing"
+echo "$scheduler_svc" | grep -q 'targetPort: 8002' || fail "scheduler client Service targetPort missing"
+echo "$scheduler_svc" | grep -A3 'selector:' | grep -q 'app: c1-control' || fail "scheduler client Service selector.app missing"
+echo "$scheduler_svc" | grep -A3 'selector:' | grep -q 'component: scheduler' || fail "scheduler client Service selector.component missing"
 echo "$scheduler_route" | grep -q 'HostSNI(`\*`)' || fail "scheduler HostSNI catch-all missing"
 echo "$scheduler_route" | grep -q 'name: "c1-control-scheduler-client"' || fail "scheduler backend Service missing"
 echo "$scheduler_route" | grep -q 'port: 8002' || fail "scheduler backend port missing"
 echo "$scheduler_route" | grep -q 'passthrough: true' || fail "scheduler TLS passthrough missing"
-echo "$scheduler_route" | grep -q 'external-dns.alpha.kubernetes.io/hostname: "d7y-scheduler.c-m-jwxnbl2r.koldun.negash.ru"' || fail "scheduler external-dns hostname missing"
+echo "$scheduler_route" | grep -q 'external-dns.alpha.kubernetes.io/hostname: "d7y-scheduler.c-m-example.example.com"' || fail "scheduler external-dns hostname missing"
 echo "$scheduler_route" | grep -q 'external-dns.alpha.kubernetes.io/target: "62.83.79.230"' || fail "scheduler external-dns target missing"
 if echo "$scheduler_route" | grep -q 'secretName:'; then fail "scheduler passthrough must not reference a TLS Secret"; fi
 if grep -q 'name: e-scheduler' "$tmp/scheduler-tcp.yaml" && grep -q 'kind: TLSOption' "$tmp/scheduler-tcp.yaml"; then
@@ -230,10 +242,12 @@ if grep -q 'name: e-manager-grpc' "$tmp/scheduler-tcp.yaml"; then fail "schedule
 helm template e "$extras" --namespace dragonfly-system \
   --set ingress.enabled=false \
   --set ingress.controller=traefik \
-  --set ingress.scheduler.enabled=true \
-  --set ingress.scheduler.publicIP=62.83.79.230 \
-  --set ingress.scheduler.hostSNI=62.83.79.230 \
-  --set ingress.scheduler.service=c1-control-scheduler-client \
+  --set scheduler.enabled=true \
+  --set scheduler.publicIP=62.83.79.230 \
+  --set scheduler.clusterID=c1 \
+  --set scheduler.domain=example.com \
+  --set scheduler.hostSNI=62.83.79.230 \
+  --set scheduler.clientService.name=c1-control-scheduler-client \
   --api-versions traefik.io/v1alpha1 >"$tmp/scheduler-tcp-ip.yaml"
 grep -q 'HostSNI(`62.83.79.230`)' "$tmp/scheduler-tcp-ip.yaml" || fail "scheduler explicit HostSNI missing"
 

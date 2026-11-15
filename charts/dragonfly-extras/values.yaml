@@ -38,20 +38,6 @@ ingress:
     serversTransport:
       enabled: true
       insecureSkipVerify: true
-  # Public scheduler gRPC front. TLS is passed through end-to-end to the
-  # scheduler; Traefik never terminates it and no LE certificate is used.
-  # The DNS alias (host) must resolve to publicIP; the P2P leaf certificate
-  # carries the publicIP SAN, not the hostname.
-  scheduler:
-    enabled: false
-    publicIP: ""
-    host: ""
-    service: ""
-    port: 8002
-    # HostSNI matcher for the TCP router. The catch-all '*' also covers
-    # clients that dial the public IP and send no SNI. Set an explicit host or
-    # IP when the entry point is shared with other TCP passthrough routes.
-    hostSNI: "*"
   # Secret in this namespace that holds ca.crt for nginx client certificate
   # verification.
   mtlsSecret: dragonfly-p2p-mtls
@@ -60,6 +46,35 @@ ingress:
   mtlsCA: ""
   # CA-only Secret (key tls.ca) used by the Traefik TLSOption clientAuth.
   mtlsCASecret: dragonfly-p2p-mtls-ca
+
+# Scheduler client front owned by this chart so the Dragonfly fork chart keeps
+# its upstream-shaped headless scheduler Service. The non-headless ClusterIP
+# Service provides a stable address for DaemonSets and the public Traefik TCP
+# route. TLS is passed through end-to-end; Traefik never terminates it and no
+# LE certificate is used.
+scheduler:
+  enabled: false
+  # Fleet cluster ID and base domain build d7y-scheduler.<cluster-id>.<domain>.
+  # Both are required when enabled; no domain is hardcoded in this chart.
+  clusterID: ""
+  domain: ""
+  # Public Traefik LB IP. The alias above must resolve to it; the P2P leaf
+  # certificate carries this IP SAN, not the hostname.
+  publicIP: ""
+  # HostSNI matcher for the TCP router. The catch-all '*' also covers clients
+  # that dial the public IP and send no SNI. Set an explicit host or IP when
+  # the entry point is shared with other TCP passthrough routes.
+  hostSNI: "*"
+  clientService:
+    # Name of the non-headless Service; the IngressRouteTCP uses it as backend.
+    name: ""
+    # Pin the ClusterIP. Empty lets Kubernetes allocate one; the operator pins
+    # it so the P2P certificate can include the address as an IP SAN.
+    clusterIP: ""
+    port: 8002
+    targetPort: 8002
+    # Selector for the scheduler pods created by the control release.
+    selector: {}
 
 # VerticalPodAutoscalers in recommendation-only mode. Rendered only when the
 # autoscaling.k8s.io/v1 CRD is installed and vpa.enabled is true.

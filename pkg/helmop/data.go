@@ -1,6 +1,10 @@
 package helmop
 
-import fleetv1alpha1 "github.com/rancher/fleet/pkg/apis/fleet.cattle.io/v1alpha1"
+import (
+	"fmt"
+
+	fleetv1alpha1 "github.com/rancher/fleet/pkg/apis/fleet.cattle.io/v1alpha1"
+)
 
 // Data returns the seedClient/client HelmOp. It deliberately leaves
 // externalManager.host empty so the chart renders the local dynconfig.yaml and
@@ -13,7 +17,7 @@ func Data(c Cluster) *fleetv1alpha1.HelmOp {
 	// DaemonSets on the cluster resolve the stable ClusterIP Service, not the
 	// headless peer Service: the P2P client verifies the resolved scheduler IP
 	// against an IP SAN, and only the pinned ClusterIP is in the certificate.
-	schedulerAddr := SchedulerClientServiceName(c.Name) + "." + TargetNamespace + ".svc:8002"
+	schedulerAddr := fmt.Sprintf("%s.%s.svc:%d", SchedulerClientServiceName(c.Name), TargetNamespace, SchedulerPort)
 	seedClient := map[string]any{
 		"enable":      true,
 		"hostNetwork": true,
@@ -87,8 +91,10 @@ func Data(c Cluster) *fleetv1alpha1.HelmOp {
 		"seedClient":       seedClient,
 		"client":           client,
 	}
+	// The extras release owns the non-headless scheduler client Service used
+	// by the local dynconfig, so data waits for it before starting clients.
 	op := newHelmOp(DataName(c.Name), c, c.Chart, "data", values,
-		[]string{ControlName(c.Name), KeyDBName(c.Name)})
+		[]string{ControlName(c.Name), KeyDBName(c.Name), ExtrasName(c.Name)})
 	return withMTLS(op, c.MTLSSecretName)
 }
 

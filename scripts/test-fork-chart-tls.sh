@@ -88,10 +88,6 @@ externalRedis:
     - c1-keydb.dragonfly-system.svc.cluster.local:6379
 scheduler:
   enable: true
-  clientService:
-    enabled: true
-    clusterIP: 10.43.79.230
-    port: 8002
   config:
     manager:
       schedulerClusterID: 42
@@ -131,12 +127,10 @@ done
 peer_svc=$(awk 'BEGIN{RS="---"} /kind: Service/ && /name: c1-control-scheduler[^-]/ {print}' "$tmp/control.yaml")
 client_svc=$(awk 'BEGIN{RS="---"} /kind: Service/ && /name: c1-control-scheduler-client/ {print}' "$tmp/control.yaml")
 [ -n "$peer_svc" ] || fail "headless scheduler peer Service missing"
-[ -n "$client_svc" ] || fail "non-headless scheduler client Service missing"
+[ -z "$client_svc" ] || fail "fork chart must not render a scheduler client Service"
 echo "$peer_svc" | grep -q 'clusterIP: None' || fail "scheduler peer Service must stay headless"
-if echo "$client_svc" | grep -q 'clusterIP: None'; then fail "scheduler client Service must not be headless"; fi
-echo "$client_svc" | grep -q 'clusterIP: "10.43.79.230"' || fail "scheduler client Service clusterIP missing"
-echo "$client_svc" | grep -q 'port: 8002' || fail "scheduler client Service port missing"
-echo "$client_svc" | grep -q 'targetPort: 8002' || fail "scheduler client Service targetPort missing"
+echo "$peer_svc" | grep -q 'port: 8002' || fail "scheduler peer Service port missing"
+echo "$peer_svc" | grep -q 'targetPort: 8002' || fail "scheduler peer Service targetPort missing"
 grep -q 'advertiseIP: 62.83.79.230' "$tmp/control.yaml" || fail "scheduler advertiseIP missing"
 
 echo "fork chart TLS render checks passed ($repo $version)"

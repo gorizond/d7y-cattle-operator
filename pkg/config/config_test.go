@@ -46,7 +46,7 @@ func requiredArgs() []string {
 	return []string{
 		"--manager-grpc-domain=manager-grpc.example.com",
 		"--manager-api-url=https://manager-api.example.com",
-		"--p2p-domain=koldun.negash.ru",
+		"--p2p-domain=example.com",
 		"--nginx-static-url=https://static.example.com",
 		"--manager-api-credentials-secret=dragonfly-manager-api",
 	}
@@ -66,8 +66,8 @@ func TestLoadDefaults(t *testing.T) {
 	if cfg.SchedulerPublicIP != "" || cfg.SchedulerServiceIP != "" {
 		t.Errorf("scheduler IPs = %q/%q, want empty (optional)", cfg.SchedulerPublicIP, cfg.SchedulerServiceIP)
 	}
-	if cfg.P2PDomain != "koldun.negash.ru" {
-		t.Errorf("P2PDomain = %q, want koldun.negash.ru", cfg.P2PDomain)
+	if cfg.P2PDomain != "example.com" {
+		t.Errorf("P2PDomain = %q, want example.com", cfg.P2PDomain)
 	}
 	if cfg.NydusEnabled {
 		t.Error("NydusEnabled = true, want false")

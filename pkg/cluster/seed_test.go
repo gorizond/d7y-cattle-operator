@@ -38,7 +38,7 @@ func TestReconcileSeedCreatesHelmOps(t *testing.T) {
 		t.Errorf("control dependsOn = %v", got)
 	}
 	data := store.object("fleet-default/c1-data")
-	if got := dependsOn(data); len(got) != 2 || got[0] != "c1-control" || got[1] != "c1-keydb" {
+	if got := dependsOn(data); len(got) != 3 || got[0] != "c1-control" || got[1] != "c1-keydb" || got[2] != "c1-extras" {
 		t.Errorf("data dependsOn = %v", got)
 	}
 	nydus := store.object("fleet-default/c1-nydus-snapshotter")
@@ -163,7 +163,7 @@ func newTestController(t *testing.T) (*Controller, *fakeHelmOpStore, *fakeEventS
 			ManagerAPIHost:           "api.example.com",
 			SchedulerPublicIP:        "62.83.79.230",
 			SchedulerServiceIP:       "10.43.79.230",
-			P2PDomain:                "koldun.negash.ru",
+			P2PDomain:                "example.com",
 			DragonflyChart:           helmop.Chart{Repo: "https://charts.example.com", Name: "dragonfly", Version: "1.10.1-patch.2"},
 			ExtrasChart:              helmop.Chart{Repo: "https://charts.example.com", Name: "dragonfly-extras", Version: "0.1.7"},
 			ExtrasIngressController:  "nginx",

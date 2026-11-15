@@ -8,7 +8,6 @@ import (
 	"log/slog"
 	"net/http"
 	"strconv"
-	"strings"
 	"sync"
 
 	fleetv1alpha1 "github.com/rancher/fleet/pkg/apis/fleet.cattle.io/v1alpha1"
@@ -215,8 +214,11 @@ func (c *Controller) reconcile(key string, cluster *provv1.Cluster) (result *pro
 		Seed:                           seedReady,
 		SchedulerPublicEnabled:         seedReady,
 		SchedulerPublicIP:              c.opts.SchedulerPublicIP,
-		SchedulerHost:                  schedulerHost(c.opts.P2PDomain, cluster.Name),
-		SchedulerService:               helmop.SchedulerClientServiceName(cluster.Name),
+		SchedulerDomain:                c.opts.P2PDomain,
+		SchedulerClusterID:             cluster.Name,
+		SchedulerServiceName:           helmop.SchedulerClientServiceName(cluster.Name),
+		SchedulerServiceIP:             c.opts.SchedulerServiceIP,
+		SchedulerSelectorApp:           helmop.ControlName(cluster.Name),
 		SchedulerPort:                  helmop.SchedulerPort,
 	})); err != nil {
 		errs = append(errs, err)
@@ -228,17 +230,6 @@ func (c *Controller) reconcile(key string, cluster *provv1.Cluster) (result *pro
 		return cluster, err
 	}
 	return cluster, nil
-}
-
-// schedulerHost returns the per-cluster DNS alias that must resolve to the
-// public Traefik LB IP. An empty domain disables the alias while keeping the
-// IP-based TCP front.
-func schedulerHost(domain, cluster string) string {
-	domain = strings.TrimSpace(strings.Trim(domain, "."))
-	if domain == "" || cluster == "" {
-		return ""
-	}
-	return fmt.Sprintf("d7y-scheduler.%s.%s", cluster, domain)
 }
 
 func reasonFor(retrying bool) string {
