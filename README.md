@@ -76,14 +76,15 @@ helm install d7y-cattle-operator gorizond/d7y-cattle-operator \
   --set nginx.staticURL=https://static.example.com \
   --set managerApiCredentialsSecret=dragonfly-manager-api \
   --set scheduler.domain=example.com \
-  --set scheduler.publicIP=203.0.113.10 \
-  --set scheduler.serviceIP=10.43.79.230
+  --set scheduler.serviceIP=<cluster-ip>
 ```
 
-`scheduler.domain` has no default and is required. The chart pins the pilot
-`scheduler.publicIP=62.83.79.230` and `scheduler.serviceIP=10.43.79.230`;
-override those for another environment. The two IPs are P2P leaf SANs, so
-changing either rotates the CA and leaf and rolls the Dragonfly workloads.
+`scheduler.domain` has no default and is required. `scheduler.publicIP` is no
+longer an operator value: the public scheduler IP(s) are resolved at reconcile
+time from `d7y-scheduler.<cluster-id>.<domain>`. `scheduler.serviceIP` is the
+pinned internal ClusterIP and remains value-driven. DNS changes and Service IP
+changes are SAN changes, so they rotate the CA and leaf and roll the Dragonfly
+workloads.
 
 For local development use `charts/d7y-cattle-operator` instead of the repository
 chart. The release tag (`v<chart version>`) and the default image tag
@@ -101,9 +102,9 @@ not used until the p2p-static and registration MRs.
 | `manager.grpcDomain` | `MANAGER_GRPC_DOMAIN` | Public manager gRPC hostname, without scheme |
 | `manager.grpcPort` | `MANAGER_GRPC_PORT` | Public manager gRPC port used by schedulers; default `443` |
 | `manager.apiURL` | `MANAGER_API_URL` | Public manager REST API URL (`https://`) |
-| `scheduler.publicIP` | `P2P_SCHEDULER_PUBLIC_IP` | Public Traefik LB IP used as scheduler `advertiseIP` and P2P leaf IP SAN |
 | `scheduler.serviceIP` | `P2P_SCHEDULER_SERVICE_IP` | Pinned internal scheduler client Service ClusterIP and P2P leaf IP SAN |
 | `scheduler.domain` | `P2P_DOMAIN` | Base domain for `d7y-scheduler.<fleet-cluster-id>.<domain>`; required |
+| `scheduler.clusterID` | `P2P_CLUSTER_ID` | Optional fallback when provisioning Cluster `status.clusterName` is empty |
 | `nginx.staticURL` | `NGINX_STATIC_URL` | Base URL of the static asset server (`http` or `https`) |
 | `managerApiCredentialsSecret` | `MANAGER_API_CREDENTIALS_SECRET` | Secret with `username` and `password` keys for the manager API |
 | `dragonfly.chart.repo` | `DRAGONFLY_CHART_REPO` | Helm repository URL of the Dragonfly chart; defaults to the gorizond fork |
@@ -124,10 +125,11 @@ Defaults: `mtlsSecretName=dragonfly-p2p-mtls`, `dragonfly.chart.name=dragonfly`,
 `extras.chart.version=0.1.7`, `extras.ingress.controller=nginx`,
 `extras.ingress.grpcEnabled=true`, `extras.ingress.restEnabled=true`,
 `manager.grpcPort=443`, `nydus.enabled=false`, `webhook.port=9443`,
-`leaderElect=false`. `scheduler.publicIP` and `scheduler.serviceIP` have no Go
-defaults; the chart pins the pilot values `62.83.79.230` and `10.43.79.230`.
-`scheduler.domain` has no default in Go or in the chart and is required. The
-configuration rejects a partial or invalid IP/domain set.
+`leaderElect=false`. `scheduler.serviceIP` is the only scheduler IP value and
+has no default in Go or in the chart; set it for the seed role. The public
+scheduler IP(s) are resolved from DNS at reconcile time. `scheduler.domain` has
+no default and is required. `scheduler.clusterID` is only a fallback for an
+unpopulated `status.clusterName`.
 
 ## Roles and HelmOps
 
@@ -240,21 +242,28 @@ server:
   place for peer discovery.
 
 The per-cluster DNS alias is
-`d7y-scheduler.<fleet-cluster-id>.<scheduler.domain>`. It must resolve to
-`scheduler.publicIP`. The extras chart adds
-`external-dns.alpha.kubernetes.io/hostname` and
+`d7y-scheduler.<fleet-cluster-id>.<scheduler.domain>`, where the cluster ID
+comes from provisioning Cluster `status.clusterName` (with
+`scheduler.clusterID`/`P2P_CLUSTER_ID` as an explicit fallback). The operator
+resolves the alias at reconcile time with `net.LookupHost`; the resolved
+address(es) become P2P leaf IP SANs and the first IPv4 address becomes the
+scheduler `advertiseIP` and the extras external-dns target. The extras chart
+adds `external-dns.alpha.kubernetes.io/hostname` and
 `external-dns.alpha.kubernetes.io/target` to the `IngressRouteTCP` so an
 external-dns Traefik source can publish it; a deployment zone wildcard can
 also resolve it.
 The alias is deliberately **not** a certificate identity: Dragonfly client
-1.5.14 verifies the resolved IP, so the P2P leaf contains the public LB IP and
-the internal ClusterIP, plus the manager DNS names. It contains no node IPs.
+1.5.14 verifies the resolved IP, so the P2P leaf contains the resolved public
+IP(s) and the internal ClusterIP, plus the manager DNS names. It contains no
+node IPs.
 
-`scheduler.config.server.advertiseIP` is set to `scheduler.publicIP`, so the
-manager/remote dynconfig advertises the public address to bootstrap nodes.
-The public LB IP in the pilot is `62.83.79.230`; the internal ClusterIP is
-`10.43.79.230`, chosen from the cluster service CIDR `10.43.0.0/16` and
-verified unallocated before pinning.
+If DNS resolution fails or returns no addresses, the operator emits a
+`SchedulerDNSResolutionFailed` event and retries; it does not rewrite the
+existing certificate to an empty IP set. Existing non-loopback IP SANs are
+preserved when a new answer arrives, so a DNS/IP rotation keeps the old and new
+addresses valid during propagation. `scheduler.config.server.advertiseIP` uses
+the currently resolved public address; DaemonSets keep using the internal
+ClusterIP from their local dynconfig.
 
 Certificate rotation is controlled by a pod template annotation:
 `p2p.dragonfly.io/cert-revision` is the SHA-256 of `tls.crt`. It is added to

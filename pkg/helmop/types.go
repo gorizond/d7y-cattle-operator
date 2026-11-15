@@ -67,8 +67,8 @@ type Cluster struct {
 	SchedulerClusterID int
 	SchedulerReplicas  string
 	SeedClientReplicas string
-	// SchedulerPublicIP is the public Traefik LB IP used as the scheduler
-	// advertiseIP and the bootstrap client dial target.
+	// SchedulerPublicIP is the currently resolved public scheduler address
+	// used as the scheduler advertiseIP and the external-dns target.
 	SchedulerPublicIP string
 	// SchedulerServiceIP is pinned as the scheduler client Service ClusterIP
 	// and as a P2P certificate SAN.

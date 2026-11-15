@@ -34,13 +34,17 @@ nginx:
   # Base URL of the static asset server (http or https).
   staticURL: ""
 
-# Public scheduler front and P2P certificate identities. The public IP is the
-# existing Traefik LB address; the service IP is pinned as the non-headless
-# scheduler client Service ClusterIP. Both are IP SANs in the P2P leaf. The
-# domain builds the per-cluster DNS alias d7y-scheduler.<cluster>.<domain>.
+# Scheduler DNS and internal Service identities. The public LB IP is resolved at
+# reconcile time from d7y-scheduler.<cluster-id>.<domain>; the service IP is
+# pinned as the non-headless scheduler client Service ClusterIP. The resolved
+# public IP(s), the service IP, and manager DNS names are the P2P leaf SANs.
 scheduler:
-  publicIP: "62.83.79.230"
-  serviceIP: "10.43.79.230"
+  # Required for the seed role: the pinned internal scheduler client Service
+  # ClusterIP (also a P2P leaf IP SAN). No default is hardcoded.
+  serviceIP: ""
+  # Optional fallback when provisioning Cluster status.clusterName is empty.
+  # Leave empty to always require status.clusterName.
+  clusterID: ""
   # Required. No domain is hardcoded in this chart; set the deployment's
   # base domain (for example via --set scheduler.domain=example.com).
   domain: ""

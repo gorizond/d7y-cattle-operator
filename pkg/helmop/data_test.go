@@ -181,7 +181,7 @@ func TestControlHelmOp(t *testing.T) {
 	if seedPeerTLS["caCert"] != CertDir+"/ca.crt" {
 		t.Errorf("seedPeer TLS = %v", seedPeerTLS)
 	}
-	if got := valueAt(t, values, "scheduler", "config", "server", "advertiseIP"); got != "62.83.79.230" {
+	if got := valueAt(t, values, "scheduler", "config", "server", "advertiseIP"); got != "203.0.113.10" {
 		t.Errorf("scheduler advertiseIP = %v, want public LB IP", got)
 	}
 	if got := valueAt(t, values, "scheduler", "podAnnotations", certRevisionAnnotation); got != "rev1" {

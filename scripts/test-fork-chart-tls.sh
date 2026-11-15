@@ -96,7 +96,7 @@ scheduler:
         cert: /etc/dragonfly/certs/tls.crt
         key: /etc/dragonfly/certs/tls.key
     server:
-      advertiseIP: 62.83.79.230
+      advertiseIP: 203.0.113.10
       tls:
         caCert: /etc/dragonfly/certs/ca.crt
         cert: /etc/dragonfly/certs/tls.crt
@@ -131,7 +131,7 @@ client_svc=$(awk 'BEGIN{RS="---"} /kind: Service/ && /name: c1-control-scheduler
 echo "$peer_svc" | grep -q 'clusterIP: None' || fail "scheduler peer Service must stay headless"
 echo "$peer_svc" | grep -q 'port: 8002' || fail "scheduler peer Service port missing"
 echo "$peer_svc" | grep -q 'targetPort: 8002' || fail "scheduler peer Service targetPort missing"
-grep -q 'advertiseIP: 62.83.79.230' "$tmp/control.yaml" || fail "scheduler advertiseIP missing"
+grep -q 'advertiseIP: 203.0.113.10' "$tmp/control.yaml" || fail "scheduler advertiseIP missing"
 
 echo "fork chart TLS render checks passed ($repo $version)"
 

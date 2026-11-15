@@ -21,8 +21,8 @@ var _ SecretStore = (wranglercorev1.SecretController)(nil)
 const (
 	testGRPCDomain         = "manager-grpc.example.com"
 	testAPIURL             = "https://manager-api.example.com"
-	testSchedulerPublicIP  = "62.83.79.230"
-	testSchedulerServiceIP = "10.43.79.230"
+	testSchedulerPublicIP  = "203.0.113.10"
+	testSchedulerServiceIP = "10.43.0.230"
 )
 
 func testBundle(t *testing.T) *Bundle {
@@ -30,7 +30,7 @@ func testBundle(t *testing.T) *Bundle {
 	bundle, err := Generate(Options{
 		ManagerGRPCDomain:  testGRPCDomain,
 		ManagerAPIURL:      testAPIURL,
-		SchedulerPublicIP:  testSchedulerPublicIP,
+		SchedulerPublicIPs: []string{testSchedulerPublicIP},
 		SchedulerServiceIP: testSchedulerServiceIP,
 	})
 	if err != nil {
@@ -112,7 +112,7 @@ func TestGenerate(t *testing.T) {
 		}
 	}
 	// Node IPs and the DNS alias are deliberately not certificate identities.
-	for _, unwanted := range []string{"62.83.78.181", "62.83.78.222", "62.83.79.236"} {
+	for _, unwanted := range []string{"198.51.100.1", "198.51.100.2", "198.51.100.3"} {
 		if hasIP(leaf.IPAddresses, unwanted) {
 			t.Errorf("leaf IP SANs %v unexpectedly contain node IP %q", leaf.IPAddresses, unwanted)
 		}
@@ -140,9 +140,9 @@ func TestGenerateRejectsInvalidOptions(t *testing.T) {
 		"missing API URL":     {ManagerGRPCDomain: testGRPCDomain},
 		"invalid API URL":     {ManagerGRPCDomain: testGRPCDomain, ManagerAPIURL: "not-a-url"},
 		"invalid public IP": {
-			ManagerGRPCDomain: testGRPCDomain,
-			ManagerAPIURL:     testAPIURL,
-			SchedulerPublicIP: "not-an-ip",
+			ManagerGRPCDomain:  testGRPCDomain,
+			ManagerAPIURL:      testAPIURL,
+			SchedulerPublicIPs: []string{"not-an-ip"},
 		},
 		"invalid service IP": {
 			ManagerGRPCDomain:  testGRPCDomain,
@@ -267,7 +267,7 @@ func TestEnsureSecretRotatesWhenSANsChange(t *testing.T) {
 	rotated, err := Generate(Options{
 		ManagerGRPCDomain:  testGRPCDomain,
 		ManagerAPIURL:      testAPIURL,
-		SchedulerPublicIP:  "62.83.79.231",
+		SchedulerPublicIPs: []string{"203.0.113.11"},
 		SchedulerServiceIP: testSchedulerServiceIP,
 	})
 	if err != nil {
@@ -305,7 +305,7 @@ func TestSANsMatchIgnoresOrderAndIPForms(t *testing.T) {
 	if !SANsMatch(certs[0], leaf.DNSNames, leaf.IPAddresses) {
 		t.Error("SANsMatch() = false for the generated SAN set")
 	}
-	if SANsMatch(certs[0], leaf.DNSNames, append(leaf.IPAddresses, net.ParseIP("10.43.79.231"))) {
+	if SANsMatch(certs[0], leaf.DNSNames, append(leaf.IPAddresses, net.ParseIP("10.43.0.231"))) {
 		t.Error("SANsMatch() = true after adding an IP")
 	}
 }

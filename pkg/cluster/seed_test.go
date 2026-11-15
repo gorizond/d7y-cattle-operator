@@ -161,9 +161,10 @@ func newTestController(t *testing.T) (*Controller, *fakeHelmOpStore, *fakeEventS
 			ManagerGRPCDomain:        "grpc.example.com",
 			ManagerGRPCPort:          443,
 			ManagerAPIHost:           "api.example.com",
-			SchedulerPublicIP:        "62.83.79.230",
-			SchedulerServiceIP:       "10.43.79.230",
+			ManagerAPIURL:            "https://manager-api.example.com",
+			SchedulerServiceIP:       "10.43.0.230",
 			P2PDomain:                "example.com",
+			Resolver:                 &fakeResolver{ips: []string{"203.0.113.10"}},
 			DragonflyChart:           helmop.Chart{Repo: "https://charts.example.com", Name: "dragonfly", Version: "1.10.1-patch.2"},
 			ExtrasChart:              helmop.Chart{Repo: "https://charts.example.com", Name: "dragonfly-extras", Version: "0.1.7"},
 			ExtrasIngressController:  "nginx",
@@ -188,6 +189,7 @@ func testSeedCluster(schedulerID string) *provv1.Cluster {
 			Labels:      map[string]string{LabelEnabled: "true"},
 			Annotations: annotations,
 		},
+		Status: provv1.ClusterStatus{ClusterName: "c-m-test"},
 	}
 }
 
@@ -329,8 +331,8 @@ func TestHelmopClusterCarriesSchedulerIdentityAndCertRevision(t *testing.T) {
 	cluster := testSeedCluster("42")
 
 	first := controller.helmopCluster(cluster)
-	if first.SchedulerPublicIP != "62.83.79.230" || first.SchedulerServiceIP != "10.43.79.230" {
-		t.Errorf("scheduler IPs = %q/%q", first.SchedulerPublicIP, first.SchedulerServiceIP)
+	if first.SchedulerServiceIP != "10.43.0.230" {
+		t.Errorf("SchedulerServiceIP = %q", first.SchedulerServiceIP)
 	}
 	if first.MTLSCertRevision == "" {
 		t.Fatal("MTLSCertRevision is empty")
@@ -356,11 +358,21 @@ func TestEnsureMTLSSecretRequiresCA(t *testing.T) {
 	})
 	cluster := testSeedCluster("42")
 
-	_, err := controller.reconcile("", cluster)
-	if err == nil {
-		t.Fatal("reconcile() error = nil, want missing ca.crt error")
+	if err := controller.ensureMTLSSecret(cluster); err == nil {
+		t.Fatal("ensureMTLSSecret() error = nil, want missing ca.crt error")
 	}
 	if len(events.events) == 0 || events.events[0].Reason != "MTLSSecretUnavailable" {
 		t.Errorf("events = %+v, want MTLSSecretUnavailable", events.events)
 	}
+}
+
+type fakeResolver struct {
+	ips   []string
+	err   error
+	hosts []string
+}
+
+func (f *fakeResolver) LookupHost(_ context.Context, host string) ([]string, error) {
+	f.hosts = append(f.hosts, host)
+	return f.ips, f.err
 }

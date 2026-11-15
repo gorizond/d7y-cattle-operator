@@ -104,19 +104,19 @@ func TestReconcileSeedOnlyExtrasVPA(t *testing.T) {
 	if got := valueAtPath(t, values, "scheduler", "enabled"); got != true {
 		t.Errorf("seed-only scheduler front enabled = %v", got)
 	}
-	if got := valueAtPath(t, values, "scheduler", "publicIP"); got != "62.83.79.230" {
+	if got := valueAtPath(t, values, "scheduler", "publicIP"); got != "203.0.113.10" {
 		t.Errorf("seed-only scheduler publicIP = %v", got)
 	}
 	if got := valueAtPath(t, values, "scheduler", "domain"); got != "example.com" {
 		t.Errorf("seed-only scheduler domain = %v", got)
 	}
-	if got := valueAtPath(t, values, "scheduler", "clusterID"); got != "c1" {
+	if got := valueAtPath(t, values, "scheduler", "clusterID"); got != "c-m-test" {
 		t.Errorf("seed-only scheduler clusterID = %v", got)
 	}
 	if got := valueAtPath(t, values, "scheduler", "clientService", "name"); got != "c1-control-scheduler-client" {
 		t.Errorf("seed-only scheduler clientService.name = %v", got)
 	}
-	if got := valueAtPath(t, values, "scheduler", "clientService", "clusterIP"); got != "10.43.79.230" {
+	if got := valueAtPath(t, values, "scheduler", "clientService", "clusterIP"); got != "10.43.0.230" {
 		t.Errorf("seed-only scheduler clusterIP = %v", got)
 	}
 	if got := valueAtPath(t, values, "scheduler", "clientService", "selector", "app"); got != "c1-control" {

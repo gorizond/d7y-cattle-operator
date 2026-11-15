@@ -10,9 +10,9 @@ var envKeys = []string{
 	"MANAGER_GRPC_PORT",
 	"NYDUS_ENABLED",
 	"MANAGER_API_URL",
-	"P2P_SCHEDULER_PUBLIC_IP",
 	"P2P_SCHEDULER_SERVICE_IP",
 	"P2P_DOMAIN",
+	"P2P_CLUSTER_ID",
 	"NGINX_STATIC_URL",
 	"MTLS_SECRET_NAME",
 	"MANAGER_API_CREDENTIALS_SECRET",
@@ -63,8 +63,11 @@ func TestLoadDefaults(t *testing.T) {
 	if cfg.ManagerGRPCPort != DefaultManagerGRPCPort {
 		t.Errorf("ManagerGRPCPort = %d, want %d", cfg.ManagerGRPCPort, DefaultManagerGRPCPort)
 	}
-	if cfg.SchedulerPublicIP != "" || cfg.SchedulerServiceIP != "" {
-		t.Errorf("scheduler IPs = %q/%q, want empty (optional)", cfg.SchedulerPublicIP, cfg.SchedulerServiceIP)
+	if cfg.SchedulerServiceIP != "" {
+		t.Errorf("SchedulerServiceIP = %q, want empty (optional)", cfg.SchedulerServiceIP)
+	}
+	if cfg.ClusterIDFallback != "" {
+		t.Errorf("ClusterIDFallback = %q, want empty", cfg.ClusterIDFallback)
 	}
 	if cfg.P2PDomain != "example.com" {
 		t.Errorf("P2PDomain = %q, want example.com", cfg.P2PDomain)
@@ -191,11 +194,9 @@ func TestLoadInvalidValues(t *testing.T) {
 		"webhook port too large":            "--webhook-port=70000",
 		"empty webhook cert dir":            "--webhook-cert-dir=",
 		"invalid webhook service name":      "--webhook-service-name=Bad_Name",
-		"invalid scheduler public IP":       "--p2p-scheduler-public-ip=not-an-ip",
 		"invalid scheduler service IP":      "--p2p-scheduler-service-ip=10.43.0.999",
-		"public IP without service IP":      "--p2p-scheduler-public-ip=62.83.79.230",
-		"service IP without public IP":      "--p2p-scheduler-service-ip=10.43.79.230",
 		"invalid p2p domain":                "--p2p-domain=Bad_Suffix",
+		"invalid p2p cluster id":            "--p2p-cluster-id=Bad_Cluster",
 	}
 
 	for name, override := range tests {
@@ -216,9 +217,9 @@ func TestLoadEnvOverride(t *testing.T) {
 	t.Setenv("MANAGER_GRPC_PORT", "8443")
 	t.Setenv("NYDUS_ENABLED", "true")
 	t.Setenv("MANAGER_API_URL", "https://api.env.example.com")
-	t.Setenv("P2P_SCHEDULER_PUBLIC_IP", "62.83.79.231")
-	t.Setenv("P2P_SCHEDULER_SERVICE_IP", "10.43.79.231")
+	t.Setenv("P2P_SCHEDULER_SERVICE_IP", "10.43.0.231")
 	t.Setenv("P2P_DOMAIN", "env.example.com")
+	t.Setenv("P2P_CLUSTER_ID", "c-m-env")
 	t.Setenv("NGINX_STATIC_URL", "http://static.env.example.com")
 	t.Setenv("MTLS_SECRET_NAME", "env-mtls")
 	t.Setenv("MANAGER_API_CREDENTIALS_SECRET", "env-credentials")
@@ -257,14 +258,14 @@ func TestLoadEnvOverride(t *testing.T) {
 	if cfg.ManagerAPIURL != "https://api.env.example.com" {
 		t.Errorf("ManagerAPIURL = %q", cfg.ManagerAPIURL)
 	}
-	if cfg.SchedulerPublicIP != "62.83.79.231" {
-		t.Errorf("SchedulerPublicIP = %q", cfg.SchedulerPublicIP)
-	}
-	if cfg.SchedulerServiceIP != "10.43.79.231" {
+	if cfg.SchedulerServiceIP != "10.43.0.231" {
 		t.Errorf("SchedulerServiceIP = %q", cfg.SchedulerServiceIP)
 	}
 	if cfg.P2PDomain != "env.example.com" {
 		t.Errorf("P2PDomain = %q", cfg.P2PDomain)
+	}
+	if cfg.ClusterIDFallback != "c-m-env" {
+		t.Errorf("ClusterIDFallback = %q", cfg.ClusterIDFallback)
 	}
 	if cfg.NginxStaticURL != "http://static.env.example.com" {
 		t.Errorf("NginxStaticURL = %q", cfg.NginxStaticURL)
@@ -352,18 +353,21 @@ func TestLoadFlagOverridesEnv(t *testing.T) {
 	}
 }
 
-func TestLoadSchedulerIPFlags(t *testing.T) {
+func TestLoadSchedulerServiceIPFlag(t *testing.T) {
 	clearEnv(t)
 	args := append(requiredArgs(),
-		"--p2p-scheduler-public-ip=62.83.79.230",
-		"--p2p-scheduler-service-ip=10.43.79.230",
+		"--p2p-scheduler-service-ip=10.43.0.230",
+		"--p2p-cluster-id=c-m-fallback",
 	)
 	cfg, err := Load(args)
 	if err != nil {
 		t.Fatalf("Load() error = %v", err)
 	}
-	if cfg.SchedulerPublicIP != "62.83.79.230" || cfg.SchedulerServiceIP != "10.43.79.230" {
-		t.Errorf("scheduler IPs = %q/%q", cfg.SchedulerPublicIP, cfg.SchedulerServiceIP)
+	if cfg.SchedulerServiceIP != "10.43.0.230" {
+		t.Errorf("SchedulerServiceIP = %q", cfg.SchedulerServiceIP)
+	}
+	if cfg.ClusterIDFallback != "c-m-fallback" {
+		t.Errorf("ClusterIDFallback = %q", cfg.ClusterIDFallback)
 	}
 }
 
