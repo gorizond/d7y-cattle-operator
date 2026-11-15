@@ -36,21 +36,23 @@ nginx:
 
 dragonfly:
   chart:
-    repo: https://dragonflyoss.github.io/helm-charts
+    # Fork with the manager grpc.tls rendering fix and TLS-aware gRPC probes.
+    repo: https://gorizond.github.io/dragonflyoss-helm-charts
     name: dragonfly
-    # 1.10.1 is the verified version. Other versions are allowed but produce
-    # an UnsupportedChartVersion warning event.
-    version: 1.10.1
+    # 1.10.1-patch.1 is the verified version. Other versions are allowed but
+    # produce an UnsupportedChartVersion warning event.
+    version: 1.10.1-patch.1
 
 # dragonfly-extras chart owns the manager Ingresses and optional VPAs.
 extras:
   chart:
     repo: https://gorizond.github.io/d7y-cattle-operator
     name: dragonfly-extras
-    version: 0.1.5
+    version: 0.1.6
   ingress:
-    # nginx keeps the mTLS gRPC/REST annotations; traefik terminates gRPC TLS
-    # at the edge and renders a REST IngressRoute with a CRD ServersTransport.
+    # nginx terminates edge mTLS and uses GRPCS with client certificates to the
+    # manager; traefik terminates edge mTLS and uses HTTPS IngressRoutes with
+    # CRD ServersTransports for the gRPC and REST backends.
     controller: nginx
     className: ""
     grpcEnabled: true

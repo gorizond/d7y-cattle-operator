@@ -3,11 +3,12 @@
 Kubernetes operator that runs [Dragonfly](https://d7y.io) P2P on Rancher-managed
 RKE2 clusters.
 
-**Status**: MR-9 (CA-only Secret rendered by the `dragonfly-extras` chart; MR-8
-edge TLS termination for gRPC with h2c backends). The Cluster controller, role
-resolution, KeyDB, manager, seed role, manager registration,
-`dragonfly-extras`, the `p2p-static` chart, and the admission webhook are
-implemented. Live envtest/pilot verification remains deferred.
+**Status**: MR-10 (patched Dragonfly chart with working manager `grpc.tls` and
+TLS-aware gRPC probes; end-to-end gRPC TLS with HTTPS backends and Traefik
+`ServersTransport`). The Cluster controller, role resolution, KeyDB, manager,
+seed role, manager registration, `dragonfly-extras`, the `p2p-static` chart,
+and the admission webhook are implemented. Live envtest/pilot verification
+remains deferred.
 
 ## What it does today
 
@@ -21,7 +22,9 @@ implemented. Live envtest/pilot verification remains deferred.
 - Reconciles `provisioning.cattle.io/v1` Clusters selected by the
   `p2p-dragonfly-io: "true"` label.
 - Deploys KeyDB and the Dragonfly manager through Fleet HelmOps, without
-  PersistentVolumeClaims.
+  PersistentVolumeClaims. Dragonfly releases use the gorizond fork chart
+  `dragonfly 1.10.1-patch.1`, which renders `server.grpc.tls` under `grpc` and
+  adds TLS flags to the manager/scheduler `grpc_health_probe` commands.
 - Deploys the seed role (scheduler/control, seedClient+client/data) when
   `p2p.dragonfly.io/seed: "true"` and a scheduler cluster ID is present. The
   nydus-snapshotter release is deferred by default (`nydus.enabled=false`).
@@ -76,7 +79,7 @@ through flags or chart values. `nginx.staticURL` and
 `managerApiCredentialsSecret` are required by the configuration contract but are
 not used until the p2p-static and registration MRs.
 
-### Required values
+### Configuration values
 
 | Value | Environment variable | Description |
 |---|---|---|
@@ -85,7 +88,7 @@ not used until the p2p-static and registration MRs.
 | `manager.apiURL` | `MANAGER_API_URL` | Public manager REST API URL (`https://`) |
 | `nginx.staticURL` | `NGINX_STATIC_URL` | Base URL of the static asset server (`http` or `https`) |
 | `managerApiCredentialsSecret` | `MANAGER_API_CREDENTIALS_SECRET` | Secret with `username` and `password` keys for the manager API |
-| `dragonfly.chart.repo` | `DRAGONFLY_CHART_REPO` | Helm repository URL of the Dragonfly chart |
+| `dragonfly.chart.repo` | `DRAGONFLY_CHART_REPO` | Helm repository URL of the Dragonfly chart; defaults to the gorizond fork |
 | `extras.chart.repo` | `EXTRAS_CHART_REPO` | Helm repository URL of the dragonfly-extras chart |
 | `extras.chart.name` | `EXTRAS_CHART_NAME` | dragonfly-extras chart name |
 | `extras.chart.version` | `EXTRAS_CHART_VERSION` | dragonfly-extras chart version |
@@ -98,8 +101,9 @@ not used until the p2p-static and registration MRs.
 | `nydus.enabled` | `NYDUS_ENABLED` | Deploy the nydus-snapshotter HelmOp; default `false` (deferred) |
 
 Defaults: `mtlsSecretName=dragonfly-p2p-mtls`, `dragonfly.chart.name=dragonfly`,
-`dragonfly.chart.version=1.10.1`, `extras.chart.name=dragonfly-extras`,
-`extras.chart.version=0.1.5`, `extras.ingress.controller=nginx`,
+`dragonfly.chart.repo=https://gorizond.github.io/dragonflyoss-helm-charts`,
+`dragonfly.chart.version=1.10.1-patch.1`, `extras.chart.name=dragonfly-extras`,
+`extras.chart.version=0.1.6`, `extras.ingress.controller=nginx`,
 `extras.ingress.grpcEnabled=true`, `extras.ingress.restEnabled=true`,
 `manager.grpcPort=443`, `nydus.enabled=false`, `webhook.port=9443`,
 `leaderElect=false`.
@@ -149,12 +153,24 @@ never contain Secret values or certificate material.
 
 ### Dragonfly chart version
 
-`dragonfly.chart.version` defaults to the verified `1.10.1` and is passed to
-every Dragonfly HelmOp (`manager`, `control`, `data`). A different value is
-allowed for experiments, but the operator emits an `UnsupportedChartVersion`
-warning event on each reconcile because TLS fields and topology control/data
-behavior may change between chart versions. Pin the chart version in the
-operator release values; never hardcode it in Go code.
+`dragonfly.chart.repo` defaults to
+`https://gorizond.github.io/dragonflyoss-helm-charts` and
+`dragonfly.chart.version` to the verified `1.10.1-patch.1` (appVersion
+`2.5.4`). The fork carries two upstream-compatible patches:
+
+- `server.grpc.tls` is rendered under `server.grpc`, so the manager actually
+  serves gRPC over mTLS.
+- The manager and scheduler startup/readiness/liveness probes pass
+  `-tls -tls-ca-cert=... -tls-client-cert=... -tls-client-key=...` when the
+  matching TLS configuration is set.
+
+Both values are passed to every Dragonfly HelmOp (`manager`, `control`,
+`data`). A different version is allowed for experiments, but the operator
+emits an `UnsupportedChartVersion` warning event on each reconcile because TLS
+fields and topology control/data behavior may change between chart versions.
+Pin the chart version in the operator release values; never hardcode it in Go
+code. The fork is an external dependency of this repository: the chart is
+pulled by Fleet at reconcile time and is not vendored here.
 
 ### Port security
 
@@ -171,12 +187,12 @@ security groups:
 | `4100` | seedClient upload | mTLS required; allow only cluster peers/scheduler |
 | `4101/4102/4103/4104` | seedClient proxy/metrics/health/stats | bind to `127.0.0.1`; do not expose |
 | `4105/4106` | seedClient storage TCP/QUIC | cluster network only |
-| `65003` | manager gRPC backend | plaintext h2c behind the Ingress; edge TLS + client mTLS |
+| `65003` | manager gRPC backend | TLS + client mTLS from the edge controller; never plaintext |
 | `443` | manager gRPC edge | TLS + client mTLS; schedulers use `manager.grpcPort` |
 | `8080` | manager REST | JWT required; public Ingress is allowed |
 
-Do not use `proxy.basicAuth` for peer authentication: chart 1.10.1 places it in
-the wrong configuration block. The operator keeps `proxy`, `metrics`, `health`,
+Do not use `proxy.basicAuth` for peer authentication: chart 1.10.1-patch.1
+places it in the wrong configuration block. The operator keeps `proxy`, `metrics`, `health`,
 and `stats` on `127.0.0.1` for both `client` and `seedClient`. Because both
 DaemonSets may run on the same node, seedClient ports are shifted to
 `4100–4106` so they do not collide with client `4000–4006`.
@@ -197,10 +213,14 @@ HelmOp:
 
 - `ingress.enabled` is true only for the manager role. The per-Ingress toggles
   are `ingress.grpc.enabled` and `ingress.rest.enabled`; both default to `true`.
-- `ingress.controller=nginx` (default) terminates gRPC TLS at the edge and
-  proxies plaintext h2c to the manager: gRPC uses `backend-protocol: GRPC` with
-  client certificate verification from `dragonfly-p2p-mtls` and no SSL
-  redirect; REST uses `backend-protocol: HTTPS`.
+- `ingress.controller=nginx` (default) terminates client mTLS at the edge,
+  serves the P2P certificate for the gRPC host, and reaches the manager with
+  `backend-protocol: GRPCS`, `proxy-ssl-secret` (the P2P Secret, which carries
+  `ca.crt` for backend verification and `tls.crt`/`tls.key` as the client
+  certificate), `proxy-ssl-verify: "on"` and `proxy-ssl-name` set to
+  `ingress.grpc.host`. Client certificates are verified at the edge from
+  `dragonfly-p2p-mtls`; REST keeps `backend-protocol: HTTPS` and the public
+  certificate.
 - `ingress.controller=traefik` renders a `traefik.io/v1alpha1` `IngressRoute`
   named `<release>-manager-api` for the REST backend (Traefik v3 ignores
   `traefik.ingress.kubernetes.io/service.serversscheme`). The route uses
@@ -210,15 +230,27 @@ HelmOp:
   and no nginx annotations are added.
 - In Traefik mode the gRPC endpoint is an `IngressRoute` named
   `<release>-manager-grpc` (CRD `traefik.io/v1alpha1`, entry point `websecure`)
-  with `Host` matching `ingress.grpc.host` and an `h2c` backend. TLS uses
-  `ingress.tls.secretName` (the public Let's Encrypt Secret created directly on
-  the cluster) and the `<release>-manager-grpc` `TLSOption`, whose
-  `RequireAndVerifyClientCert` client auth reads the internal CA from the
-  CA-only `dragonfly-p2p-mtls-ca` Secret (`tls.ca`). The chart renders that
-  Secret from `ingress.mtlsCA` (the internal CA PEM passed by the operator);
-  it is not a Fleet downstream resource. The nginx gRPC Ingress is not rendered
-  in Traefik mode; the REST IngressRoute is unchanged.
-- `ingress.tls.enabled` adds a TLS block using `ingress.tls.secretName`. The
+  with `Host` matching `ingress.grpc.host` and an `https` backend. It
+  references the `<release>-manager-grpc` `ServersTransport`, which Traefik
+  uses for TLS + client mTLS to the manager. Edge TLS uses
+  `ingress.grpc.tlsSecret` (the P2P Secret) and the `<release>-manager-grpc`
+  `TLSOption`, whose `RequireAndVerifyClientCert` client auth reads the
+  internal CA from the CA-only `dragonfly-p2p-mtls-ca` Secret (`tls.ca`). The
+  chart renders that Secret from `ingress.mtlsCA` (the internal CA PEM passed
+  by the operator); it is not a Fleet downstream resource.
+- The gRPC `ServersTransport` schema was verified against the live
+  `serverstransports.traefik.io` CRD (Traefik `v1alpha1`):
+  `spec.serverName` is a string, `spec.rootCAs` is a list of
+  `{secret: <name>}` / `{configMap: <name>}` references (the Secret must hold
+  `tls.ca` or `ca.crt`), and `spec.certificatesSecrets` is a list of Secret
+  names holding `tls.crt`/`tls.key`. The chart sets `serverName` to
+  `ingress.grpc.host`, `rootCAs` to the P2P Secret (`ca.crt`), and
+  `certificatesSecrets` to the P2P Secret; `insecureSkipVerify` is not set for
+  gRPC. REST keeps its own `<release>-manager-rest` `ServersTransport` with
+  `insecureSkipVerify: true`. The nginx gRPC Ingress is not rendered in
+  Traefik mode.
+- `ingress.tls.enabled` adds the public REST TLS block using
+  `ingress.tls.secretName`; the gRPC edge uses `ingress.grpc.tlsSecret`. The
   manager-only canary uses `dragonfly-p2p-mtls` for
   `manager-api.koldun.negash.ru`.
 - Operator chart settings for the canary:
@@ -232,11 +264,13 @@ HelmOp:
       restEnabled: true
       tlsSecret: dragonfly-p2p-mtls
   ```
-- The manager gRPC server stays plaintext on `:65003`; TLS and client mTLS are
-  enforced by the edge controller. The manager REST server keeps its internal
-  `/etc/dragonfly/certs` certificate because REST stays HTTPS between Traefik
-  and the manager. No cert-manager or Let's Encrypt resources are part of this
-  repo; the public TLS Secret is supplied directly on the cluster.
+- The manager gRPC server serves TLS with client mTLS on `:65003` using the
+  mounted `/etc/dragonfly/certs` material; the edge controller must therefore
+  use an HTTPS/GRPCS backend with the P2P client certificate. The manager REST
+  server keeps its internal `/etc/dragonfly/certs` certificate because REST
+  stays HTTPS between Traefik/nginx and the manager. No cert-manager or Let's
+  Encrypt resources are part of this repo; the public REST TLS Secret is
+  supplied directly on the cluster.
 - `vpa.enabled` is set from API discovery for `autoscaling.k8s.io/v1`; the
   chart additionally checks `Capabilities.APIVersions.Has`. Target names are
   `<cluster>-keydb`, `<cluster>-manager`, `<cluster>-control-scheduler`,
@@ -370,9 +404,25 @@ names above. Verify them against the live release in the pilot, especially the
 (`<cluster>-control-scheduler`). The extras chart falls back to derived names
 when explicit names are empty, but the operator always sets them.
 
-The gRPC Ingress reads `auth-tls-secret` from `dragonfly-system`; the operator
-must be installed there (the default `namespace`) so the mTLS Secret is present
-in the Ingress namespace.
+The nginx gRPC Ingress reads `auth-tls-secret` and `proxy-ssl-secret` from
+`dragonfly-system`; the operator must be installed there (the default
+`namespace`) so the P2P Secret is present in the Ingress namespace.
+
+## Known pilot risk: fork chart dependency
+
+The operator defaults to the external fork
+`https://gorizond.github.io/dragonflyoss-helm-charts` and pins
+`dragonfly 1.10.1-patch.1`. The chart is not vendored into this repository; if
+the fork pages or repository disappear, every Dragonfly HelmOp fails to
+install. The fork is an interim dependency until the two patches are merged
+upstream. When upstream publishes an equivalent release, re-run the fork chart
+TLS checks against it and switch `dragonfly.chart.repo/version` back to the
+upstream repository in a separate change.
+
+The gRPC `ServersTransport` relies on the Traefik `serverstransports.traefik.io`
+`v1alpha1` schema verified against the live cluster CRD (`serverName`,
+`rootCAs`, `certificatesSecrets`). A Traefik downgrade that predates these
+fields would reject the manifest; keep Traefik at the verified version.
 
 ## Known pilot risk: nydus-snapshotter deferred
 
@@ -400,9 +450,10 @@ claimed.
 | MR-6 | Traefik extras REST Ingress, per-Ingress toggles, manager-only canary | merged |
 | MR-7 | Operator-managed gRPC ingress (nginx and Traefik) | merged |
 | MR-8 | Edge TLS termination, h2c backend, and CA-only Secret for Traefik clientAuth | merged |
-| MR-9 | Render the CA-only Secret in the extras chart instead of Fleet downstreamResources | this change |
+| MR-9 | Render the CA-only Secret in the extras chart instead of Fleet downstreamResources | merged |
+| MR-10 | Patched Dragonfly chart and end-to-end gRPC TLS (HTTPS backend + ServersTransport) | this change |
 
-Live envtest/pilot items remain deferred for the MR-9 follow-up list.
+Live envtest/pilot items remain deferred for the MR-10 follow-up list.
 
 ## Development
 

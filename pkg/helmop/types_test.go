@@ -42,7 +42,7 @@ func TestHelmOpSerializesPromotedFields(t *testing.T) {
 	}
 
 	helm := spec["helm"].(map[string]any)
-	if helm["repo"] != "https://charts.example.com" || helm["chart"] != "dragonfly" || helm["version"] != "1.10.1" {
+	if helm["repo"] != "https://charts.example.com" || helm["chart"] != "dragonfly" || helm["version"] != "1.10.1-patch.1" {
 		t.Errorf("spec.helm = %v", helm)
 	}
 	if helm["releaseName"] != "c1-manager" {

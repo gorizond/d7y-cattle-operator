@@ -15,8 +15,9 @@ func Manager(c Cluster) *fleetv1alpha1.HelmOp {
 			"enable": true,
 			"config": map[string]any{
 				"server": map[string]any{
-					// Chart 1.10.1 renders grpc.tls as server.tls, which the
-					// manager ignores; gRPC stays plaintext behind edge TLS.
+					// The fork chart (1.10.1-patch.1) renders grpc.tls under
+					// server.grpc, so the manager serves gRPC over mTLS and
+					// its probes use the TLS flags.
 					"grpc": map[string]any{"tls": tlsPaths()},
 					"rest": map[string]any{
 						"tls": map[string]any{

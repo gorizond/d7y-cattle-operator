@@ -1,4 +1,6 @@
 {{- $controller := .Values.ingress.controller | default "nginx" -}}
+{{- $grpcTLSSecret := .Values.ingress.grpc.tlsSecret -}}
+{{- $grpcEdgeSecret := $grpcTLSSecret | default .Values.ingress.tls.secretName -}}
 {{- if and .Values.ingress.enabled .Values.ingress.grpc.enabled (eq $controller "nginx") }}
 apiVersion: networking.k8s.io/v1
 kind: Ingress
@@ -8,7 +10,15 @@ metadata:
     {{- include "dragonfly-extras.labels" . | nindent 4 }}
   {{- if eq $controller "nginx" }}
   annotations:
-    nginx.ingress.kubernetes.io/backend-protocol: GRPC
+    # The manager serves gRPC over TLS; nginx verifies it with the P2P CA and
+    # presents the P2P client certificate. GRPC is kept only for a manager
+    # configured without gRPC TLS.
+    nginx.ingress.kubernetes.io/backend-protocol: {{ if $grpcTLSSecret }}GRPCS{{ else }}GRPC{{ end }}
+    {{- if $grpcTLSSecret }}
+    nginx.ingress.kubernetes.io/proxy-ssl-secret: {{ printf "%s/%s" .Release.Namespace $grpcTLSSecret | quote }}
+    nginx.ingress.kubernetes.io/proxy-ssl-verify: "on"
+    nginx.ingress.kubernetes.io/proxy-ssl-name: {{ .Values.ingress.grpc.host | quote }}
+    {{- end }}
     nginx.ingress.kubernetes.io/auth-tls-verify-client: "on"
     nginx.ingress.kubernetes.io/auth-tls-secret: {{ .Values.ingress.mtlsSecret | quote }}
     nginx.ingress.kubernetes.io/auth-tls-verify-depth: "1"
@@ -18,11 +28,11 @@ spec:
   {{- with .Values.ingress.className }}
   ingressClassName: {{ . | quote }}
   {{- end }}
-  {{- if .Values.ingress.tls.enabled }}
+  {{- if $grpcEdgeSecret }}
   tls:
     - hosts:
         - {{ .Values.ingress.grpc.host | quote }}
-      secretName: {{ .Values.ingress.tls.secretName | quote }}
+      secretName: {{ $grpcEdgeSecret | quote }}
   {{- end }}
   rules:
     - host: {{ .Values.ingress.grpc.host | quote }}
@@ -72,7 +82,8 @@ spec:
 {{- if .Capabilities.APIVersions.Has "traefik.io/v1alpha1" }}
 # Traefik v3 ignores the service.serversscheme annotation for REST backends,
 # so the HTTPS backend is declared with an IngressRoute. Traefik gRPC likewise
-# uses an IngressRoute with an h2c backend (see ingressroute-grpc.yaml).
+# uses an IngressRoute with an HTTPS backend and a ServersTransport (see
+# ingressroute-grpc.yaml and serverstransport-grpc.yaml).
 apiVersion: traefik.io/v1alpha1
 kind: IngressRoute
 metadata:

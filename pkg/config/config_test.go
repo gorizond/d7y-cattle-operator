@@ -45,7 +45,6 @@ func requiredArgs() []string {
 		"--manager-api-url=https://manager-api.example.com",
 		"--nginx-static-url=https://static.example.com",
 		"--manager-api-credentials-secret=dragonfly-manager-api",
-		"--dragonfly-chart-repo=https://dragonflyoss.github.io/helm-charts",
 	}
 }
 
@@ -65,6 +64,9 @@ func TestLoadDefaults(t *testing.T) {
 	}
 	if cfg.MTLSSecretName != DefaultMTLSSecretName {
 		t.Errorf("MTLSSecretName = %q, want %q", cfg.MTLSSecretName, DefaultMTLSSecretName)
+	}
+	if cfg.DragonflyChartRepo != DefaultDragonflyChartRepo {
+		t.Errorf("DragonflyChartRepo = %q, want %q", cfg.DragonflyChartRepo, DefaultDragonflyChartRepo)
 	}
 	if cfg.DragonflyChartName != DefaultDragonflyChartName {
 		t.Errorf("DragonflyChartName = %q, want %q", cfg.DragonflyChartName, DefaultDragonflyChartName)
@@ -116,13 +118,24 @@ func TestLoadDefaults(t *testing.T) {
 	}
 }
 
+func TestForkChartDefaults(t *testing.T) {
+	if DefaultDragonflyChartRepo != "https://gorizond.github.io/dragonflyoss-helm-charts" {
+		t.Errorf("DefaultDragonflyChartRepo = %q", DefaultDragonflyChartRepo)
+	}
+	if DefaultDragonflyChartVersion != "1.10.1-patch.1" {
+		t.Errorf("DefaultDragonflyChartVersion = %q", DefaultDragonflyChartVersion)
+	}
+	if DefaultExtrasChartVersion != "0.1.6" {
+		t.Errorf("DefaultExtrasChartVersion = %q", DefaultExtrasChartVersion)
+	}
+}
+
 func TestLoadRequiredFlags(t *testing.T) {
 	for _, required := range []string{
 		"--manager-grpc-domain",
 		"--manager-api-url",
 		"--nginx-static-url",
 		"--manager-api-credentials-secret",
-		"--dragonfly-chart-repo",
 	} {
 		t.Run(required, func(t *testing.T) {
 			clearEnv(t)
@@ -157,6 +170,7 @@ func TestLoadInvalidValues(t *testing.T) {
 		"manager gRPC port too large":       "--manager-grpc-port=70000",
 		"invalid namespace":                 "--namespace=Bad_Name",
 		"invalid chart version":             "--dragonfly-chart-version=latest",
+		"invalid dragonfly chart repo":      "--dragonfly-chart-repo=not-a-url",
 		"invalid extras chart version":      "--extras-chart-version=latest",
 		"invalid extras chart repo":         "--extras-chart-repo=not-a-url",
 		"invalid extras ingress controller": "--extras-ingress-controller=haproxy",
@@ -316,7 +330,6 @@ func TestLoadInvalidEnvPort(t *testing.T) {
 	t.Setenv("MANAGER_API_URL", "https://manager-api.example.com")
 	t.Setenv("NGINX_STATIC_URL", "https://static.example.com")
 	t.Setenv("MANAGER_API_CREDENTIALS_SECRET", "dragonfly-manager-api")
-	t.Setenv("DRAGONFLY_CHART_REPO", "https://dragonflyoss.github.io/helm-charts")
 	t.Setenv("WEBHOOK_PORT", "not-a-number")
 
 	_, err := Load(nil)

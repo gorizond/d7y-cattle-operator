@@ -36,6 +36,15 @@ func TestReconcileManagerExtrasIngress(t *testing.T) {
 	if got := valueAtPath(t, values, "ingress", "grpc", "port"); got != int64(65003) {
 		t.Errorf("ingress.grpc.port = %v", got)
 	}
+	if got := valueAtPath(t, values, "ingress", "grpc", "serversTransport", "enabled"); got != true {
+		t.Errorf("ingress.grpc.serversTransport.enabled = %v", got)
+	}
+	if got := valueAtPath(t, values, "ingress", "grpc", "serversTransport", "serverName"); got != "grpc.example.com" {
+		t.Errorf("ingress.grpc.serversTransport.serverName = %v", got)
+	}
+	if got := valueAtPath(t, values, "ingress", "grpc", "serversTransport", "secretName"); got != "dragonfly-p2p-mtls" {
+		t.Errorf("ingress.grpc.serversTransport.secretName = %v", got)
+	}
 	if got := valueAtPath(t, values, "ingress", "rest", "host"); got != "api.example.com" {
 		t.Errorf("ingress.rest.host = %v", got)
 	}
