@@ -38,6 +38,20 @@ ingress:
     serversTransport:
       enabled: true
       insecureSkipVerify: true
+  # Public scheduler gRPC front. TLS is passed through end-to-end to the
+  # scheduler; Traefik never terminates it and no LE certificate is used.
+  # The DNS alias (host) must resolve to publicIP; the P2P leaf certificate
+  # carries the publicIP SAN, not the hostname.
+  scheduler:
+    enabled: false
+    publicIP: ""
+    host: ""
+    service: ""
+    port: 8002
+    # HostSNI matcher for the TCP router. The catch-all '*' also covers
+    # clients that dial the public IP and send no SNI. Set an explicit host or
+    # IP when the entry point is shared with other TCP passthrough routes.
+    hostSNI: "*"
   # Secret in this namespace that holds ca.crt for nginx client certificate
   # verification.
   mtlsSecret: dragonfly-p2p-mtls

@@ -6,14 +6,17 @@ import (
 	"crypto/ecdsa"
 	"crypto/elliptic"
 	"crypto/rand"
+	"crypto/sha256"
 	"crypto/x509"
 	"crypto/x509/pkix"
+	"encoding/hex"
 	"encoding/pem"
 	"errors"
 	"fmt"
 	"math/big"
 	"net"
 	"net/url"
+	"strings"
 	"time"
 )
 
@@ -32,14 +35,22 @@ type Options struct {
 	ManagerGRPCDomain string
 	// ManagerAPIURL is the public REST API URL; its hostname becomes a SAN.
 	ManagerAPIURL string
+	// SchedulerPublicIP is the public Traefik LB IP used by bootstrap clients.
+	SchedulerPublicIP string
+	// SchedulerServiceIP is the pinned in-cluster ClusterIP of the scheduler
+	// client Service used by DaemonSets.
+	SchedulerServiceIP string
 }
 
 // Bundle holds PEM-encoded mTLS material. The CA private key is intentionally
-// discarded: the Secret is created once and never rotated by the operator.
+// discarded: when the SAN set changes the operator generates a new CA and
+// leaf instead of re-signing the existing leaf.
 type Bundle struct {
-	CACertPEM []byte
-	CertPEM   []byte
-	KeyPEM    []byte
+	CACertPEM   []byte
+	CertPEM     []byte
+	KeyPEM      []byte
+	DNSNames    []string
+	IPAddresses []net.IP
 }
 
 // Generate creates a self-signed CA and a leaf certificate valid for the
@@ -52,6 +63,12 @@ func Generate(opts Options) (*Bundle, error) {
 	if err != nil || apiURL.Hostname() == "" {
 		return nil, fmt.Errorf("pki: invalid manager API URL %q", opts.ManagerAPIURL)
 	}
+
+	ips, err := schedulerIPs(opts.SchedulerPublicIP, opts.SchedulerServiceIP)
+	if err != nil {
+		return nil, err
+	}
+	dnsNames := leafDNSNames(opts.ManagerGRPCDomain, apiURL.Hostname())
 
 	now := time.Now()
 	notBefore := now.Add(-time.Hour)
@@ -95,8 +112,8 @@ func Generate(opts Options) (*Bundle, error) {
 		BasicConstraintsValid: true,
 		KeyUsage:              x509.KeyUsageDigitalSignature,
 		ExtKeyUsage:           []x509.ExtKeyUsage{x509.ExtKeyUsageServerAuth, x509.ExtKeyUsageClientAuth},
-		DNSNames:              leafDNSNames(opts.ManagerGRPCDomain, apiURL.Hostname()),
-		IPAddresses:           []net.IP{net.IPv4(127, 0, 0, 1), net.IPv6loopback},
+		DNSNames:              dnsNames,
+		IPAddresses:           ips,
 	}
 	leafDER, err := x509.CreateCertificate(rand.Reader, leafTemplate, caTemplate, &leafKey.PublicKey, caKey)
 	if err != nil {
@@ -109,9 +126,11 @@ func Generate(opts Options) (*Bundle, error) {
 	}
 
 	return &Bundle{
-		CACertPEM: encodePEM("CERTIFICATE", caDER),
-		CertPEM:   encodePEM("CERTIFICATE", leafDER),
-		KeyPEM:    encodePEM("PRIVATE KEY", keyDER),
+		CACertPEM:   encodePEM("CERTIFICATE", caDER),
+		CertPEM:     encodePEM("CERTIFICATE", leafDER),
+		KeyPEM:      encodePEM("PRIVATE KEY", keyDER),
+		DNSNames:    dnsNames,
+		IPAddresses: ips,
 	}, nil
 }
 
@@ -182,6 +201,114 @@ func leafDNSNames(grpcDomain, apiHost string) []string {
 		names = append(names, name)
 	}
 	return names
+}
+
+// schedulerIPs returns the loopback addresses plus the configured scheduler
+// identities. Only the public LB IP and the internal ClusterIP are included:
+// node IPs are deliberately never part of the P2P certificate.
+func schedulerIPs(publicIP, serviceIP string) ([]net.IP, error) {
+	ips := []net.IP{net.IPv4(127, 0, 0, 1), net.IPv6loopback}
+	for _, raw := range []string{publicIP, serviceIP} {
+		if raw == "" {
+			continue
+		}
+		ip := net.ParseIP(raw)
+		if ip == nil {
+			return nil, fmt.Errorf("pki: invalid scheduler IP %q", raw)
+		}
+		ips = append(ips, ip)
+	}
+
+	seen := make(map[string]struct{}, len(ips))
+	result := make([]net.IP, 0, len(ips))
+	for _, ip := range ips {
+		key := ip.String()
+		if _, ok := seen[key]; ok {
+			continue
+		}
+		seen[key] = struct{}{}
+		result = append(result, ip)
+	}
+	return result, nil
+}
+
+// SANsMatch reports whether the certificate already carries exactly the
+// desired DNS and IP SAN sets. Ordering and IPv4-mapped IPv6 forms are
+// normalized so a stable configuration never rewrites the Secret.
+func SANsMatch(cert *x509.Certificate, dnsNames []string, ips []net.IP) bool {
+	if cert == nil {
+		return false
+	}
+
+	wantDNS := make(map[string]struct{}, len(dnsNames))
+	for _, name := range uniqueStrings(dnsNames) {
+		wantDNS[strings.ToLower(name)] = struct{}{}
+	}
+	gotDNS := make(map[string]struct{}, len(cert.DNSNames))
+	for _, name := range cert.DNSNames {
+		gotDNS[strings.ToLower(name)] = struct{}{}
+	}
+	if len(wantDNS) != len(gotDNS) {
+		return false
+	}
+	for name := range wantDNS {
+		if _, ok := gotDNS[name]; !ok {
+			return false
+		}
+	}
+
+	wantIPs := make(map[string]struct{}, len(ips))
+	for _, ip := range uniqueIPs(ips) {
+		wantIPs[ip.String()] = struct{}{}
+	}
+	gotIPs := make(map[string]struct{}, len(cert.IPAddresses))
+	for _, ip := range cert.IPAddresses {
+		gotIPs[ip.String()] = struct{}{}
+	}
+	if len(wantIPs) != len(gotIPs) {
+		return false
+	}
+	for ip := range wantIPs {
+		if _, ok := gotIPs[ip]; !ok {
+			return false
+		}
+	}
+	return true
+}
+
+func uniqueStrings(values []string) []string {
+	seen := make(map[string]struct{}, len(values))
+	result := make([]string, 0, len(values))
+	for _, value := range values {
+		key := strings.ToLower(value)
+		if _, ok := seen[key]; ok {
+			continue
+		}
+		seen[key] = struct{}{}
+		result = append(result, value)
+	}
+	return result
+}
+
+func uniqueIPs(values []net.IP) []net.IP {
+	seen := make(map[string]struct{}, len(values))
+	result := make([]net.IP, 0, len(values))
+	for _, value := range values {
+		key := value.String()
+		if _, ok := seen[key]; ok {
+			continue
+		}
+		seen[key] = struct{}{}
+		result = append(result, value)
+	}
+	return result
+}
+
+// CertRevision returns a stable identifier for a leaf certificate. It is used
+// as a pod template annotation so only a real certificate change rolls pods.
+func CertRevision(certPEM []byte) string {
+	sum := sha256.Sum256(certPEM)
+	return hex.EncodeToString(sum[:])
 }
 
 func newSerial() (*big.Int, error) {

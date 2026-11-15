@@ -10,7 +10,10 @@ import fleetv1alpha1 "github.com/rancher/fleet/pkg/apis/fleet.cattle.io/v1alpha1
 // schedulers and other peers; with hostNetwork they are bound on the node.
 // The Dragonfly chart has no separate advertise fields for dfdaemon.
 func Data(c Cluster) *fleetv1alpha1.HelmOp {
-	schedulerAddr := SchedulerServiceName(c.Name) + "." + TargetNamespace + ".svc:8002"
+	// DaemonSets on the cluster resolve the stable ClusterIP Service, not the
+	// headless peer Service: the P2P client verifies the resolved scheduler IP
+	// against an IP SAN, and only the pinned ClusterIP is in the certificate.
+	schedulerAddr := SchedulerClientServiceName(c.Name) + "." + TargetNamespace + ".svc:8002"
 	seedClient := map[string]any{
 		"enable":      true,
 		"hostNetwork": true,
@@ -39,6 +42,7 @@ func Data(c Cluster) *fleetv1alpha1.HelmOp {
 		},
 		"extraVolumes":      volumes(c.MTLSSecretName, logVolume()),
 		"extraVolumeMounts": volumeMounts(logVolumeMount("/var/log/dragonfly/dfdaemon/")),
+		"podAnnotations":    certPodAnnotations(c.MTLSCertRevision),
 	}
 	client := map[string]any{
 		"enable":            true,
@@ -70,6 +74,7 @@ func Data(c Cluster) *fleetv1alpha1.HelmOp {
 			map[string]any{"name": "storage", "mountPath": "/var/lib/dragonfly/"},
 			logVolumeMount("/var/log/dragonfly/dfdaemon/"),
 		),
+		"podAnnotations": certPodAnnotations(c.MTLSCertRevision),
 	}
 
 	values := map[string]any{

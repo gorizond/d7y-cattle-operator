@@ -5,6 +5,7 @@ import (
 	"errors"
 	"flag"
 	"fmt"
+	"net"
 	"net/url"
 	"os"
 	"regexp"
@@ -21,10 +22,10 @@ const (
 	DefaultNydusEnabled                  = false
 	DefaultDragonflyChartRepo            = "https://gorizond.github.io/dragonflyoss-helm-charts"
 	DefaultDragonflyChartName            = "dragonfly"
-	DefaultDragonflyChartVersion         = "1.10.1-patch.1"
+	DefaultDragonflyChartVersion         = "1.10.1-patch.2"
 	DefaultExtrasChartRepo               = "https://gorizond.github.io/d7y-cattle-operator"
 	DefaultExtrasChartName               = "dragonfly-extras"
-	DefaultExtrasChartVersion            = "0.1.6"
+	DefaultExtrasChartVersion            = "0.1.7"
 	DefaultExtrasIngressController       = "nginx"
 	DefaultExtrasIngressClassName        = ""
 	DefaultExtrasIngressGRPCEnabled      = true
@@ -44,6 +45,9 @@ type Config struct {
 	ManagerGRPCDomain           string
 	ManagerGRPCPort             int
 	ManagerAPIURL               string
+	SchedulerPublicIP           string
+	SchedulerServiceIP          string
+	P2PDomain                   string
 	NginxStaticURL              string
 	MTLSSecretName              string
 	ManagerAPICredentialsSecret string
@@ -101,6 +105,9 @@ func Load(args []string) (*Config, error) {
 	fs.StringVar(&cfg.ManagerGRPCDomain, "manager-grpc-domain", envOr("MANAGER_GRPC_DOMAIN", ""), "public hostname of the manager gRPC endpoint (no scheme)")
 	fs.IntVar(&cfg.ManagerGRPCPort, "manager-grpc-port", defaultManagerGRPCPort, "public port of the manager gRPC endpoint")
 	fs.StringVar(&cfg.ManagerAPIURL, "manager-api-url", envOr("MANAGER_API_URL", ""), "public HTTPS URL of the manager REST API")
+	fs.StringVar(&cfg.SchedulerPublicIP, "p2p-scheduler-public-ip", envOr("P2P_SCHEDULER_PUBLIC_IP", ""), "public Traefik LB IP used by the scheduler and the P2P leaf SAN")
+	fs.StringVar(&cfg.SchedulerServiceIP, "p2p-scheduler-service-ip", envOr("P2P_SCHEDULER_SERVICE_IP", ""), "pinned internal ClusterIP of the scheduler client Service and the P2P leaf SAN")
+	fs.StringVar(&cfg.P2PDomain, "p2p-domain", envOr("P2P_DOMAIN", ""), "base domain for the per-cluster scheduler alias d7y-scheduler.<cluster>.<domain>")
 	fs.StringVar(&cfg.NginxStaticURL, "nginx-static-url", envOr("NGINX_STATIC_URL", ""), "base URL of the static asset server (http or https)")
 	fs.StringVar(&cfg.MTLSSecretName, "mtls-secret-name", envOr("MTLS_SECRET_NAME", DefaultMTLSSecretName), "name of the mTLS Secret")
 	fs.StringVar(&cfg.ManagerAPICredentialsSecret, "manager-api-credentials-secret", envOr("MANAGER_API_CREDENTIALS_SECRET", ""), "name of the Secret holding manager API credentials")
@@ -149,6 +156,24 @@ func (c *Config) Validate() error {
 		add("--manager-api-url is required")
 	} else if err := validateURL(c.ManagerAPIURL, "https"); err != nil {
 		add("--manager-api-url: %v", err)
+	}
+	if (c.SchedulerPublicIP == "") != (c.SchedulerServiceIP == "") {
+		add("--p2p-scheduler-public-ip and --p2p-scheduler-service-ip must be set together")
+	}
+	if c.SchedulerPublicIP != "" {
+		if err := validateIP(c.SchedulerPublicIP); err != nil {
+			add("--p2p-scheduler-public-ip: %v", err)
+		}
+	}
+	if c.SchedulerServiceIP != "" {
+		if err := validateIP(c.SchedulerServiceIP); err != nil {
+			add("--p2p-scheduler-service-ip: %v", err)
+		}
+	}
+	if c.P2PDomain == "" {
+		add("--p2p-domain is required")
+	} else if msgs := validation.IsDNS1123Subdomain(c.P2PDomain); len(msgs) > 0 {
+		add("--p2p-domain: %s", strings.Join(msgs, "; "))
 	}
 	if c.NginxStaticURL == "" {
 		add("--nginx-static-url is required")
@@ -241,6 +266,17 @@ func validateHost(host string) error {
 	}
 	if strings.Contains(host, ":") {
 		return errors.New("must not include a port")
+	}
+	return nil
+}
+
+func validateIP(raw string) error {
+	ip := net.ParseIP(raw)
+	if ip == nil {
+		return fmt.Errorf("%q is not an IP address", raw)
+	}
+	if ip.IsUnspecified() {
+		return fmt.Errorf("%q is not a usable unicast address", raw)
 	}
 	return nil
 }

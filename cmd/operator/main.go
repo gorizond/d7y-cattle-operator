@@ -98,6 +98,9 @@ func run() error {
 		ManagerAPIHost:              apiHost,
 		ManagerAPIURL:               cfg.ManagerAPIURL,
 		ManagerAPICredentialsSecret: cfg.ManagerAPICredentialsSecret,
+		SchedulerPublicIP:           cfg.SchedulerPublicIP,
+		SchedulerServiceIP:          cfg.SchedulerServiceIP,
+		P2PDomain:                   cfg.P2PDomain,
 		DragonflyChart: helmop.Chart{
 			Repo:    cfg.DragonflyChartRepo,
 			Name:    cfg.DragonflyChartName,
@@ -123,21 +126,25 @@ func run() error {
 	}
 
 	bundle, err := pki.Generate(pki.Options{
-		ManagerGRPCDomain: cfg.ManagerGRPCDomain,
-		ManagerAPIURL:     cfg.ManagerAPIURL,
+		ManagerGRPCDomain:  cfg.ManagerGRPCDomain,
+		ManagerAPIURL:      cfg.ManagerAPIURL,
+		SchedulerPublicIP:  cfg.SchedulerPublicIP,
+		SchedulerServiceIP: cfg.SchedulerServiceIP,
 	})
 	if err != nil {
 		return fmt.Errorf("generate mTLS material: %w", err)
 	}
 
-	created, err := pki.EnsureSecret(secretController, cfg.Namespace, cfg.MTLSSecretName, bundle)
+	result, err := pki.EnsureSecret(secretController, cfg.Namespace, cfg.MTLSSecretName, bundle)
 	if err != nil {
 		return fmt.Errorf("ensure mTLS secret: %w", err)
 	}
 	slog.Info("mTLS secret ready",
 		"namespace", cfg.Namespace,
 		"name", cfg.MTLSSecretName,
-		"created", created,
+		"created", result.Created,
+		"updated", result.Updated,
+		"revision", result.Revision,
 	)
 	slog.Info("cluster controller running")
 

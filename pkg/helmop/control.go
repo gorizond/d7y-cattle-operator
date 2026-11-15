@@ -23,16 +23,31 @@ func Control(c Cluster) *fleetv1alpha1.HelmOp {
 			"enable":      true,
 			"hostNetwork": true,
 			"replicas":    c.SchedulerReplicas,
+			// A non-headless Service with a pinned ClusterIP is the stable
+			// in-cluster front for DaemonSets. The headless peer Service is
+			// kept for peer discovery.
+			"clientService": map[string]any{
+				"enabled":   true,
+				"clusterIP": c.SchedulerServiceIP,
+				"port":      SchedulerPort,
+			},
 			"config": map[string]any{
 				"manager": map[string]any{
 					"schedulerClusterID": c.SchedulerClusterID,
 					"tls":                tlsPaths(),
 				},
-				"server":   map[string]any{"tls": tlsPaths()},
+				"server": map[string]any{
+					"tls": tlsPaths(),
+					// Bootstrap nodes receive this address from the manager
+					// dynconfig; DaemonSets use their local dynconfig and the
+					// internal ClusterIP instead.
+					"advertiseIP": c.SchedulerPublicIP,
+				},
 				"seedPeer": map[string]any{"tls": tlsPaths()},
 			},
 			"extraVolumes":      volumes(c.MTLSSecretName, logVolume()),
 			"extraVolumeMounts": volumeMounts(logVolumeMount("/var/log/dragonfly/scheduler")),
+			"podAnnotations":    certPodAnnotations(c.MTLSCertRevision),
 		},
 		"seedClient": map[string]any{"enable": false},
 		"client":     map[string]any{"enable": false},

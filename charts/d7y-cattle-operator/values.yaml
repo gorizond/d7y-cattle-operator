@@ -34,21 +34,31 @@ nginx:
   # Base URL of the static asset server (http or https).
   staticURL: ""
 
+# Public scheduler front and P2P certificate identities. The public IP is the
+# existing Traefik LB address; the service IP is pinned as the non-headless
+# scheduler client Service ClusterIP. Both are IP SANs in the P2P leaf. The
+# domain builds the per-cluster DNS alias d7y-scheduler.<cluster>.<domain>.
+scheduler:
+  publicIP: "62.83.79.230"
+  serviceIP: "10.43.79.230"
+  domain: "koldun.negash.ru"
+
 dragonfly:
   chart:
-    # Fork with the manager grpc.tls rendering fix and TLS-aware gRPC probes.
+    # Fork with the manager grpc.tls rendering fix, TLS-aware gRPC probes,
+    # and the non-headless scheduler client Service.
     repo: https://gorizond.github.io/dragonflyoss-helm-charts
     name: dragonfly
-    # 1.10.1-patch.1 is the verified version. Other versions are allowed but
+    # 1.10.1-patch.2 is the verified version. Other versions are allowed but
     # produce an UnsupportedChartVersion warning event.
-    version: 1.10.1-patch.1
+    version: 1.10.1-patch.2
 
 # dragonfly-extras chart owns the manager Ingresses and optional VPAs.
 extras:
   chart:
     repo: https://gorizond.github.io/d7y-cattle-operator
     name: dragonfly-extras
-    version: 0.1.6
+    version: 0.1.7
   ingress:
     # nginx terminates edge mTLS and uses GRPCS with client certificates to the
     # manager; traefik terminates edge mTLS and uses HTTPS IngressRoutes with

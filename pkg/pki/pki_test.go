@@ -4,6 +4,7 @@ import (
 	"crypto/ecdsa"
 	"crypto/elliptic"
 	"crypto/x509"
+	"net"
 	"slices"
 	"testing"
 	"time"
@@ -18,17 +19,33 @@ import (
 var _ SecretStore = (wranglercorev1.SecretController)(nil)
 
 const (
-	testGRPCDomain = "manager-grpc.example.com"
-	testAPIURL     = "https://manager-api.example.com"
+	testGRPCDomain         = "manager-grpc.example.com"
+	testAPIURL             = "https://manager-api.example.com"
+	testSchedulerPublicIP  = "62.83.79.230"
+	testSchedulerServiceIP = "10.43.79.230"
 )
 
 func testBundle(t *testing.T) *Bundle {
 	t.Helper()
-	bundle, err := Generate(Options{ManagerGRPCDomain: testGRPCDomain, ManagerAPIURL: testAPIURL})
+	bundle, err := Generate(Options{
+		ManagerGRPCDomain:  testGRPCDomain,
+		ManagerAPIURL:      testAPIURL,
+		SchedulerPublicIP:  testSchedulerPublicIP,
+		SchedulerServiceIP: testSchedulerServiceIP,
+	})
 	if err != nil {
 		t.Fatalf("Generate() error = %v", err)
 	}
 	return bundle
+}
+
+func hasIP(ips []net.IP, want string) bool {
+	for _, ip := range ips {
+		if ip.String() == want {
+			return true
+		}
+	}
+	return false
 }
 
 func TestGenerate(t *testing.T) {
@@ -89,8 +106,16 @@ func TestGenerate(t *testing.T) {
 			t.Errorf("leaf SANs %v do not contain %q", leaf.DNSNames, name)
 		}
 	}
-	if len(leaf.IPAddresses) == 0 {
-		t.Error("leaf has no IP SANs")
+	for _, want := range []string{testSchedulerPublicIP, testSchedulerServiceIP, "127.0.0.1", "::1"} {
+		if !hasIP(leaf.IPAddresses, want) {
+			t.Errorf("leaf IP SANs %v do not contain %q", leaf.IPAddresses, want)
+		}
+	}
+	// Node IPs and the DNS alias are deliberately not certificate identities.
+	for _, unwanted := range []string{"62.83.78.181", "62.83.78.222", "62.83.79.236"} {
+		if hasIP(leaf.IPAddresses, unwanted) {
+			t.Errorf("leaf IP SANs %v unexpectedly contain node IP %q", leaf.IPAddresses, unwanted)
+		}
 	}
 
 	key, err := ParsePrivateKey(bundle.KeyPEM)
@@ -114,6 +139,16 @@ func TestGenerateRejectsInvalidOptions(t *testing.T) {
 		"missing gRPC domain": {ManagerAPIURL: testAPIURL},
 		"missing API URL":     {ManagerGRPCDomain: testGRPCDomain},
 		"invalid API URL":     {ManagerGRPCDomain: testGRPCDomain, ManagerAPIURL: "not-a-url"},
+		"invalid public IP": {
+			ManagerGRPCDomain: testGRPCDomain,
+			ManagerAPIURL:     testAPIURL,
+			SchedulerPublicIP: "not-an-ip",
+		},
+		"invalid service IP": {
+			ManagerGRPCDomain:  testGRPCDomain,
+			ManagerAPIURL:      testAPIURL,
+			SchedulerServiceIP: "10.43.0.999",
+		},
 	}
 	for name, opts := range tests {
 		t.Run(name, func(t *testing.T) {
@@ -137,12 +172,15 @@ func TestEnsureSecret(t *testing.T) {
 	store := newFakeSecretStore()
 	bundle := testBundle(t)
 
-	created, err := EnsureSecret(store, "dragonfly-system", "dragonfly-p2p-mtls", bundle)
+	result, err := EnsureSecret(store, "dragonfly-system", "dragonfly-p2p-mtls", bundle)
 	if err != nil {
 		t.Fatalf("EnsureSecret() error = %v", err)
 	}
-	if !created {
-		t.Error("EnsureSecret() created = false, want true")
+	if !result.Created || result.Updated {
+		t.Errorf("EnsureSecret() result = %+v, want created only", result)
+	}
+	if result.Revision != CertRevision(bundle.CertPEM) {
+		t.Errorf("revision = %q, want leaf hash", result.Revision)
 	}
 
 	secret, err := store.Get("dragonfly-system", "dragonfly-p2p-mtls", metav1.GetOptions{})
@@ -161,18 +199,18 @@ func TestEnsureSecret(t *testing.T) {
 		}
 	}
 
-	// A second call must not overwrite the existing Secret.
-	replacement := &Bundle{
-		CACertPEM: []byte("new-ca"),
-		CertPEM:   []byte("new-cert"),
-		KeyPEM:    []byte("new-key"),
-	}
-	created, err = EnsureSecret(store, "dragonfly-system", "dragonfly-p2p-mtls", replacement)
+	// A stable SAN set is a no-op even when the caller generated a fresh
+	// bundle: the existing certificate and key must stay in place.
+	fresh := testBundle(t)
+	result, err = EnsureSecret(store, "dragonfly-system", "dragonfly-p2p-mtls", fresh)
 	if err != nil {
-		t.Fatalf("EnsureSecret(second) error = %v", err)
+		t.Fatalf("EnsureSecret(stable) error = %v", err)
 	}
-	if created {
-		t.Error("EnsureSecret(second) created = true, want false")
+	if result.Created || result.Updated {
+		t.Errorf("EnsureSecret(stable) result = %+v, want no-op", result)
+	}
+	if result.Revision != CertRevision(bundle.CertPEM) {
+		t.Errorf("stable revision = %q, want existing leaf hash", result.Revision)
 	}
 
 	unchanged, err := store.Get("dragonfly-system", "dragonfly-p2p-mtls", metav1.GetOptions{})
@@ -181,6 +219,94 @@ func TestEnsureSecret(t *testing.T) {
 	}
 	if string(unchanged.Data[corev1.TLSCertKey]) != string(bundle.CertPEM) {
 		t.Error("existing Secret tls.crt was overwritten")
+	}
+}
+
+func TestEnsureSecretRemovesLastAppliedAnnotation(t *testing.T) {
+	store := newFakeSecretStore()
+	bundle := testBundle(t)
+	if _, err := EnsureSecret(store, "dragonfly-system", "dragonfly-p2p-mtls", bundle); err != nil {
+		t.Fatalf("EnsureSecret() error = %v", err)
+	}
+
+	secret, err := store.Get("dragonfly-system", "dragonfly-p2p-mtls", metav1.GetOptions{})
+	if err != nil {
+		t.Fatalf("get secret: %v", err)
+	}
+	secret.Annotations = map[string]string{lastAppliedAnnotation: `{"data":{"tls.key":"secret"}}`}
+	if _, err := store.Update(secret); err != nil {
+		t.Fatalf("seed annotation: %v", err)
+	}
+
+	result, err := EnsureSecret(store, "dragonfly-system", "dragonfly-p2p-mtls", testBundle(t))
+	if err != nil {
+		t.Fatalf("EnsureSecret() error = %v", err)
+	}
+	if !result.Updated {
+		t.Error("EnsureSecret() updated = false, want metadata update")
+	}
+	cleaned, err := store.Get("dragonfly-system", "dragonfly-p2p-mtls", metav1.GetOptions{})
+	if err != nil {
+		t.Fatalf("get secret: %v", err)
+	}
+	if _, ok := cleaned.Annotations[lastAppliedAnnotation]; ok {
+		t.Error("last-applied-configuration annotation was not removed")
+	}
+	if string(cleaned.Data[corev1.TLSCertKey]) != string(bundle.CertPEM) {
+		t.Error("certificate changed while removing the annotation")
+	}
+}
+
+func TestEnsureSecretRotatesWhenSANsChange(t *testing.T) {
+	store := newFakeSecretStore()
+	first := testBundle(t)
+	if _, err := EnsureSecret(store, "dragonfly-system", "dragonfly-p2p-mtls", first); err != nil {
+		t.Fatalf("EnsureSecret() error = %v", err)
+	}
+
+	rotated, err := Generate(Options{
+		ManagerGRPCDomain:  testGRPCDomain,
+		ManagerAPIURL:      testAPIURL,
+		SchedulerPublicIP:  "62.83.79.231",
+		SchedulerServiceIP: testSchedulerServiceIP,
+	})
+	if err != nil {
+		t.Fatalf("Generate(rotated) error = %v", err)
+	}
+	result, err := EnsureSecret(store, "dragonfly-system", "dragonfly-p2p-mtls", rotated)
+	if err != nil {
+		t.Fatalf("EnsureSecret(rotated) error = %v", err)
+	}
+	if !result.Updated || result.Created {
+		t.Errorf("EnsureSecret(rotated) result = %+v, want update", result)
+	}
+	if result.Revision != CertRevision(rotated.CertPEM) {
+		t.Errorf("rotated revision = %q, want new leaf hash", result.Revision)
+	}
+
+	secret, err := store.Get("dragonfly-system", "dragonfly-p2p-mtls", metav1.GetOptions{})
+	if err != nil {
+		t.Fatalf("get secret: %v", err)
+	}
+	if string(secret.Data[corev1.TLSCertKey]) != string(rotated.CertPEM) {
+		t.Error("rotated leaf was not written")
+	}
+	if string(secret.Data["ca.crt"]) != string(rotated.CACertPEM) {
+		t.Error("CA was not regenerated with the leaf")
+	}
+}
+
+func TestSANsMatchIgnoresOrderAndIPForms(t *testing.T) {
+	leaf := testBundle(t)
+	certs, err := ParseCertificates(leaf.CertPEM)
+	if err != nil {
+		t.Fatalf("ParseCertificates() error = %v", err)
+	}
+	if !SANsMatch(certs[0], leaf.DNSNames, leaf.IPAddresses) {
+		t.Error("SANsMatch() = false for the generated SAN set")
+	}
+	if SANsMatch(certs[0], leaf.DNSNames, append(leaf.IPAddresses, net.ParseIP("10.43.79.231"))) {
+		t.Error("SANsMatch() = true after adding an IP")
 	}
 }
 
@@ -210,6 +336,15 @@ func (f *fakeSecretStore) Create(secret *corev1.Secret) (*corev1.Secret, error) 
 	key := secret.Namespace + "/" + secret.Name
 	if _, ok := f.secrets[key]; ok {
 		return nil, apierrors.NewAlreadyExists(corev1.Resource("secrets"), secret.Name)
+	}
+	f.secrets[key] = secret.DeepCopy()
+	return secret.DeepCopy(), nil
+}
+
+func (f *fakeSecretStore) Update(secret *corev1.Secret) (*corev1.Secret, error) {
+	key := secret.Namespace + "/" + secret.Name
+	if _, ok := f.secrets[key]; !ok {
+		return nil, apierrors.NewNotFound(corev1.Resource("secrets"), secret.Name)
 	}
 	f.secrets[key] = secret.DeepCopy()
 	return secret.DeepCopy(), nil

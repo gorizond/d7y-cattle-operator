@@ -38,8 +38,11 @@ func TestDataHelmOp(t *testing.T) {
 	if got := valueAt(t, seedClient, "replicas"); got != testCluster().SeedClientReplicas {
 		t.Errorf("seedClient.replicas = %v", got)
 	}
-	if got := valueAt(t, seedClient, "dynconfig", "scheduler", "addr"); got != "c1-control-scheduler.dragonfly-system.svc:8002" {
+	if got := valueAt(t, seedClient, "dynconfig", "scheduler", "addr"); got != "c1-control-scheduler-client.dragonfly-system.svc:8002" {
 		t.Errorf("seedClient dynconfig addr = %v", got)
+	}
+	if got := valueAt(t, seedClient, "podAnnotations", certRevisionAnnotation); got != "rev1" {
+		t.Errorf("seedClient podAnnotations revision = %v", got)
 	}
 	if got := valueAt(t, seedClient, "config", "host", "schedulerClusterID"); got != 42 {
 		t.Errorf("seedClient config.host.schedulerClusterID = %v", got)
@@ -92,6 +95,9 @@ func TestDataHelmOp(t *testing.T) {
 	}
 	if got := valueAt(t, client, "priorityClassName"); got != "system-node-critical" {
 		t.Errorf("client.priorityClassName = %v", got)
+	}
+	if got := valueAt(t, client, "podAnnotations", certRevisionAnnotation); got != "rev1" {
+		t.Errorf("client podAnnotations revision = %v", got)
 	}
 	assertPorts(t, client, 4000, 4001, 4002, 4003, 4004)
 	clientStorage := nested(t, client, "config", "storage", "server")
@@ -173,6 +179,21 @@ func TestControlHelmOp(t *testing.T) {
 	seedPeerTLS := nested(t, values, "scheduler", "config", "seedPeer", "tls")
 	if seedPeerTLS["caCert"] != CertDir+"/ca.crt" {
 		t.Errorf("seedPeer TLS = %v", seedPeerTLS)
+	}
+	if got := valueAt(t, values, "scheduler", "config", "server", "advertiseIP"); got != "62.83.79.230" {
+		t.Errorf("scheduler advertiseIP = %v, want public LB IP", got)
+	}
+	if got := valueAt(t, values, "scheduler", "clientService", "enabled"); got != true {
+		t.Errorf("scheduler clientService.enabled = %v", got)
+	}
+	if got := valueAt(t, values, "scheduler", "clientService", "clusterIP"); got != "10.43.79.230" {
+		t.Errorf("scheduler clientService.clusterIP = %v", got)
+	}
+	if got := valueAt(t, values, "scheduler", "clientService", "port"); got != SchedulerPort {
+		t.Errorf("scheduler clientService.port = %v, want %d", got, SchedulerPort)
+	}
+	if got := valueAt(t, values, "scheduler", "podAnnotations", certRevisionAnnotation); got != "rev1" {
+		t.Errorf("scheduler podAnnotations revision = %v", got)
 	}
 }
 

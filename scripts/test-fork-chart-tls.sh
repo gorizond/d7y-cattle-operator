@@ -6,7 +6,7 @@ tmp="$(mktemp -d)"
 trap 'rm -rf "$tmp"' EXIT
 
 repo="${DRAGONFLY_CHART_REPO:-https://gorizond.github.io/dragonflyoss-helm-charts}"
-version="${DRAGONFLY_CHART_VERSION:-1.10.1-patch.1}"
+version="${DRAGONFLY_CHART_VERSION:-1.10.1-patch.2}"
 
 fail() {
   echo "FAIL: $*" >&2
@@ -88,6 +88,10 @@ externalRedis:
     - c1-keydb.dragonfly-system.svc.cluster.local:6379
 scheduler:
   enable: true
+  clientService:
+    enabled: true
+    clusterIP: 10.43.79.230
+    port: 8002
   config:
     manager:
       schedulerClusterID: 42
@@ -96,6 +100,7 @@ scheduler:
         cert: /etc/dragonfly/certs/tls.crt
         key: /etc/dragonfly/certs/tls.key
     server:
+      advertiseIP: 62.83.79.230
       tls:
         caCert: /etc/dragonfly/certs/ca.crt
         cert: /etc/dragonfly/certs/tls.crt
@@ -119,6 +124,20 @@ for flag in "-tls-ca-cert=/etc/dragonfly/certs/ca.crt" "-tls-client-cert=/etc/dr
   count=$(grep -c "command: \[\"/bin/grpc_health_probe\", \"-addr=:8002\".*$flag" "$tmp/control.yaml" || true)
   [ "$count" -eq 3 ] || fail "scheduler probes with $flag = $count, want 3"
 done
+
+# The scheduler must keep its headless peer Service and add a non-headless
+# client Service on the same gRPC port. The client ClusterIP is pinned because
+# it is a P2P certificate IP SAN.
+peer_svc=$(awk 'BEGIN{RS="---"} /kind: Service/ && /name: c1-control-scheduler[^-]/ {print}' "$tmp/control.yaml")
+client_svc=$(awk 'BEGIN{RS="---"} /kind: Service/ && /name: c1-control-scheduler-client/ {print}' "$tmp/control.yaml")
+[ -n "$peer_svc" ] || fail "headless scheduler peer Service missing"
+[ -n "$client_svc" ] || fail "non-headless scheduler client Service missing"
+echo "$peer_svc" | grep -q 'clusterIP: None' || fail "scheduler peer Service must stay headless"
+if echo "$client_svc" | grep -q 'clusterIP: None'; then fail "scheduler client Service must not be headless"; fi
+echo "$client_svc" | grep -q 'clusterIP: "10.43.79.230"' || fail "scheduler client Service clusterIP missing"
+echo "$client_svc" | grep -q 'port: 8002' || fail "scheduler client Service port missing"
+echo "$client_svc" | grep -q 'targetPort: 8002' || fail "scheduler client Service targetPort missing"
+grep -q 'advertiseIP: 62.83.79.230' "$tmp/control.yaml" || fail "scheduler advertiseIP missing"
 
 echo "fork chart TLS render checks passed ($repo $version)"
 

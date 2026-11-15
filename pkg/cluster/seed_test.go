@@ -161,8 +161,11 @@ func newTestController(t *testing.T) (*Controller, *fakeHelmOpStore, *fakeEventS
 			ManagerGRPCDomain:        "grpc.example.com",
 			ManagerGRPCPort:          443,
 			ManagerAPIHost:           "api.example.com",
-			DragonflyChart:           helmop.Chart{Repo: "https://charts.example.com", Name: "dragonfly", Version: "1.10.1-patch.1"},
-			ExtrasChart:              helmop.Chart{Repo: "https://charts.example.com", Name: "dragonfly-extras", Version: "0.1.6"},
+			SchedulerPublicIP:        "62.83.79.230",
+			SchedulerServiceIP:       "10.43.79.230",
+			P2PDomain:                "koldun.negash.ru",
+			DragonflyChart:           helmop.Chart{Repo: "https://charts.example.com", Name: "dragonfly", Version: "1.10.1-patch.2"},
+			ExtrasChart:              helmop.Chart{Repo: "https://charts.example.com", Name: "dragonfly-extras", Version: "0.1.7"},
 			ExtrasIngressController:  "nginx",
 			ExtrasIngressGRPCEnabled: true,
 			ExtrasIngressRESTEnabled: true,
@@ -319,6 +322,29 @@ func (f *fakeSecretStore) Update(secret *corev1.Secret) (*corev1.Secret, error) 
 	}
 	f.secrets[key] = secret.DeepCopy()
 	return secret.DeepCopy(), nil
+}
+
+func TestHelmopClusterCarriesSchedulerIdentityAndCertRevision(t *testing.T) {
+	controller, _, _ := newTestController(t)
+	cluster := testSeedCluster("42")
+
+	first := controller.helmopCluster(cluster)
+	if first.SchedulerPublicIP != "62.83.79.230" || first.SchedulerServiceIP != "10.43.79.230" {
+		t.Errorf("scheduler IPs = %q/%q", first.SchedulerPublicIP, first.SchedulerServiceIP)
+	}
+	if first.MTLSCertRevision == "" {
+		t.Fatal("MTLSCertRevision is empty")
+	}
+
+	controller.secrets.(*fakeSecretStore).put(&corev1.Secret{
+		ObjectMeta: metav1.ObjectMeta{Name: "dragonfly-p2p-mtls", Namespace: "dragonfly-system"},
+		Type:       corev1.SecretTypeTLS,
+		Data:       map[string][]byte{"ca.crt": []byte("ca"), "tls.crt": []byte("rotated-cert")},
+	})
+	second := controller.helmopCluster(cluster)
+	if second.MTLSCertRevision == first.MTLSCertRevision {
+		t.Error("MTLSCertRevision did not change after certificate rotation")
+	}
 }
 
 func TestEnsureMTLSSecretRequiresCA(t *testing.T) {

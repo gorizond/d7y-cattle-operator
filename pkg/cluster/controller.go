@@ -8,6 +8,7 @@ import (
 	"log/slog"
 	"net/http"
 	"strconv"
+	"strings"
 	"sync"
 
 	fleetv1alpha1 "github.com/rancher/fleet/pkg/apis/fleet.cattle.io/v1alpha1"
@@ -20,6 +21,7 @@ import (
 
 	"github.com/gorizond/d7y-cattle-operator/pkg/apply"
 	"github.com/gorizond/d7y-cattle-operator/pkg/helmop"
+	"github.com/gorizond/d7y-cattle-operator/pkg/pki"
 	"github.com/gorizond/d7y-cattle-operator/pkg/registry"
 )
 
@@ -39,6 +41,9 @@ type Options struct {
 	ManagerAPIHost              string
 	ManagerAPIURL               string
 	ManagerAPICredentialsSecret string
+	SchedulerPublicIP           string
+	SchedulerServiceIP          string
+	P2PDomain                   string
 	DragonflyChart              helmop.Chart
 	ExtrasChart                 helmop.Chart
 	ExtrasIngressController     string
@@ -208,6 +213,11 @@ func (c *Controller) reconcile(key string, cluster *provv1.Cluster) (result *pro
 		NydusEnabled:                   c.opts.NydusEnabled,
 		Manager:                        roles.Manager && mtlsReady,
 		Seed:                           seedReady,
+		SchedulerPublicEnabled:         seedReady,
+		SchedulerPublicIP:              c.opts.SchedulerPublicIP,
+		SchedulerHost:                  schedulerHost(c.opts.P2PDomain, cluster.Name),
+		SchedulerService:               helmop.SchedulerClientServiceName(cluster.Name),
+		SchedulerPort:                  helmop.SchedulerPort,
 	})); err != nil {
 		errs = append(errs, err)
 	}
@@ -218,6 +228,17 @@ func (c *Controller) reconcile(key string, cluster *provv1.Cluster) (result *pro
 		return cluster, err
 	}
 	return cluster, nil
+}
+
+// schedulerHost returns the per-cluster DNS alias that must resolve to the
+// public Traefik LB IP. An empty domain disables the alias while keeping the
+// IP-based TCP front.
+func schedulerHost(domain, cluster string) string {
+	domain = strings.TrimSpace(strings.Trim(domain, "."))
+	if domain == "" || cluster == "" {
+		return ""
+	}
+	return fmt.Sprintf("d7y-scheduler.%s.%s", cluster, domain)
 }
 
 func reasonFor(retrying bool) string {
@@ -285,13 +306,18 @@ func (c *Controller) helmopCluster(cluster *provv1.Cluster) helmop.Cluster {
 		SchedulerClusterID: schedulerClusterID(cluster),
 		SchedulerReplicas:  helmop.ReplicasOrOne(AnnotationSchedulerReplicas, cluster.Annotations[AnnotationSchedulerReplicas]),
 		SeedClientReplicas: helmop.ReplicasOrOne(AnnotationSeedClientReplicas, cluster.Annotations[AnnotationSeedClientReplicas]),
+		SchedulerPublicIP:  c.opts.SchedulerPublicIP,
+		SchedulerServiceIP: c.opts.SchedulerServiceIP,
 		Labels:             apply.Labels(cluster.Namespace, cluster.Name),
 	}
 	// The extras chart renders the CA-only Secret from this PEM. Readiness and
-	// missing ca.crt errors are reported by ensureMTLSSecret.
+	// missing ca.crt errors are reported by ensureMTLSSecret. The certificate
+	// revision is derived from the live Secret so a rotation changes pod
+	// template annotations exactly once.
 	if c.secrets != nil {
 		if mtls, err := c.secrets.Get(c.opts.OperatorNamespace, c.opts.MTLSSecretName, metav1.GetOptions{}); err == nil {
 			hc.MTLSCA = string(mtls.Data["ca.crt"])
+			hc.MTLSCertRevision = pki.CertRevision(mtls.Data[corev1.TLSCertKey])
 		}
 	}
 	return hc

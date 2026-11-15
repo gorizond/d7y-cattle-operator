@@ -21,13 +21,16 @@ const (
 	// the manager through the edge.
 	ManagerGRPCEdgePort = 443
 	ManagerRESTPort     = 8080
+	// SchedulerPort is the scheduler gRPC port exposed by both the headless
+	// peer Service and the non-headless client Service.
+	SchedulerPort = 8002
 
 	// CertDir is where the mTLS Secret is mounted in Dragonfly pods.
 	CertDir = "/etc/dragonfly/certs"
 
 	// VerifiedDragonflyChartVersion is the Dragonfly chart version this
 	// operator is tested against. Other versions are allowed but warn.
-	VerifiedDragonflyChartVersion = "1.10.1-patch.1"
+	VerifiedDragonflyChartVersion = "1.10.1-patch.2"
 
 	KeyDBChartRepo    = "https://enapter.github.io/charts/"
 	KeyDBChartName    = "keydb"
@@ -64,7 +67,16 @@ type Cluster struct {
 	SchedulerClusterID int
 	SchedulerReplicas  string
 	SeedClientReplicas string
-	Labels             map[string]string
+	// SchedulerPublicIP is the public Traefik LB IP used as the scheduler
+	// advertiseIP and the bootstrap client dial target.
+	SchedulerPublicIP string
+	// SchedulerServiceIP is pinned as the scheduler client Service ClusterIP
+	// and as a P2P certificate SAN.
+	SchedulerServiceIP string
+	// MTLSCertRevision changes only when the P2P leaf certificate changes; it
+	// is stamped on pod templates to trigger a controlled rollout.
+	MTLSCertRevision string
+	Labels           map[string]string
 }
 
 // KeyDBName returns the KeyDB HelmOp and release name.
@@ -95,10 +107,17 @@ func ManagerFullname(cluster string) string {
 // release. It is the backend of the extras Ingress.
 func ManagerServiceName(cluster string) string { return objectName(cluster, "manager") }
 
-// SchedulerServiceName returns the scheduler Service name created by the
-// control release.
+// SchedulerServiceName returns the headless scheduler peer Service name created
+// by the control release.
 func SchedulerServiceName(cluster string) string {
 	return objectName(cluster, "control-scheduler")
+}
+
+// SchedulerClientServiceName returns the non-headless ClusterIP Service used by
+// DaemonSets and the public Traefik front. Its clusterIP is pinned through the
+// SchedulerServiceIP value so the P2P certificate can include it as a SAN.
+func SchedulerClientServiceName(cluster string) string {
+	return SchedulerServiceName(cluster) + "-client"
 }
 
 const (

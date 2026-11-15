@@ -27,6 +27,15 @@ type ExtrasOptions struct {
 	NydusEnabled                   bool
 	Manager                        bool
 	Seed                           bool
+	// SchedulerPublicEnabled renders the Traefik TCP passthrough front for the
+	// scheduler. It is independent of the manager Ingress toggle.
+	SchedulerPublicEnabled bool
+	SchedulerPublicIP      string
+	// SchedulerHost is the per-cluster DNS alias that resolves to
+	// SchedulerPublicIP (d7y-scheduler.<cluster>.<domain>).
+	SchedulerHost    string
+	SchedulerService string
+	SchedulerPort    int
 }
 
 // Extras returns the dragonfly-extras HelmOp. The Ingress and
@@ -73,6 +82,16 @@ func Extras(c Cluster, opts ExtrasOptions) *fleetv1alpha1.HelmOp {
 					"enabled":            opts.TraefikServersTransportEnabled,
 					"insecureSkipVerify": true,
 				},
+			},
+			// The public scheduler front is an end-to-end mTLS TCP
+			// passthrough. The DNS alias points at the public LB IP; the P2P
+			// certificate carries the IP SAN, not the hostname.
+			"scheduler": map[string]any{
+				"enabled":  opts.SchedulerPublicEnabled,
+				"publicIP": opts.SchedulerPublicIP,
+				"host":     opts.SchedulerHost,
+				"service":  opts.SchedulerService,
+				"port":     opts.SchedulerPort,
 			},
 			"mtlsSecret":   c.MTLSSecretName,
 			"mtlsCA":       c.MTLSCA,
