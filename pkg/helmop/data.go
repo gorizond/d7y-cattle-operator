@@ -71,7 +71,13 @@ func Data(c Cluster) *fleetv1alpha1.HelmOp {
 			"storage":   map[string]any{"server": map[string]any{"tcpPort": 4005, "quicPort": 4006}},
 		},
 		"extraVolumes": volumes(c.MTLSSecretName,
-			map[string]any{"name": "storage", "emptyDir": map[string]any{}},
+			map[string]any{
+				"name": "storage",
+				"hostPath": map[string]any{
+					"path": "/var/lib/dragonfly",
+					"type": "DirectoryOrCreate",
+				},
+			},
 			logVolume(),
 		),
 		"extraVolumeMounts": volumeMounts(
