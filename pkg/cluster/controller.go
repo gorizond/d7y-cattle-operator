@@ -294,21 +294,10 @@ func (c *Controller) ensureMTLSSecret(cluster *provv1.Cluster) error {
 		c.event(cluster, corev1.EventTypeWarning, "MTLSSecretUnavailable", err.Error())
 		return err
 	}
-	// Fleet installs the Dragonfly charts in helmop.TargetNamespace. When the
-	// operator has access to that namespace (for example, when it runs in the
-	// downstream cluster), write the same Secret so the manager mounts the
-	// exact leaf/CA that Fleet and the scheduler use. The cluster namespace
-	// copy remains required for Fleet's DownstreamResources delivery.
-	namespaces := []string{cluster.Namespace}
-	if helmop.TargetNamespace != cluster.Namespace {
-		namespaces = append(namespaces, helmop.TargetNamespace)
-	}
-	for _, namespace := range namespaces {
-		if _, err := apply.ReplicateSecret(source, namespace, c.secrets); err != nil {
-			message := fmt.Sprintf("replicate mTLS Secret to %s/%s: %v", namespace, source.Name, err)
-			c.event(cluster, corev1.EventTypeWarning, "SecretReplicationFailed", message)
-			return fmt.Errorf("replicate mTLS Secret to %s/%s: %w", namespace, source.Name, err)
-		}
+	if _, err := apply.ReplicateSecret(source, cluster.Namespace, c.secrets); err != nil {
+		message := fmt.Sprintf("replicate mTLS Secret to %s/%s: %v", cluster.Namespace, source.Name, err)
+		c.event(cluster, corev1.EventTypeWarning, "SecretReplicationFailed", message)
+		return fmt.Errorf("replicate mTLS Secret to %s/%s: %w", cluster.Namespace, source.Name, err)
 	}
 	return nil
 }

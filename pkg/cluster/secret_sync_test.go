@@ -6,9 +6,11 @@ import (
 
 	corev1 "k8s.io/api/core/v1"
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
+
+	"github.com/gorizond/d7y-cattle-operator/pkg/helmop"
 )
 
-func TestEnsureMTLSSecretReplicatesToClusterAndTargetNamespace(t *testing.T) {
+func TestEnsureMTLSSecretReplicatesToClusterNamespace(t *testing.T) {
 	controller, _, _ := newTestController(t)
 	controller.opts.OperatorNamespace = "d7y-system"
 	store := controller.secrets.(*fakeSecretStore)
@@ -22,64 +24,63 @@ func TestEnsureMTLSSecretReplicatesToClusterAndTargetNamespace(t *testing.T) {
 		},
 	}
 	store.put(source)
+	cluster := testSeedCluster("42")
 
-	if err := controller.ensureMTLSSecret(testSeedCluster("42")); err != nil {
+	if err := controller.ensureMTLSSecret(cluster); err != nil {
 		t.Fatalf("ensureMTLSSecret() error = %v", err)
 	}
 
-	namespaces := []string{"d7y-system", "fleet-default", "dragonfly-system"}
-	for _, namespace := range namespaces {
-		copy, err := store.Get(namespace, source.Name, metav1.GetOptions{})
-		if err != nil {
-			t.Fatalf("get %s: %v", namespace, err)
-		}
-		if !bytes.Equal(copy.Data[corev1.TLSCertKey], source.Data[corev1.TLSCertKey]) ||
-			!bytes.Equal(copy.Data["ca.crt"], source.Data["ca.crt"]) {
-			t.Errorf("%s copy data differs from source", namespace)
-		}
-		if namespace != "d7y-system" {
-			if _, ok := copy.Annotations["kubectl.kubernetes.io/last-applied-configuration"]; ok {
-				t.Errorf("%s copy has last-applied annotation", namespace)
-			}
-		}
+	copy, err := store.Get(cluster.Namespace, source.Name, metav1.GetOptions{})
+	if err != nil {
+		t.Fatalf("get %s copy: %v", cluster.Namespace, err)
+	}
+	if !bytes.Equal(copy.Data[corev1.TLSCertKey], source.Data[corev1.TLSCertKey]) ||
+		!bytes.Equal(copy.Data["ca.crt"], source.Data["ca.crt"]) ||
+		!bytes.Equal(copy.Data[corev1.TLSPrivateKeyKey], source.Data[corev1.TLSPrivateKeyKey]) {
+		t.Error("cluster namespace copy data differs from source")
+	}
+	if _, ok := copy.Annotations["kubectl.kubernetes.io/last-applied-configuration"]; ok {
+		t.Error("cluster namespace copy has last-applied annotation")
+	}
+
+	// Fleet's DownstreamResources entry remains the supported downstream sync.
+	op := helmop.Manager(controller.helmopCluster(cluster))
+	if len(op.Spec.DownstreamResources) != 1 ||
+		op.Spec.DownstreamResources[0].Kind != "Secret" ||
+		op.Spec.DownstreamResources[0].Name != source.Name {
+		t.Errorf("manager downstreamResources = %+v, want Secret %s", op.Spec.DownstreamResources, source.Name)
 	}
 
 	rotated := source.DeepCopy()
 	rotated.Data[corev1.TLSCertKey] = []byte("rotated-cert")
 	rotated.Data["ca.crt"] = []byte("rotated-ca")
 	store.put(rotated)
-	// Seed a stale annotation on one copy; replication must strip it on update.
-	fleetCopy, err := store.Get("fleet-default", source.Name, metav1.GetOptions{})
+	// Seed a stale annotation on the cluster copy; replication must strip it.
+	clusterCopy, err := store.Get(cluster.Namespace, source.Name, metav1.GetOptions{})
 	if err != nil {
-		t.Fatalf("get fleet copy: %v", err)
+		t.Fatalf("get cluster copy: %v", err)
 	}
-	fleetCopy.Annotations = map[string]string{
+	clusterCopy.Annotations = map[string]string{
 		"kubectl.kubernetes.io/last-applied-configuration": `{"data":{"tls.key":"private"}}`,
 		"keep": "yes",
 	}
-	store.put(fleetCopy)
+	store.put(clusterCopy)
 
-	if err := controller.ensureMTLSSecret(testSeedCluster("42")); err != nil {
+	if err := controller.ensureMTLSSecret(cluster); err != nil {
 		t.Fatalf("ensureMTLSSecret(rotation) error = %v", err)
 	}
-	for _, namespace := range namespaces {
-		copy, err := store.Get(namespace, source.Name, metav1.GetOptions{})
-		if err != nil {
-			t.Fatalf("get %s: %v", namespace, err)
-		}
-		if !bytes.Equal(copy.Data[corev1.TLSCertKey], []byte("rotated-cert")) ||
-			!bytes.Equal(copy.Data["ca.crt"], []byte("rotated-ca")) {
-			t.Errorf("%s copy was not rotated", namespace)
-		}
-		if _, ok := copy.Annotations["kubectl.kubernetes.io/last-applied-configuration"]; ok {
-			t.Errorf("%s copy kept last-applied annotation", namespace)
-		}
-	}
-	fleetCopy, err = store.Get("fleet-default", source.Name, metav1.GetOptions{})
+	clusterCopy, err = store.Get(cluster.Namespace, source.Name, metav1.GetOptions{})
 	if err != nil {
-		t.Fatalf("get fleet copy: %v", err)
+		t.Fatalf("get cluster copy: %v", err)
 	}
-	if fleetCopy.Annotations["keep"] != "yes" {
-		t.Error("unrelated annotation was removed from fleet-default copy")
+	if !bytes.Equal(clusterCopy.Data[corev1.TLSCertKey], []byte("rotated-cert")) ||
+		!bytes.Equal(clusterCopy.Data["ca.crt"], []byte("rotated-ca")) {
+		t.Error("cluster namespace copy was not rotated")
+	}
+	if _, ok := clusterCopy.Annotations["kubectl.kubernetes.io/last-applied-configuration"]; ok {
+		t.Error("cluster namespace copy kept last-applied annotation")
+	}
+	if clusterCopy.Annotations["keep"] != "yes" {
+		t.Error("unrelated annotation was removed from cluster copy")
 	}
 }
