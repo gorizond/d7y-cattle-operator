@@ -316,6 +316,7 @@ func (c *Controller) helmopCluster(cluster *provv1.Cluster) helmop.Cluster {
 		SchedulerReplicas:  helmop.ReplicasOrOne(AnnotationSchedulerReplicas, cluster.Annotations[AnnotationSchedulerReplicas]),
 		SeedClientReplicas: helmop.ReplicasOrOne(AnnotationSeedClientReplicas, cluster.Annotations[AnnotationSeedClientReplicas]),
 		Monitoring:         monitoringEnabled(cluster),
+		P2PDataTLS:         p2pDataTLSEnabled(cluster),
 		Labels:             apply.Labels(cluster.Namespace, cluster.Name),
 	}
 	// The certificate revision is derived from the live Secret so a rotation

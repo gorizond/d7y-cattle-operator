@@ -116,17 +116,40 @@ func TestDataHelmOp(t *testing.T) {
 		}
 	}
 
-	uploadServer := nested(t, seedClient, "config", "upload", "server")
-	if uploadServer["caCert"] != CertDir+"/ca.crt" ||
-		uploadServer["cert"] != CertDir+"/tls.crt" ||
-		uploadServer["key"] != CertDir+"/tls.key" {
-		t.Errorf("seedClient upload TLS = %v", uploadServer)
-	}
+	assertNoTLS(t, nested(t, seedClient, "config", "upload", "server"))
+	assertNoTLS(t, nested(t, seedClient, "config", "upload", "client"))
+	assertNoTLS(t, nested(t, client, "config", "upload", "server"))
+	assertNoTLS(t, nested(t, client, "config", "upload", "client"))
 
 	for _, component := range []string{"seedClient", "client"} {
 		config := nested(t, values, component, "config")
 		if _, ok := config["manager"]; ok {
 			t.Errorf("%s config contains manager.addr; data must use dynconfig", component)
+		}
+	}
+}
+
+func TestDataHelmOpP2PDataTLSEnabled(t *testing.T) {
+	c := testCluster()
+	c.P2PDataTLS = true
+	values := Data(c).Spec.Helm.Values.Data
+	for _, component := range []string{"seedClient", "client"} {
+		server := nested(t, values, component, "config", "upload", "server")
+		if server["caCert"] != CertDir+"/ca.crt" || server["cert"] != CertDir+"/tls.crt" || server["key"] != CertDir+"/tls.key" {
+			t.Errorf("%s upload server TLS = %v", component, server)
+		}
+		client := nested(t, values, component, "config", "upload", "client")
+		if client["caCert"] != CertDir+"/ca.crt" || client["cert"] != CertDir+"/tls.crt" || client["key"] != CertDir+"/tls.key" {
+			t.Errorf("%s upload client TLS = %v", component, client)
+		}
+	}
+}
+
+func assertNoTLS(t *testing.T, value map[string]any) {
+	t.Helper()
+	for _, key := range []string{"caCert", "cert", "key", "tls"} {
+		if _, ok := value[key]; ok {
+			t.Errorf("unexpected TLS key %q in %v", key, value)
 		}
 	}
 }
@@ -182,9 +205,9 @@ func TestControlHelmOp(t *testing.T) {
 	if serverTLS["caCert"] != CertDir+"/ca.crt" {
 		t.Errorf("server TLS = %v", serverTLS)
 	}
-	seedPeerTLS := nested(t, values, "scheduler", "config", "seedPeer", "tls")
-	if seedPeerTLS["caCert"] != CertDir+"/ca.crt" {
-		t.Errorf("seedPeer TLS = %v", seedPeerTLS)
+	seedPeer := nested(t, values, "scheduler", "config", "seedPeer")
+	if _, ok := seedPeer["tls"]; ok {
+		t.Errorf("seedPeer TLS is present by default: %v", seedPeer)
 	}
 	if got := valueAt(t, values, "scheduler", "config", "server", "advertiseIP"); got != "203.0.113.10" {
 		t.Errorf("scheduler advertiseIP = %v, want public LB IP", got)
@@ -197,6 +220,22 @@ func TestControlHelmOp(t *testing.T) {
 	}
 	if got := valueAt(t, values, "scheduler", "podAnnotations", certRevisionAnnotation); got != "rev1" {
 		t.Errorf("scheduler podAnnotations revision = %v", got)
+	}
+}
+
+func TestControlHelmOpP2PDataTLSEnabled(t *testing.T) {
+	c := testCluster()
+	c.P2PDataTLS = true
+	values := Control(c).Spec.Helm.Values.Data
+	seedPeerTLS := nested(t, values, "scheduler", "config", "seedPeer", "tls")
+	if seedPeerTLS["caCert"] != CertDir+"/ca.crt" || seedPeerTLS["cert"] != CertDir+"/tls.crt" || seedPeerTLS["key"] != CertDir+"/tls.key" {
+		t.Errorf("seedPeer TLS = %v", seedPeerTLS)
+	}
+	if got := valueAt(t, values, "scheduler", "config", "server", "tls", "caCert"); got != CertDir+"/ca.crt" {
+		t.Errorf("scheduler server TLS = %v", got)
+	}
+	if got := valueAt(t, values, "scheduler", "config", "manager", "tls", "caCert"); got != CertDir+"/ca.crt" {
+		t.Errorf("manager client TLS = %v", got)
 	}
 }
 

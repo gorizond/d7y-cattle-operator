@@ -18,6 +18,11 @@ const (
 	AnnotationSchedulerReplicas      = "p2p.dragonfly.io/scheduler-replicas"
 	AnnotationSeedClientReplicas     = "p2p.dragonfly.io/seedclient-replicas"
 	AnnotationMonitoring             = "p2p.dragonfly.io/monitoring"
+	// AnnotationP2PDataTLS keeps TLS on the P2P data path (dfdaemon upload
+	// server/client and scheduler seedPeer). It is disabled by default; only
+	// "true" or "enabled" preserve the legacy data-path TLS values. Scheduler
+	// server, manager gRPC/API, and monitoring TLS are always kept.
+	AnnotationP2PDataTLS = "p2p.dragonfly.io/p2p-data-tls"
 )
 
 // Roles is the resolved role set for a Cluster.
@@ -60,4 +65,14 @@ func monitoringEnabled(cluster *provv1.Cluster) bool {
 		return false
 	}
 	return selector.Matches(labels.Set(cluster.Labels))
+}
+
+// p2pDataTLSEnabled reports whether the P2P data path keeps TLS. The default
+// is plaintext; only the explicit "true" and "enabled" values opt back in.
+func p2pDataTLSEnabled(cluster *provv1.Cluster) bool {
+	if cluster == nil {
+		return false
+	}
+	raw := strings.TrimSpace(cluster.Annotations[AnnotationP2PDataTLS])
+	return strings.EqualFold(raw, "true") || strings.EqualFold(raw, "enabled")
 }

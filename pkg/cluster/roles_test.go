@@ -70,6 +70,35 @@ func TestResolveRoles(t *testing.T) {
 	}
 }
 
+func TestP2PDataTLSEnabled(t *testing.T) {
+	tests := map[string]struct {
+		annotation string
+		want       bool
+	}{
+		"default":          {want: false},
+		"true":             {annotation: "true", want: true},
+		"enabled":          {annotation: "enabled", want: true},
+		"case insensitive": {annotation: " TRUE ", want: true},
+		"false":            {annotation: "false", want: false},
+		"disabled":         {annotation: "disabled", want: false},
+		"empty":            {annotation: "", want: false},
+		"invalid":          {annotation: "yes", want: false},
+	}
+	for name, tc := range tests {
+		t.Run(name, func(t *testing.T) {
+			cluster := &provv1.Cluster{ObjectMeta: metav1.ObjectMeta{
+				Annotations: map[string]string{AnnotationP2PDataTLS: tc.annotation},
+			}}
+			if got := p2pDataTLSEnabled(cluster); got != tc.want {
+				t.Errorf("p2pDataTLSEnabled() = %v, want %v", got, tc.want)
+			}
+		})
+	}
+	if p2pDataTLSEnabled(nil) {
+		t.Error("p2pDataTLSEnabled(nil) = true, want false")
+	}
+}
+
 func TestMonitoringEnabled(t *testing.T) {
 	tests := map[string]struct {
 		labels      map[string]string
