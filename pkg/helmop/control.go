@@ -34,7 +34,7 @@ func Control(c Cluster) *fleetv1alpha1.HelmOp {
 					// the manager dynconfig; DaemonSets use their local
 					// dynconfig and the same public host.
 					"advertiseIP":   c.SchedulerPublicIP,
-					"advertisePort": SchedulerPublicPort,
+					"advertisePort": SchedulerPort,
 				},
 				"seedPeer": map[string]any{"tls": tlsPaths()},
 			},

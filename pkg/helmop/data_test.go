@@ -184,8 +184,11 @@ func TestControlHelmOp(t *testing.T) {
 	if got := valueAt(t, values, "scheduler", "config", "server", "advertiseIP"); got != "203.0.113.10" {
 		t.Errorf("scheduler advertiseIP = %v, want public LB IP", got)
 	}
-	if got := valueAt(t, values, "scheduler", "config", "server", "advertisePort"); got != SchedulerPublicPort {
-		t.Errorf("scheduler advertisePort = %v, want %d", got, SchedulerPublicPort)
+	if got := valueAt(t, values, "scheduler", "config", "server", "advertisePort"); got != SchedulerPort {
+		t.Errorf("scheduler advertisePort = %v, want scheduler gRPC port %d", got, SchedulerPort)
+	}
+	if got := valueAt(t, values, "scheduler", "config", "server", "advertisePort"); got == SchedulerPublicPort {
+		t.Errorf("scheduler advertisePort must not be the public Traefik port %d", SchedulerPublicPort)
 	}
 	if got := valueAt(t, values, "scheduler", "podAnnotations", certRevisionAnnotation); got != "rev1" {
 		t.Errorf("scheduler podAnnotations revision = %v", got)

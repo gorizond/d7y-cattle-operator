@@ -10,6 +10,8 @@ import (
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
 )
 
+const lastAppliedAnnotation = "kubectl.kubernetes.io/last-applied-configuration"
+
 // SecretStore is the subset of Wrangler's generated SecretController used to
 // replicate Secrets between namespaces.
 type SecretStore interface {
@@ -19,7 +21,8 @@ type SecretStore interface {
 }
 
 // ReplicateSecret copies source into namespace and updates the copy when its
-// type or data changes. It reports whether anything was created or updated.
+// type, data, or the private-key-bearing last-applied annotation changes. It
+// reports whether anything was created or updated.
 func ReplicateSecret(source *corev1.Secret, namespace string, store SecretStore) (bool, error) {
 	if source == nil {
 		return false, errors.New("apply: source secret is nil")
@@ -36,7 +39,14 @@ func ReplicateSecret(source *corev1.Secret, namespace string, store SecretStore)
 		return false, fmt.Errorf("get secret %s/%s: %w", namespace, source.Name, err)
 	}
 
-	if current.Type == source.Type && equality.Semantic.DeepEqual(current.Data, source.Data) {
+	changed := current.Type != source.Type || !equality.Semantic.DeepEqual(current.Data, source.Data)
+	if current.Annotations != nil {
+		if _, ok := current.Annotations[lastAppliedAnnotation]; ok {
+			delete(current.Annotations, lastAppliedAnnotation)
+			changed = true
+		}
+	}
+	if !changed {
 		return false, nil
 	}
 	current.Type = source.Type
