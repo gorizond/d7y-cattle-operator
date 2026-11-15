@@ -81,6 +81,9 @@ type Cluster struct {
 	// Monitoring enables Dragonfly metrics and ServiceMonitors for the
 	// manager, scheduler, seedClient, and client components.
 	Monitoring bool
+	// P2PDataTLS keeps TLS on the P2P data path (dfdaemon upload and scheduler
+	// seedPeer). Scheduler server and manager TLS are independent and remain on.
+	P2PDataTLS bool
 	Labels     map[string]string
 }
 

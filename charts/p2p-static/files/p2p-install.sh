@@ -238,6 +238,9 @@ write_file "${ROOT}${CERT_DIR}/ca.crt" 0644 < "$TMP/ca.crt"
 write_file "${ROOT}${CERT_DIR}/tls.crt" 0644 < "$TMP/tls.crt"
 write_file "${ROOT}${CERT_DIR}/tls.key" 0600 < "$TMP/tls.key"
 
+# P2P data upload is intentionally plaintext here; only the scheduler control
+# connection keeps TLS. The operator's p2p-data-tls annotation does not apply
+# to this pre-cluster bootstrap config.
 write_file "${ROOT}${DFGET_CONFIG}" 0644 <<EOF
 scheduler:
   tls:

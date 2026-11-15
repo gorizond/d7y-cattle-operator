@@ -36,7 +36,7 @@ func Control(c Cluster) *fleetv1alpha1.HelmOp {
 					"advertiseIP":   c.SchedulerPublicIP,
 					"advertisePort": SchedulerPort,
 				},
-				"seedPeer": map[string]any{"tls": tlsPaths()},
+				"seedPeer": seedPeerConfig(c.P2PDataTLS),
 			},
 			"extraVolumes":      volumes(c.MTLSSecretName, logVolume()),
 			"extraVolumeMounts": volumeMounts(logVolumeMount("/var/log/dragonfly/scheduler")),
@@ -48,4 +48,12 @@ func Control(c Cluster) *fleetv1alpha1.HelmOp {
 	applyMonitoring(values, c.Monitoring)
 	op := newHelmOp(ControlName(c.Name), c, c.Chart, "control", values, []string{KeyDBName(c.Name)})
 	return withMTLS(op, c.MTLSSecretName)
+}
+
+func seedPeerConfig(tlsEnabled bool) map[string]any {
+	seedPeer := map[string]any{}
+	if tlsEnabled {
+		seedPeer["tls"] = tlsPaths()
+	}
+	return seedPeer
 }

@@ -37,7 +37,7 @@ func Data(c Cluster) *fleetv1alpha1.HelmOp {
 		"config": map[string]any{
 			"host":      map[string]any{"schedulerClusterID": c.SchedulerClusterID},
 			"scheduler": tlsPaths(),
-			"upload":    uploadConfig(4100),
+			"upload":    uploadConfig(4100, c.P2PDataTLS),
 			"proxy":     map[string]any{"ip": "127.0.0.1", "server": map[string]any{"port": 4101}},
 			"metrics":   map[string]any{"ip": "127.0.0.1", "server": map[string]any{"port": 4102}},
 			"health":    map[string]any{"ip": "127.0.0.1", "server": map[string]any{"port": 4103}},
@@ -63,7 +63,7 @@ func Data(c Cluster) *fleetv1alpha1.HelmOp {
 		"config": map[string]any{
 			"host":      map[string]any{"schedulerClusterID": c.SchedulerClusterID},
 			"scheduler": tlsPaths(),
-			"upload":    uploadConfig(4000),
+			"upload":    uploadConfig(4000, c.P2PDataTLS),
 			"proxy":     map[string]any{"ip": "127.0.0.1", "server": map[string]any{"port": 4001}},
 			"metrics":   map[string]any{"ip": "127.0.0.1", "server": map[string]any{"port": 4002}},
 			"health":    map[string]any{"ip": "127.0.0.1", "server": map[string]any{"port": 4003}},
@@ -99,15 +99,15 @@ func Data(c Cluster) *fleetv1alpha1.HelmOp {
 	return withMTLS(op, c.MTLSSecretName)
 }
 
-func uploadConfig(port int) map[string]any {
-	tls := tlsPaths()
-	return map[string]any{
-		"server": map[string]any{
-			"port":   port,
-			"caCert": tls["caCert"],
-			"cert":   tls["cert"],
-			"key":    tls["key"],
-		},
-		"client": tls,
+func uploadConfig(port int, tlsEnabled bool) map[string]any {
+	server := map[string]any{"port": port}
+	upload := map[string]any{"server": server, "client": map[string]any{}}
+	if tlsEnabled {
+		tls := tlsPaths()
+		server["caCert"] = tls["caCert"]
+		server["cert"] = tls["cert"]
+		server["key"] = tls["key"]
+		upload["client"] = tls
 	}
+	return upload
 }

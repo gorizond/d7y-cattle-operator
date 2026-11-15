@@ -295,10 +295,10 @@ security groups:
 | Ports | Purpose | Exposure |
 |---|---|---|
 | `8002` | Scheduler gRPC backend | mTLS required; reachable only from the Traefik pod network, never exposed publicly |
-| `4000` | dfdaemon upload | mTLS required; allow only cluster peers/scheduler |
+| `4000` | dfdaemon upload | Plaintext by default; allow only cluster peers/scheduler. Set `p2p-data-tls` to require mTLS. |
 | `4001/4002/4003/4004` | client proxy/metrics/health/stats | bind to `127.0.0.1`; do not expose |
 | `4005/4006` | client storage TCP/QUIC | cluster network only |
-| `4100` | seedClient upload | mTLS required; allow only cluster peers/scheduler |
+| `4100` | seedClient upload | Plaintext by default; allow only cluster peers/scheduler. Set `p2p-data-tls` to require mTLS. |
 | `4101/4102/4103/4104` | seedClient proxy/metrics/health/stats | bind to `127.0.0.1`; do not expose |
 | `4105/4106` | seedClient storage TCP/QUIC | cluster network only |
 | `65003` | manager gRPC backend | mTLS end-to-end; Traefik only forwards TCP; never plaintext |
@@ -406,6 +406,7 @@ The operator only acts on Clusters labeled `p2p-dragonfly-io: "true"`.
 | `p2p.dragonfly.io/scheduler-replicas` | integer | Scheduler replicas (default `1`) |
 | `p2p.dragonfly.io/seedclient-replicas` | integer | Seed client replicas (default `1`) |
 | `p2p.dragonfly.io/monitoring` | label selector, `true`, or `enabled` | Enable metrics and ServiceMonitors for manager/scheduler/seedClient/client when the selector matches the Cluster labels; empty, invalid, or non-matching disables. Requires the Prometheus Operator ServiceMonitor CRD. |
+| `p2p.dragonfly.io/p2p-data-tls` | `"true"` or `"enabled"` | Keep mTLS on the P2P data path (`seedClient`/`client` upload and scheduler `seedPeer`). Default/off uses plaintext P2P data; scheduler server, manager gRPC/API, and monitoring TLS are unaffected. |
 | `p2p.dragonfly.io/node-config-key` | field name | Machine-config `spec` field patched by the webhook (default `userData`, e.g. `postBootScript`) |
 
 When monitoring is enabled, a Dragonfly component with `enable=false` is
@@ -413,6 +414,13 @@ explicitly given `metrics.enable=false` and `metrics.serviceMonitor.enable=false
 so the fork chart does not render an empty metrics Service for it. When
 monitoring is disabled, the operator leaves the chart metrics defaults
 untouched.
+
+P2P data TLS is disabled by default. The operator omits the upload server/client
+certificate paths from both data workloads and the scheduler `seedPeer.tls`
+block. Set `p2p.dragonfly.io/p2p-data-tls: "enabled"` (or `"true"`) to restore
+mTLS on the data path. Scheduler `server.tls`, manager gRPC/API TLS, and
+monitoring TLS are always retained. The bootstrap `p2p-install.sh` config keeps
+scheduler control TLS and leaves upload plaintext, matching the cluster default.
 
 ## Manager API client and scheduler ID allocator
 
