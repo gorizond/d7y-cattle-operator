@@ -404,7 +404,7 @@ names above. Verify them against the live release in the pilot, especially the
 (`<cluster>-control-scheduler`). The extras chart falls back to derived names
 when explicit names are empty, but the operator always sets them.
 
-The gRPC Ingress reads `auth-tls-secret` and `proxy-ssl-secret` from
+The nginx gRPC Ingress reads `auth-tls-secret` and `proxy-ssl-secret` from
 `dragonfly-system`; the operator must be installed there (the default
 `namespace`) so the P2P Secret is present in the Ingress namespace.
 
