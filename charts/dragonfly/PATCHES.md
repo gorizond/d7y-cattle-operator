@@ -38,6 +38,8 @@ When `scheduler.config.server.tls` has `caCert`, `cert` and `key`, the
 startup/readiness/liveness `grpc_health_probe` commands gain the same four TLS
 flags. Otherwise the probes stay plaintext, matching upstream.
 
-No other upstream files are changed apart from `Chart.yaml` (`version:
-1.10.1-patch.1`). Dependencies (`charts/mysql`, `charts/postgres`, `charts/valkey`)
-are vendored unchanged from the upstream package.
+No other chart templates are changed apart from `Chart.yaml` (`version:
+1.10.1-patch.1`). Dependencies (`charts/mysql`, `charts/postgres`,
+`charts/valkey`) are vendored from the upstream package; the upstream
+`charts/postgres/ci/` chart-test fixtures are omitted (they contain sample CI
+passwords and are not used by this chart).
