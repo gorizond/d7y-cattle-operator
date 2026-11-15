@@ -115,6 +115,31 @@ func TestDataHelmOp(t *testing.T) {
 			t.Errorf("client %s ip = %v", component, got)
 		}
 	}
+	clientVolumes, ok := valueAt(t, client, "extraVolumes").([]any)
+	if !ok {
+		t.Fatalf("client extraVolumes is not a list")
+	}
+	var storageVolume map[string]any
+	for _, volume := range clientVolumes {
+		volumeMap, ok := volume.(map[string]any)
+		if ok && volumeMap["name"] == "storage" {
+			storageVolume = volumeMap
+			break
+		}
+	}
+	if storageVolume == nil {
+		t.Fatal("client storage volume is missing")
+	}
+	if _, ok := storageVolume["emptyDir"]; ok {
+		t.Error("client storage volume is emptyDir, want hostPath")
+	}
+	hostPath, ok := storageVolume["hostPath"].(map[string]any)
+	if !ok {
+		t.Fatalf("client storage hostPath = %v, want map", storageVolume["hostPath"])
+	}
+	if hostPath["path"] != "/var/lib/dragonfly" || hostPath["type"] != "DirectoryOrCreate" {
+		t.Errorf("client storage hostPath = %v, want /var/lib/dragonfly DirectoryOrCreate", hostPath)
+	}
 
 	assertNoTLS(t, nested(t, seedClient, "config", "upload", "server"))
 	assertNoTLS(t, nested(t, seedClient, "config", "upload", "client"))
