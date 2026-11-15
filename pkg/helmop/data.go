@@ -8,7 +8,7 @@ import fleetv1alpha1 "github.com/rancher/fleet/pkg/apis/fleet.cattle.io/v1alpha1
 //
 // The upload and storage ports below are the peer ports dfdaemon advertises to
 // schedulers and other peers; with hostNetwork they are bound on the node.
-// Dragonfly chart 1.10.1 has no separate advertise fields for dfdaemon.
+// The Dragonfly chart has no separate advertise fields for dfdaemon.
 func Data(c Cluster) *fleetv1alpha1.HelmOp {
 	schedulerAddr := SchedulerServiceName(c.Name) + "." + TargetNamespace + ".svc:8002"
 	seedClient := map[string]any{

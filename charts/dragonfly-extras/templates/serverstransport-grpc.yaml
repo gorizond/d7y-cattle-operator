@@ -1,0 +1,23 @@
+{{- $controller := .Values.ingress.controller | default "nginx" -}}
+{{- $grpcTLSSecret := .Values.ingress.grpc.tlsSecret -}}
+{{- $transport := .Values.ingress.grpc.serversTransport -}}
+{{- if and .Values.ingress.enabled .Values.ingress.grpc.enabled (eq $controller "traefik") (.Capabilities.APIVersions.Has "traefik.io/v1alpha1") $transport.enabled $grpcTLSSecret }}
+# Traefik ServersTransport for the manager gRPC backend. Schema verified against
+# the Traefik v1alpha1 CRD: serverName (string), rootCAs ([]Secret/ConfigMap
+# refs) and certificatesSecrets ([]Secret names). The P2P Secret provides
+# ca.crt for rootCAs and tls.crt/tls.key for the client certificate.
+# insecureSkipVerify is intentionally left unset for gRPC.
+apiVersion: traefik.io/v1alpha1
+kind: ServersTransport
+metadata:
+  name: {{ .Release.Name }}-manager-grpc
+  namespace: {{ .Release.Namespace }}
+  labels:
+    {{- include "dragonfly-extras.labels" . | nindent 4 }}
+spec:
+  serverName: {{ ($transport.serverName | default .Values.ingress.grpc.host) | quote }}
+  rootCAs:
+    - secret: {{ ($transport.secretName | default $grpcTLSSecret) | quote }}
+  certificatesSecrets:
+    - {{ ($transport.secretName | default $grpcTLSSecret) | quote }}
+{{- end }}

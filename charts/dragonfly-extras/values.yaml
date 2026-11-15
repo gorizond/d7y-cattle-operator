@@ -1,9 +1,9 @@
 # Manager Ingresses (gRPC with client mTLS + REST over HTTPS).
 ingress:
   enabled: false
-  # nginx keeps the auth-tls/backend-protocol behavior with the manager's
-  # plaintext h2c gRPC backend. traefik terminates gRPC TLS at the edge (client
-  # mTLS) and uses a CRD ServersTransport for the HTTPS REST backend.
+  # Both controllers terminate client mTLS at the edge. The manager now serves
+  # gRPC over TLS, so nginx uses a GRPCS backend and Traefik uses an HTTPS
+  # backend with a CRD ServersTransport.
   controller: nginx
   className: ""
   grpc:
@@ -11,11 +11,19 @@ ingress:
     host: ""
     service: ""
     port: 65003
-    # Secret served on the Traefik gRPC edge. Empty falls back to
-    # ingress.tls.secretName. The scheduler verifies the manager with the P2P
-    # CA, so production sets this to the P2P Secret while REST keeps the public
-    # one.
+    # P2P Secret served on the gRPC edge and used for the manager backend
+    # mTLS. The scheduler verifies the manager with the P2P CA, so this must
+    # stay the P2P Secret while REST keeps the public one.
     tlsSecret: ""
+    # Traefik ServersTransport for the manager gRPC backend. The manager serves
+    # TLS with client mTLS; rootCAs and the client certificate come from the
+    # P2P Secret (ca.crt and tls.crt/tls.key). insecureSkipVerify is not set.
+    serversTransport:
+      enabled: true
+      # Defaults to ingress.grpc.host.
+      serverName: ""
+      # Defaults to ingress.grpc.tlsSecret.
+      secretName: ""
   rest:
     enabled: true
     host: ""

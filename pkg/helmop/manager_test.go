@@ -8,8 +8,8 @@ func testCluster() Cluster {
 		Namespace:          "fleet-default",
 		MTLSSecretName:     "dragonfly-p2p-mtls",
 		MTLSCA:             "ca",
-		Chart:              Chart{Repo: "https://charts.example.com", Name: "dragonfly", Version: "1.10.1"},
-		ExtrasChart:        Chart{Repo: "https://charts.example.com", Name: "dragonfly-extras", Version: "0.1.4"},
+		Chart:              Chart{Repo: "https://charts.example.com", Name: "dragonfly", Version: "1.10.1-patch.1"},
+		ExtrasChart:        Chart{Repo: "https://charts.example.com", Name: "dragonfly-extras", Version: "0.1.6"},
 		ManagerGRPCDomain:  "grpc.example.com",
 		ManagerGRPCPort:    ManagerGRPCEdgePort,
 		ManagerAPIHost:     "api.example.com",
@@ -76,7 +76,7 @@ func TestManagerHelmOp(t *testing.T) {
 	if helm == nil {
 		t.Fatal("spec.helm is nil")
 	}
-	if helm.Repo != "https://charts.example.com" || helm.Chart != "dragonfly" || helm.Version != "1.10.1" {
+	if helm.Repo != "https://charts.example.com" || helm.Chart != "dragonfly" || helm.Version != "1.10.1-patch.1" {
 		t.Errorf("chart = %s/%s/%s", helm.Repo, helm.Chart, helm.Version)
 	}
 	if helm.ReleaseName != "c1-manager" {
