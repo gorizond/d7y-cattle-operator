@@ -86,6 +86,9 @@ redis:
 externalRedis:
   addrs:
     - c1-keydb.dragonfly-system.svc.cluster.local:6379
+externalManager:
+  host: manager-grpc.example.com
+  grpcPort: 443
 scheduler:
   enable: true
   config:
@@ -120,6 +123,12 @@ for flag in "-tls-ca-cert=/etc/dragonfly/certs/ca.crt" "-tls-client-cert=/etc/dr
   count=$(grep -c "command: \[\"/bin/grpc_health_probe\", \"-addr=:8002\".*$flag" "$tmp/control.yaml" || true)
   [ "$count" -eq 3 ] || fail "scheduler probes with $flag = $count, want 3"
 done
+
+# Manager remains external-only: no in-cluster manager DNS fallback.
+grep -q 'addr: manager-grpc.example.com:443' "$tmp/control.yaml" || fail "scheduler manager address is not the public external host"
+if grep -q 'poligon-manager.dragonfly-system.svc' "$tmp/control.yaml" || grep -q 'manager.dragonfly-system.svc' "$tmp/control.yaml"; then
+  fail "scheduler render contains an internal manager DNS address"
+fi
 
 # The scheduler must keep its headless peer Service and add a non-headless
 # client Service on the same gRPC port. The client ClusterIP is pinned because
@@ -195,3 +204,44 @@ assert_workload_resources "$seed_doc" '"1"' '2Gi' '"4"' '8Gi' "seedClient"
 assert_workload_resources "$client_doc" '250m' '512Mi' '"2"' '4Gi' "client"
 
 echo "fork chart data resource render checks passed ($repo $version)"
+
+# Extras: manager gRPC is a Traefik exact-SNI TCP passthrough, REST stays LE.
+extras="$root/charts/dragonfly-extras"
+helm template e "$extras" --namespace dragonfly-system \
+  --set ingress.enabled=true \
+  --set ingress.controller=traefik \
+  --set ingress.className=traefik \
+  --set ingress.grpc.host=grpc.example.com \
+  --set ingress.grpc.service=c1-manager \
+  --set ingress.grpc.port=65003 \
+  --set ingress.rest.enabled=true \
+  --set ingress.rest.host=api.example.com \
+  --set ingress.rest.service=c1-manager \
+  --set ingress.tls.enabled=true \
+  --set ingress.tls.secretName=poligon-manager-public-tls \
+  --set scheduler.enabled=true \
+  --set scheduler.clusterID=c-m-example \
+  --set scheduler.domain=example.com \
+  --set scheduler.publicIP=203.0.113.10 \
+  --set scheduler.service=c1-control-scheduler \
+  --api-versions traefik.io/v1alpha1 >"$tmp/extras.yaml"
+manager_tcp=$(awk 'BEGIN{RS="---"} /kind: IngressRouteTCP/ && /name: e-manager-grpc/ {print}' "$tmp/extras.yaml")
+scheduler_tcp=$(awk 'BEGIN{RS="---"} /kind: IngressRouteTCP/ && /name: e-scheduler/ {print}' "$tmp/extras.yaml")
+[ -n "$manager_tcp" ] || fail "manager gRPC TCP route missing"
+[ -n "$scheduler_tcp" ] || fail "scheduler TCP route missing"
+echo "$manager_tcp" | grep -Fq 'HostSNI(`grpc.example.com`)' || fail "manager gRPC exact HostSNI missing"
+echo "$manager_tcp" | grep -q 'name: "c1-manager"' || fail "manager gRPC backend missing"
+echo "$manager_tcp" | grep -q 'port: 65003' || fail "manager gRPC backend port must be 65003"
+echo "$manager_tcp" | grep -q 'passthrough: true' || fail "manager gRPC passthrough missing"
+echo "$scheduler_tcp" | grep -q 'HostSNI(`\*`)' || fail "scheduler HostSNI catch-all missing"
+echo "$scheduler_tcp" | grep -q 'port: 8002' || fail "scheduler backend port missing"
+if grep -q 'kind: TLSOption' "$tmp/extras.yaml"; then fail "manager gRPC must not render a TLSOption"; fi
+if awk 'BEGIN{RS="---"} /kind: ServersTransport/ && /name: e-manager-grpc/ {found=1} END{exit found?0:1}' "$tmp/extras.yaml"; then
+  fail "manager gRPC must not render a ServersTransport"
+fi
+if grep -Fq 'Host(`grpc.example.com`)' "$tmp/extras.yaml"; then fail "HTTP router competes with manager gRPC TCP SNI"; fi
+if grep -q 'dragonfly-system.svc' "$tmp/extras.yaml"; then fail "extras render contains an internal manager DNS address"; fi
+grep -q 'serversTransport: "e-manager-rest"' "$tmp/extras.yaml" || fail "REST ServersTransport missing"
+grep -q 'secretName: "poligon-manager-public-tls"' "$tmp/extras.yaml" || fail "REST public TLS Secret missing"
+
+echo "extras manager-gRPC TCP render checks passed"

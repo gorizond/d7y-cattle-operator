@@ -81,9 +81,8 @@ spec:
 {{- else if eq $controller "traefik" }}
 {{- if .Capabilities.APIVersions.Has "traefik.io/v1alpha1" }}
 # Traefik v3 ignores the service.serversscheme annotation for REST backends,
-# so the HTTPS backend is declared with an IngressRoute. Traefik gRPC likewise
-# uses an IngressRoute with an HTTPS backend and a ServersTransport (see
-# ingressroute-grpc.yaml and serverstransport-grpc.yaml).
+# so the HTTPS backend is declared with an IngressRoute. Manager gRPC uses a
+# separate exact-SNI TCP passthrough (ingressroute-manager-grpc-tcp.yaml).
 apiVersion: traefik.io/v1alpha1
 kind: IngressRoute
 metadata:

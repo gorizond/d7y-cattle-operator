@@ -1,0 +1,29 @@
+{{- $controller := .Values.ingress.controller | default "nginx" -}}
+{{- if and .Values.ingress.enabled .Values.ingress.grpc.enabled (eq $controller "traefik") (.Capabilities.APIVersions.Has "traefik.io/v1alpha1") .Values.ingress.grpc.host .Values.ingress.grpc.service }}
+# Public manager gRPC front: exact-SNI TCP TLS passthrough to the manager's
+# mTLS gRPC port. Traefik does not terminate TLS and does not proxy HTTP/2, so
+# the long-lived scheduler→manager stream is not subject to the HTTP/2 proxy.
+# The manager verifies the client certificate end-to-end; no TLSOption,
+# ServersTransport, or CA-only Secret is involved.
+apiVersion: traefik.io/v1alpha1
+kind: IngressRouteTCP
+metadata:
+  name: {{ .Release.Name }}-manager-grpc
+  namespace: {{ .Release.Namespace }}
+  labels:
+    {{- include "dragonfly-extras.labels" . | nindent 4 }}
+    component: manager-grpc
+spec:
+  {{- with .Values.ingress.className }}
+  ingressClassName: {{ . | quote }}
+  {{- end }}
+  entryPoints:
+    {{- toYaml (.Values.ingress.traefik.entryPoints | default (list "websecure")) | nindent 4 }}
+  routes:
+    - match: {{ printf "HostSNI(`%s`)" .Values.ingress.grpc.host | quote }}
+      services:
+        - name: {{ .Values.ingress.grpc.service | quote }}
+          port: {{ .Values.ingress.grpc.port }}
+  tls:
+    passthrough: true
+{{- end }}

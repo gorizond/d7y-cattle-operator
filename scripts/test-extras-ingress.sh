@@ -43,57 +43,11 @@ echo "$grpc_ingress" | grep -q 'secretName: "dragonfly-p2p-mtls"' || fail "nginx
 echo "$rest_ingress" | grep -q 'secretName: "poligon-manager-public-tls"' || fail "nginx REST TLS Secret missing"
 echo "$rest_ingress" | grep -q 'nginx.ingress.kubernetes.io/backend-protocol: HTTPS' || fail "nginx REST backend-protocol missing"
 
-# Manager-only Traefik canary: REST only, class traefik, TLS from the mTLS Secret,
-# and a CRD ServersTransport. grpc.enabled=false must suppress the gRPC Ingress.
+# Traefik: manager gRPC is an exact-SNI TCP TLS passthrough to the manager
+# mTLS port. There must be no HTTP/2 router, ServersTransport, TLSOption, or
+# CA-only Secret competing on the same SNI. REST remains an HTTPS IngressRoute
+# with the public certificate.
 helm template e "$extras" --namespace dragonfly-system \
-  --set ingress.enabled=true \
-  --set ingress.controller=traefik \
-  --set ingress.className=traefik \
-  --set ingress.grpc.enabled=false \
-  --set ingress.rest.enabled=true \
-  --set ingress.rest.host=manager-api.example.com \
-  --set ingress.rest.service=poligon-manager \
-  --set ingress.tls.enabled=true \
-  --set ingress.tls.secretName=dragonfly-p2p-mtls \
-  --api-versions traefik.io/v1alpha1 >"$tmp/traefik.yaml"
-if grep -q 'name: e-manager-grpc' "$tmp/traefik.yaml"; then fail "Traefik manager-only rendered a gRPC Ingress"; fi
-if grep -q 'kind: IngressRouteTCP' "$tmp/traefik.yaml"; then fail "Traefik manager-only rendered a gRPC IngressRouteTCP"; fi
-if grep -q 'kind: TLSOption' "$tmp/traefik.yaml"; then fail "Traefik manager-only rendered a gRPC TLSOption"; fi
-grep -q 'kind: IngressRoute' "$tmp/traefik.yaml" || fail "Traefik REST IngressRoute missing"
-if grep -q '^kind: Ingress$' "$tmp/traefik.yaml"; then fail "Traefik manager-only rendered a REST Ingress"; fi
-grep -q 'ingressClassName: "traefik"' "$tmp/traefik.yaml" || fail "Traefik ingressClassName missing"
-grep -q 'scheme: https' "$tmp/traefik.yaml" || fail "Traefik REST backend scheme missing"
-grep -q 'serversTransport: "e-manager-rest"' "$tmp/traefik.yaml" || fail "Traefik ServersTransport reference missing"
-grep -q 'secretName: "dragonfly-p2p-mtls"' "$tmp/traefik.yaml" || fail "Traefik TLS Secret missing"
-grep -q 'kind: ServersTransport' "$tmp/traefik.yaml" || fail "ServersTransport missing"
-grep -q 'name: e-manager-rest' "$tmp/traefik.yaml" || fail "ServersTransport name missing"
-grep -q 'namespace: dragonfly-system' "$tmp/traefik.yaml" || fail "ServersTransport namespace missing"
-grep -q 'insecureSkipVerify: true' "$tmp/traefik.yaml" || fail "ServersTransport insecureSkipVerify missing"
-if grep -q 'nginx.ingress.kubernetes.io' "$tmp/traefik.yaml"; then fail "Traefik output contains nginx annotations"; fi
-
-# The REST ServersTransport and its IngressRoute reference disappear when the
-# toggle is off.
-helm template e "$extras" --namespace dragonfly-system \
-  --set ingress.enabled=true \
-  --set ingress.controller=traefik \
-  --set ingress.grpc.enabled=false \
-  --set ingress.rest.enabled=true \
-  --set ingress.traefik.serversTransport.enabled=false \
-  --api-versions traefik.io/v1alpha1 >"$tmp/traefik-no-transport.yaml"
-if grep -q 'kind: ServersTransport' "$tmp/traefik-no-transport.yaml"; then fail "ServersTransport rendered while disabled"; fi
-if grep -q 'serversTransport:' "$tmp/traefik-no-transport.yaml"; then fail "ServersTransport reference rendered while disabled"; fi
-
-# Traefik terminates edge mTLS with the P2P certificate and reaches the manager
-# over HTTPS with the gRPC ServersTransport (P2P CA + client certificate).
-cat >"$tmp/mtls-ca.yaml" <<'YAML'
-ingress:
-  mtlsCA: |
-    -----BEGIN CERTIFICATE-----
-    ZmFrZQ==
-    -----END CERTIFICATE-----
-YAML
-helm template e "$extras" --namespace dragonfly-system \
-  -f "$tmp/mtls-ca.yaml" \
   --set ingress.enabled=true \
   --set ingress.controller=traefik \
   --set ingress.className=traefik \
@@ -101,101 +55,70 @@ helm template e "$extras" --namespace dragonfly-system \
   --set ingress.grpc.host=grpc.example.com \
   --set ingress.grpc.service=c1-manager \
   --set ingress.grpc.port=65003 \
-  --set ingress.grpc.tlsSecret=dragonfly-p2p-mtls \
   --set ingress.rest.enabled=true \
   --set ingress.rest.host=api.example.com \
   --set ingress.rest.service=c1-manager \
   --set ingress.tls.enabled=true \
   --set ingress.tls.secretName=poligon-manager-public-tls \
-  --set ingress.mtlsCASecret=dragonfly-p2p-mtls-ca \
-  --api-versions traefik.io/v1alpha1 >"$tmp/traefik-grpc.yaml"
-if grep -q 'kind: IngressRouteTCP' "$tmp/traefik-grpc.yaml"; then fail "Traefik gRPC must not render an IngressRouteTCP"; fi
-if [ "$(grep -c '^kind: IngressRoute$' "$tmp/traefik-grpc.yaml")" -ne 2 ]; then
-  fail "Traefik must render REST and gRPC IngressRoutes"
-fi
-grpc_route=$(doc IngressRoute e-manager-grpc "$tmp/traefik-grpc.yaml")
-rest_route=$(doc IngressRoute e-manager-api "$tmp/traefik-grpc.yaml")
-grpc_transport=$(doc ServersTransport e-manager-grpc "$tmp/traefik-grpc.yaml")
-rest_transport=$(doc ServersTransport e-manager-rest "$tmp/traefik-grpc.yaml")
-[ -n "$grpc_route" ] || fail "Traefik gRPC IngressRoute missing"
+  --api-versions traefik.io/v1alpha1 >"$tmp/traefik-manager.yaml"
+manager_tcp=$(doc IngressRouteTCP e-manager-grpc "$tmp/traefik-manager.yaml")
+rest_route=$(doc IngressRoute e-manager-api "$tmp/traefik-manager.yaml")
+rest_transport=$(doc ServersTransport e-manager-rest "$tmp/traefik-manager.yaml")
+[ -n "$manager_tcp" ] || fail "manager gRPC IngressRouteTCP missing"
 [ -n "$rest_route" ] || fail "Traefik REST IngressRoute missing"
-[ -n "$grpc_transport" ] || fail "Traefik gRPC ServersTransport missing"
 [ -n "$rest_transport" ] || fail "Traefik REST ServersTransport missing"
-echo "$grpc_route" | grep -q 'Host(`grpc.example.com`)' || fail "Traefik gRPC Host match missing"
-echo "$grpc_route" | grep -q 'scheme: https' || fail "Traefik gRPC backend must use scheme https"
-if echo "$grpc_route" | grep -q 'scheme: h2c'; then fail "Traefik gRPC backend must not use h2c"; fi
-echo "$grpc_route" | grep -q 'serversTransport: "e-manager-grpc"' || fail "Traefik gRPC ServersTransport reference missing"
-echo "$grpc_route" | grep -q 'secretName: "dragonfly-p2p-mtls"' || fail "Traefik gRPC route must serve the P2P TLS Secret"
+if [ "$(grep -c '^kind: IngressRouteTCP$' "$tmp/traefik-manager.yaml")" -ne 1 ]; then
+  fail "manager gRPC must render exactly one IngressRouteTCP"
+fi
+if [ "$(grep -c '^kind: IngressRoute$' "$tmp/traefik-manager.yaml")" -ne 1 ]; then
+  fail "manager gRPC must not render an HTTP IngressRoute"
+fi
+if grep -q 'kind: TLSOption' "$tmp/traefik-manager.yaml"; then fail "manager gRPC must not render a TLSOption"; fi
+if [ "$(grep -c '^kind: ServersTransport$' "$tmp/traefik-manager.yaml")" -ne 1 ]; then
+  fail "manager gRPC must not render a gRPC ServersTransport"
+fi
+if grep -q 'kind: Secret' "$tmp/traefik-manager.yaml"; then fail "manager gRPC must not render a CA-only Secret"; fi
+echo "$manager_tcp" | grep -Fq 'HostSNI(`grpc.example.com`)' || fail "manager gRPC exact HostSNI missing"
+echo "$manager_tcp" | grep -q 'HostSNI(`\*`)' && fail "manager gRPC must use exact SNI, not catch-all"
+echo "$manager_tcp" | grep -q 'name: "c1-manager"' || fail "manager gRPC backend Service missing"
+echo "$manager_tcp" | grep -q 'port: 65003' || fail "manager gRPC backend port must be 65003"
+echo "$manager_tcp" | grep -q 'passthrough: true' || fail "manager gRPC TLS passthrough missing"
+if echo "$manager_tcp" | grep -q 'secretName:'; then fail "manager gRPC passthrough must not reference a TLS Secret"; fi
+if grep -Fq 'Host(`grpc.example.com`)' "$tmp/traefik-manager.yaml"; then fail "HTTP router competes with manager gRPC TCP SNI"; fi
+if grep -Fq 'poligon-manager.dragonfly-system.svc' "$tmp/traefik-manager.yaml" || grep -Fq 'manager.dragonfly-system.svc' "$tmp/traefik-manager.yaml"; then
+  fail "manager gRPC render contains an internal manager DNS address"
+fi
 echo "$rest_route" | grep -q 'scheme: https' || fail "Traefik REST backend scheme missing"
 echo "$rest_route" | grep -q 'serversTransport: "e-manager-rest"' || fail "Traefik REST ServersTransport reference missing"
 echo "$rest_route" | grep -q 'secretName: "poligon-manager-public-tls"' || fail "Traefik REST route must keep the public TLS Secret"
-echo "$grpc_transport" | grep -q 'serverName: "grpc.example.com"' || fail "gRPC ServersTransport serverName missing"
-grep -A 2 'rootCAs:' <<<"$grpc_transport" | grep -q -- '- secret: "dragonfly-p2p-mtls"' || fail "gRPC ServersTransport rootCAs missing"
-grep -A 2 'certificatesSecrets:' <<<"$grpc_transport" | grep -q -- '- "dragonfly-p2p-mtls"' || fail "gRPC ServersTransport client certificate missing"
-if echo "$grpc_transport" | grep -q '^  insecureSkipVerify:'; then fail "gRPC ServersTransport must not set insecureSkipVerify"; fi
 echo "$rest_transport" | grep -q 'insecureSkipVerify: true' || fail "REST ServersTransport must keep insecureSkipVerify"
-grep -A 2 'options:' "$tmp/traefik-grpc.yaml" | grep -q 'name: e-manager-grpc' || fail "Traefik gRPC TLSOption reference missing"
-grep -B 2 'port: 65003' "$tmp/traefik-grpc.yaml" | grep -q 'name: "c1-manager"' || fail "Traefik gRPC service/port missing"
-grep -q 'kind: TLSOption' "$tmp/traefik-grpc.yaml" || fail "Traefik gRPC TLSOption missing"
-grep -q 'clientAuthType: RequireAndVerifyClientCert' "$tmp/traefik-grpc.yaml" || fail "Traefik gRPC TLSOption clientAuth missing"
-grep -q 'secretNames:' "$tmp/traefik-grpc.yaml" || fail "Traefik gRPC TLSOption CA reference missing"
-grep -q -- '- "dragonfly-p2p-mtls-ca"' "$tmp/traefik-grpc.yaml" || fail "Traefik gRPC TLSOption CA Secret missing"
-grep -q 'minVersion: VersionTLS13' "$tmp/traefik-grpc.yaml" || fail "Traefik gRPC TLSOption minVersion missing"
-if [ "$(grep -c '^kind: Secret$' "$tmp/traefik-grpc.yaml")" -ne 1 ]; then
-  fail "Traefik gRPC must render exactly one CA Secret"
-fi
-grep -q 'name: "dragonfly-p2p-mtls-ca"' "$tmp/traefik-grpc.yaml" || fail "Traefik gRPC CA Secret missing"
-ca_b64=$(grep 'tls.ca:' "$tmp/traefik-grpc.yaml" | awk '{print $2}' | tr -d '"')
-if [ -z "$ca_b64" ]; then fail "Traefik gRPC CA Secret has no tls.ca"; fi
-if [ "$(printf '%s' "$ca_b64" | base64 -d | head -n 1)" != "-----BEGIN CERTIFICATE-----" ]; then
-  fail "Traefik gRPC tls.ca is not the fake PEM"
-fi
-if grep -q '^kind: Ingress$' "$tmp/traefik-grpc.yaml"; then fail "Traefik gRPC rendered a plain Ingress"; fi
-if grep -q 'nginx.ingress.kubernetes.io' "$tmp/traefik-grpc.yaml"; then fail "Traefik gRPC output contains nginx annotations"; fi
+if grep -q 'nginx.ingress.kubernetes.io' "$tmp/traefik-manager.yaml"; then fail "Traefik output contains nginx annotations"; fi
 
-# Empty grpc.tlsSecret falls back to the public Secret for the edge only; the
-# gRPC ServersTransport is not rendered without P2P material.
+# grpc.enabled=false suppresses the manager gRPC TCP route but keeps REST.
 helm template e "$extras" --namespace dragonfly-system \
   --set ingress.enabled=true \
   --set ingress.controller=traefik \
-  --set ingress.className=traefik \
-  --set ingress.grpc.enabled=true \
-  --set ingress.grpc.host=grpc.example.com \
-  --set ingress.grpc.service=c1-manager \
+  --set ingress.grpc.enabled=false \
   --set ingress.rest.enabled=true \
-  --set ingress.rest.host=api.example.com \
-  --set ingress.rest.service=c1-manager \
+  --set ingress.rest.host=manager-api.example.com \
+  --set ingress.rest.service=poligon-manager \
   --set ingress.tls.enabled=true \
   --set ingress.tls.secretName=poligon-manager-public-tls \
-  --api-versions traefik.io/v1alpha1 >"$tmp/traefik-fallback.yaml"
-grpc_route=$(doc IngressRoute e-manager-grpc "$tmp/traefik-fallback.yaml")
-rest_route=$(doc IngressRoute e-manager-api "$tmp/traefik-fallback.yaml")
-echo "$grpc_route" | grep -q 'secretName: "poligon-manager-public-tls"' || fail "Traefik gRPC edge must fall back to the public TLS Secret"
-echo "$rest_route" | grep -q 'secretName: "poligon-manager-public-tls"' || fail "Traefik REST fallback Secret missing"
-if [ -n "$(doc ServersTransport e-manager-grpc "$tmp/traefik-fallback.yaml")" ]; then
-  fail "gRPC ServersTransport rendered without a P2P secret"
-fi
+  --api-versions traefik.io/v1alpha1 >"$tmp/traefik-rest-only.yaml"
+if grep -q 'kind: IngressRouteTCP' "$tmp/traefik-rest-only.yaml"; then fail "grpc.enabled=false rendered a manager gRPC TCP route"; fi
+if grep -q 'name: e-manager-grpc' "$tmp/traefik-rest-only.yaml"; then fail "grpc.enabled=false rendered a manager gRPC route"; fi
+grep -q 'kind: IngressRoute' "$tmp/traefik-rest-only.yaml" || fail "REST IngressRoute missing with grpc disabled"
 
-# A gRPC-specific Secret alone enables the gRPC TLS block and transport; REST
-# keeps no TLS.
+# REST ServersTransport can still be disabled independently.
 helm template e "$extras" --namespace dragonfly-system \
   --set ingress.enabled=true \
   --set ingress.controller=traefik \
-  --set ingress.className=traefik \
-  --set ingress.grpc.enabled=true \
-  --set ingress.grpc.host=grpc.example.com \
-  --set ingress.grpc.service=c1-manager \
+  --set ingress.grpc.enabled=false \
   --set ingress.rest.enabled=true \
-  --set ingress.rest.host=api.example.com \
-  --set ingress.rest.service=c1-manager \
-  --set ingress.tls.enabled=false \
-  --set ingress.grpc.tlsSecret=dragonfly-p2p-mtls \
-  --api-versions traefik.io/v1alpha1 >"$tmp/traefik-grpc-only.yaml"
-grpc_route=$(doc IngressRoute e-manager-grpc "$tmp/traefik-grpc-only.yaml")
-rest_route=$(doc IngressRoute e-manager-api "$tmp/traefik-grpc-only.yaml")
-echo "$grpc_route" | grep -q 'secretName: "dragonfly-p2p-mtls"' || fail "gRPC TLS Secret must render without public TLS"
-[ -n "$(doc ServersTransport e-manager-grpc "$tmp/traefik-grpc-only.yaml")" ] || fail "gRPC ServersTransport must render with the P2P secret"
-if echo "$rest_route" | grep -q 'secretName:'; then fail "REST TLS block rendered while public TLS is disabled"; fi
+  --set ingress.traefik.serversTransport.enabled=false \
+  --api-versions traefik.io/v1alpha1 >"$tmp/traefik-no-transport.yaml"
+if grep -q 'kind: ServersTransport' "$tmp/traefik-no-transport.yaml"; then fail "REST ServersTransport rendered while disabled"; fi
+if grep -q 'serversTransport:' "$tmp/traefik-no-transport.yaml"; then fail "REST ServersTransport reference rendered while disabled"; fi
 
 # Scheduler front: the extras chart owns only the Traefik TCP TLS-passthrough
 # route. The scheduler terminates mTLS itself and no LE certificate is attached.

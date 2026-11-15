@@ -24,7 +24,7 @@ const (
 	DefaultDragonflyChartVersion         = "1.10.1-patch.2"
 	DefaultExtrasChartRepo               = "https://gorizond.github.io/d7y-cattle-operator"
 	DefaultExtrasChartName               = "dragonfly-extras"
-	DefaultExtrasChartVersion            = "0.1.7"
+	DefaultExtrasChartVersion            = "0.1.8"
 	DefaultExtrasIngressController       = "nginx"
 	DefaultExtrasIngressClassName        = ""
 	DefaultExtrasIngressGRPCEnabled      = true

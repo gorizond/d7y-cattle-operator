@@ -3,14 +3,14 @@
 Kubernetes operator that runs [Dragonfly](https://d7y.io) P2P on Rancher-managed
 RKE2 clusters.
 
-**Status**: MR-11 (DNS-resolved public scheduler front, no node/ClusterIP
-SANs, fail-open bootstrap). The operator resolves
-`d7y-scheduler.<cluster-id>.<domain>`, adds the resolved public IP(s) plus
-manager DNS names to the P2P leaf, and exposes the scheduler through a Traefik
-TCP TLS-passthrough route used by bootstrap nodes and DaemonSets. The Cluster
-controller, role resolution, KeyDB, manager, seed role, manager registration,
-`dragonfly-extras`, the fail-open `p2p-static` bootstrap, and the admission
-webhook are implemented. Live envtest/pilot verification remains deferred.
+**Status**: MR-12 (manager gRPC via public Traefik TCP TLS passthrough; DNS-
+resolved public scheduler front; no node/ClusterIP SANs; fail-open bootstrap).
+The manager gRPC edge is a TCP passthrough on `manager-grpc:443` with exact
+`HostSNI`; scheduler clients and bootstrap nodes reach it externally, and the
+manager terminates mTLS end-to-end. The Cluster controller, role resolution,
+KeyDB, manager, seed role, manager registration, `dragonfly-extras`, the
+fail-open `p2p-static` bootstrap, and the admission webhook are implemented.
+Live envtest/pilot verification remains deferred.
 
 ## What it does today
 
@@ -20,10 +20,9 @@ webhook are implemented. Live envtest/pilot verification remains deferred.
   and the DNS-resolved public scheduler IP(s); node IPs and internal
   ClusterIPs are never added. The Secret is updated only when the SAN set
   changes, and a changed SAN set regenerates the CA and leaf because the old
-  CA key is not persisted. The Secret is replicated into each Cluster namespace. The
-  internal CA PEM is passed to the extras HelmOp values; the chart renders the
-  CA-only `dragonfly-p2p-mtls-ca` Secret (key `tls.ca`) in the release
-  namespace for edge client verification.
+  CA key is not persisted. The Secret is replicated into each Cluster namespace
+  and delivered downstream through Fleet `downstreamResources`; Traefik
+  forwards manager gRPC TLS without terminating it.
 - Reconciles `provisioning.cattle.io/v1` Clusters selected by the
   `p2p-dragonfly-io: "true"` label.
 - Deploys KeyDB and the Dragonfly manager through Fleet HelmOps, without
@@ -110,16 +109,16 @@ not used until the p2p-static and registration MRs.
 | `extras.chart.version` | `EXTRAS_CHART_VERSION` | dragonfly-extras chart version |
 | `extras.ingress.controller` | `EXTRAS_INGRESS_CONTROLLER` | `nginx` (default) or `traefik` |
 | `extras.ingress.className` | `EXTRAS_INGRESS_CLASS_NAME` | Ingress class; empty uses the cluster default |
-| `extras.ingress.grpcEnabled` | `EXTRAS_INGRESS_GRPC_ENABLED` | Render the gRPC Ingress when the manager role is active; default `true` |
+| `extras.ingress.grpcEnabled` | `EXTRAS_INGRESS_GRPC_ENABLED` | Render the manager gRPC front when the manager role is active; default `true` |
 | `extras.ingress.restEnabled` | `EXTRAS_INGRESS_REST_ENABLED` | Render the REST Ingress when the manager role is active; default `true` |
 | `extras.ingress.tlsSecret` | `EXTRAS_INGRESS_TLS_SECRET` | Ingress TLS Secret; empty disables the TLS block |
-| `extras.ingress.traefikServersTransportEnabled` | `EXTRAS_TRAEFIK_SERVERS_TRANSPORT_ENABLED` | Render the Traefik `ServersTransport`; default `true` |
+| `extras.ingress.traefikServersTransportEnabled` | `EXTRAS_TRAEFIK_SERVERS_TRANSPORT_ENABLED` | Render the REST Traefik `ServersTransport`; default `true` |
 | `nydus.enabled` | `NYDUS_ENABLED` | Deploy the nydus-snapshotter HelmOp; default `false` (deferred) |
 
 Defaults: `mtlsSecretName=dragonfly-p2p-mtls`, `dragonfly.chart.name=dragonfly`,
 `dragonfly.chart.repo=https://gorizond.github.io/dragonflyoss-helm-charts`,
 `dragonfly.chart.version=1.10.1-patch.2`, `extras.chart.name=dragonfly-extras`,
-`extras.chart.version=0.1.7`, `extras.ingress.controller=nginx`,
+`extras.chart.version=0.1.8`, `extras.ingress.controller=nginx`,
 `extras.ingress.grpcEnabled=true`, `extras.ingress.restEnabled=true`,
 `manager.grpcPort=443`, `nydus.enabled=false`, `webhook.port=9443`,
 `leaderElect=false`. The public scheduler IP(s) are resolved from DNS at
@@ -302,8 +301,8 @@ security groups:
 | `4100` | seedClient upload | mTLS required; allow only cluster peers/scheduler |
 | `4101/4102/4103/4104` | seedClient proxy/metrics/health/stats | bind to `127.0.0.1`; do not expose |
 | `4105/4106` | seedClient storage TCP/QUIC | cluster network only |
-| `65003` | manager gRPC backend | TLS + client mTLS from the edge controller; never plaintext |
-| `443` | manager gRPC edge / scheduler TCP front | manager gRPC: TLS + client mTLS; scheduler: TLS passthrough with no termination |
+| `65003` | manager gRPC backend | mTLS end-to-end; Traefik only forwards TCP; never plaintext |
+| `443` | manager gRPC edge / scheduler TCP front | manager gRPC: TCP TLS passthrough, client mTLS terminates at manager; scheduler: TCP TLS passthrough |
 | `8080` | manager REST | JWT required; public Ingress is allowed |
 
 Do not use `proxy.basicAuth` for peer authentication: chart 1.10.1-patch.2
@@ -315,10 +314,9 @@ DaemonSets may run on the same node, seedClient ports are shifted to
 All releases target `dragonfly-system` and depend on each other through
 `spec.dependsOn`: control depends on KeyDB, data depends on control, KeyDB, and extras (which owns the public scheduler TCP front),
 manager depends on KeyDB, nydus (when enabled) depends on KeyDB, and extras
-depends on manager when Ingress is enabled. The mTLS Secret is copied into the Cluster namespace and delivered
-downstream through `spec.downstreamResources`; the CA-only Secret is rendered
-by the extras chart from `ingress.mtlsCA` instead of Fleet
-`downstreamResources`.
+depends on manager when Ingress is enabled. The mTLS Secret is copied into the
+Cluster namespace and delivered downstream through Fleet
+`spec.downstreamResources`.
 
 ### Extras chart
 
@@ -343,27 +341,20 @@ HelmOp:
   `<release>-manager-rest` in the release namespace; that resource uses
   `insecureSkipVerify: true`. The REST Ingress is not rendered in Traefik mode,
   and no nginx annotations are added.
-- In Traefik mode the gRPC endpoint is an `IngressRoute` named
+- In Traefik mode the manager gRPC endpoint is an `IngressRouteTCP` named
   `<release>-manager-grpc` (CRD `traefik.io/v1alpha1`, entry point `websecure`)
-  with `Host` matching `ingress.grpc.host` and an `https` backend. It
-  references the `<release>-manager-grpc` `ServersTransport`, which Traefik
-  uses for TLS + client mTLS to the manager. Edge TLS uses
-  `ingress.grpc.tlsSecret` (the P2P Secret) and the `<release>-manager-grpc`
-  `TLSOption`, whose `RequireAndVerifyClientCert` client auth reads the
-  internal CA from the CA-only `dragonfly-p2p-mtls-ca` Secret (`tls.ca`). The
-  chart renders that Secret from `ingress.mtlsCA` (the internal CA PEM passed
-  by the operator); it is not a Fleet downstream resource.
-- The gRPC `ServersTransport` schema was verified against the live
-  `serverstransports.traefik.io` CRD (Traefik `v1alpha1`):
-  `spec.serverName` is a string, `spec.rootCAs` is a list of
-  `{secret: <name>}` / `{configMap: <name>}` references (the Secret must hold
-  `tls.ca` or `ca.crt`), and `spec.certificatesSecrets` is a list of Secret
-  names holding `tls.crt`/`tls.key`. The chart sets `serverName` to
-  `ingress.grpc.host`, `rootCAs` to the P2P Secret (`ca.crt`), and
-  `certificatesSecrets` to the P2P Secret; `insecureSkipVerify` is not set for
-  gRPC. REST keeps its own `<release>-manager-rest` `ServersTransport` with
-  `insecureSkipVerify: true`. The nginx gRPC Ingress is not rendered in
-  Traefik mode.
+  with exact `HostSNI` matching `ingress.grpc.host`, backend
+  `ingress.grpc.service:ingress.grpc.port` (65003), and
+  `tls.passthrough: true`. Traefik does not terminate TLS or proxy HTTP/2;
+  the manager verifies the client certificate end-to-end. There is no TLS
+  Secret, `TLSOption`, `ServersTransport`, or CA-only Secret on this path, so
+  no HTTP router competes with the exact SNI.
+- `ingress.controller=nginx` keeps its existing GRPCS + client-mTLS Ingress
+  path for compatibility. Traefik mode never renders an HTTP manager-gRPC
+  IngressRoute or ServersTransport.
+- REST keeps its own `<release>-manager-rest` `ServersTransport` with
+  `insecureSkipVerify: true`; the REST IngressRoute uses `scheme: https` and
+  the public certificate.
 - When the seed role is active, the chart also renders `<release>-scheduler`
   (`traefik.io/v1alpha1` `IngressRouteTCP`, `websecure`) with
   `tls.passthrough: true`, `HostSNI` from `scheduler.hostSNI`
@@ -373,9 +364,8 @@ HelmOp:
   ServersTransport on this path, and it is independent of the manager
   `ingress.enabled` toggle.
 - `ingress.tls.enabled` adds the public REST TLS block using
-  `ingress.tls.secretName`; the gRPC edge uses `ingress.grpc.tlsSecret`. The
-  manager-only canary uses `dragonfly-p2p-mtls` for
-  `manager-api.example.com`.
+  `ingress.tls.secretName`. Manager gRPC uses TCP passthrough and does not
+  attach a certificate; `ingress.grpc.tlsSecret` is nginx-only.
 - Operator chart settings for the canary:
 
   ```yaml
@@ -400,10 +390,9 @@ HelmOp:
   `<cluster>-data-seed-client`, and `<cluster>-nydus-snapshotter`; each target
   is enabled only for its active role, and `nydus` additionally requires
   `nydus.enabled=true`.
-- The chart creates no PVC. It renders the CA-only Secret (`tls.ca`) when
-  `ingress.mtlsCA` and `ingress.mtlsCASecret` are set; the operator creates and
-  replicates the mTLS Secret. The operator RBAC remains limited to Clusters,
-  HelmOps, Secrets, and Events.
+- The chart creates no PVC. The operator creates and replicates the mTLS
+  Secret; the chart no longer renders a CA-only Secret. The operator RBAC
+  remains limited to Clusters, HelmOps, Secrets, and Events.
 
 ## Cluster annotations
 
@@ -542,10 +531,10 @@ upstream. When upstream publishes an equivalent release, re-run the fork chart
 TLS checks against it and switch `dragonfly.chart.repo/version` back to the
 upstream repository in a separate change.
 
-The gRPC `ServersTransport` relies on the Traefik `serverstransports.traefik.io`
-`v1alpha1` schema verified against the live cluster CRD (`serverName`,
-`rootCAs`, `certificatesSecrets`). A Traefik downgrade that predates these
-fields would reject the manifest; keep Traefik at the verified version.
+Manager gRPC uses the Traefik `IngressRouteTCP` and `tls.passthrough` fields,
+which are long-standing CRD fields. The REST `ServersTransport` continues to
+use the verified `serverstransports.traefik.io` schema; a Traefik downgrade
+that predates those fields would affect REST only.
 
 ## Known pilot risk: nydus-snapshotter deferred
 

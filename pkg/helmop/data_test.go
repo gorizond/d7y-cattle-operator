@@ -1,6 +1,11 @@
 package helmop
 
-import "testing"
+import (
+	"strings"
+	"testing"
+
+	fleetv1alpha1 "github.com/rancher/fleet/pkg/apis/fleet.cattle.io/v1alpha1"
+)
 
 func TestDataHelmOp(t *testing.T) {
 	op := Data(testCluster())
@@ -214,4 +219,42 @@ func assertResources(t *testing.T, component map[string]any, requestsCPU, reques
 	if limits["cpu"] != limitsCPU || limits["memory"] != limitsMemory {
 		t.Errorf("resources.limits = %v, want cpu=%s memory=%s", limits, limitsCPU, limitsMemory)
 	}
+}
+
+func TestNoInClusterManagerAddress(t *testing.T) {
+	c := testCluster()
+	for name, op := range map[string]*fleetv1alpha1.HelmOp{
+		"control": Control(c),
+		"data":    Data(c),
+	} {
+		if containsSubstring(op.Spec.Helm.Values.Data, ".dragonfly-system.svc") {
+			t.Errorf("%s HelmOp contains an in-cluster manager DNS address", name)
+		}
+	}
+	if got := valueAt(t, Control(c).Spec.Helm.Values.Data, "externalManager", "host"); got != "grpc.example.com" {
+		t.Errorf("control externalManager.host = %v, want public manager host", got)
+	}
+	if got := valueAt(t, Data(c).Spec.Helm.Values.Data, "externalManager", "host"); got != "" {
+		t.Errorf("data externalManager.host = %v, want empty local dynconfig path", got)
+	}
+}
+
+func containsSubstring(value any, substr string) bool {
+	switch typed := value.(type) {
+	case string:
+		return strings.Contains(typed, substr)
+	case map[string]any:
+		for _, child := range typed {
+			if containsSubstring(child, substr) {
+				return true
+			}
+		}
+	case []any:
+		for _, child := range typed {
+			if containsSubstring(child, substr) {
+				return true
+			}
+		}
+	}
+	return false
 }
