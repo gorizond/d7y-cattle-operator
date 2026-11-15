@@ -33,3 +33,4 @@ helm-template:
 chart-test:
 	bash scripts/test-extras-ingress.sh
 	bash scripts/test-fork-chart-tls.sh
+	bash scripts/test-p2p-static.sh

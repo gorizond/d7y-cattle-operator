@@ -21,13 +21,19 @@ const (
 	// the manager through the edge.
 	ManagerGRPCEdgePort = 443
 	ManagerRESTPort     = 8080
+	// SchedulerPort is the scheduler gRPC container port exposed by the
+	// headless peer Service behind the public Traefik front.
+	SchedulerPort = 8002
+	// SchedulerPublicPort is the public Traefik websecure port used by
+	// bootstrap clients and DaemonSets.
+	SchedulerPublicPort = 443
 
 	// CertDir is where the mTLS Secret is mounted in Dragonfly pods.
 	CertDir = "/etc/dragonfly/certs"
 
 	// VerifiedDragonflyChartVersion is the Dragonfly chart version this
 	// operator is tested against. Other versions are allowed but warn.
-	VerifiedDragonflyChartVersion = "1.10.1-patch.1"
+	VerifiedDragonflyChartVersion = "1.10.1-patch.2"
 
 	KeyDBChartRepo    = "https://enapter.github.io/charts/"
 	KeyDBChartName    = "keydb"
@@ -64,7 +70,16 @@ type Cluster struct {
 	SchedulerClusterID int
 	SchedulerReplicas  string
 	SeedClientReplicas string
-	Labels             map[string]string
+	// SchedulerPublicIP is the currently resolved public scheduler address
+	// used as the scheduler advertiseIP and the external-dns target.
+	SchedulerPublicIP string
+	// SchedulerHost is the per-cluster public scheduler host used by local
+	// dynconfig (DaemonSets) and bootstrap clients.
+	SchedulerHost string
+	// MTLSCertRevision changes only when the P2P leaf certificate changes; it
+	// is stamped on pod templates to trigger a controlled rollout.
+	MTLSCertRevision string
+	Labels           map[string]string
 }
 
 // KeyDBName returns the KeyDB HelmOp and release name.
@@ -95,8 +110,8 @@ func ManagerFullname(cluster string) string {
 // release. It is the backend of the extras Ingress.
 func ManagerServiceName(cluster string) string { return objectName(cluster, "manager") }
 
-// SchedulerServiceName returns the scheduler Service name created by the
-// control release.
+// SchedulerServiceName returns the headless scheduler peer Service name created
+// by the control release.
 func SchedulerServiceName(cluster string) string {
 	return objectName(cluster, "control-scheduler")
 }

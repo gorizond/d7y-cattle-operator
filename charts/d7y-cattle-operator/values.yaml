@@ -34,21 +34,34 @@ nginx:
   # Base URL of the static asset server (http or https).
   staticURL: ""
 
+# Scheduler DNS and internal Service identities. The public LB IP is resolved at
+# reconcile time from d7y-scheduler.<cluster-id>.<domain>; the service IP is
+# pinned as the non-headless scheduler client Service ClusterIP. The resolved
+# public IP(s), the service IP, and manager DNS names are the P2P leaf SANs.
+scheduler:
+  # Optional fallback when provisioning Cluster status.clusterName is empty.
+  # Leave empty to always require status.clusterName.
+  clusterID: ""
+  # Required. No domain is hardcoded in this chart; set the deployment's
+  # base domain (for example via --set scheduler.domain=example.com).
+  domain: ""
+
 dragonfly:
   chart:
-    # Fork with the manager grpc.tls rendering fix and TLS-aware gRPC probes.
+    # Fork with the manager grpc.tls rendering fix, TLS-aware gRPC probes,
+    # and the non-headless scheduler client Service.
     repo: https://gorizond.github.io/dragonflyoss-helm-charts
     name: dragonfly
-    # 1.10.1-patch.1 is the verified version. Other versions are allowed but
+    # 1.10.1-patch.2 is the verified version. Other versions are allowed but
     # produce an UnsupportedChartVersion warning event.
-    version: 1.10.1-patch.1
+    version: 1.10.1-patch.2
 
 # dragonfly-extras chart owns the manager Ingresses and optional VPAs.
 extras:
   chart:
     repo: https://gorizond.github.io/d7y-cattle-operator
     name: dragonfly-extras
-    version: 0.1.6
+    version: 0.1.7
   ingress:
     # nginx terminates edge mTLS and uses GRPCS with client certificates to the
     # manager; traefik terminates edge mTLS and uses HTTPS IngressRoutes with

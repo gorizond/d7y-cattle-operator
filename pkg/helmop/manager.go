@@ -15,7 +15,7 @@ func Manager(c Cluster) *fleetv1alpha1.HelmOp {
 			"enable": true,
 			"config": map[string]any{
 				"server": map[string]any{
-					// The fork chart (1.10.1-patch.1) renders grpc.tls under
+					// The fork chart (1.10.1-patch.2) renders grpc.tls under
 					// server.grpc, so the manager serves gRPC over mTLS and
 					// its probes use the TLS flags.
 					"grpc": map[string]any{"tls": tlsPaths()},
@@ -29,6 +29,7 @@ func Manager(c Cluster) *fleetv1alpha1.HelmOp {
 			},
 			"extraVolumes":      volumes(c.MTLSSecretName, logVolume()),
 			"extraVolumeMounts": volumeMounts(logVolumeMount("/var/log/dragonfly/manager")),
+			"podAnnotations":    certPodAnnotations(c.MTLSCertRevision),
 		},
 		// Bitnami MySQL 11.x reads persistence under the primary subchart.
 		"mysql": map[string]any{

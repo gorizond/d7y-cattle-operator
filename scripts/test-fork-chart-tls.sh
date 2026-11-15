@@ -6,7 +6,7 @@ tmp="$(mktemp -d)"
 trap 'rm -rf "$tmp"' EXIT
 
 repo="${DRAGONFLY_CHART_REPO:-https://gorizond.github.io/dragonflyoss-helm-charts}"
-version="${DRAGONFLY_CHART_VERSION:-1.10.1-patch.1}"
+version="${DRAGONFLY_CHART_VERSION:-1.10.1-patch.2}"
 
 fail() {
   echo "FAIL: $*" >&2
@@ -96,6 +96,7 @@ scheduler:
         cert: /etc/dragonfly/certs/tls.crt
         key: /etc/dragonfly/certs/tls.key
     server:
+      advertiseIP: 203.0.113.10
       tls:
         caCert: /etc/dragonfly/certs/ca.crt
         cert: /etc/dragonfly/certs/tls.crt
@@ -119,6 +120,18 @@ for flag in "-tls-ca-cert=/etc/dragonfly/certs/ca.crt" "-tls-client-cert=/etc/dr
   count=$(grep -c "command: \[\"/bin/grpc_health_probe\", \"-addr=:8002\".*$flag" "$tmp/control.yaml" || true)
   [ "$count" -eq 3 ] || fail "scheduler probes with $flag = $count, want 3"
 done
+
+# The scheduler must keep its headless peer Service and add a non-headless
+# client Service on the same gRPC port. The client ClusterIP is pinned because
+# it is a P2P certificate IP SAN.
+peer_svc=$(awk 'BEGIN{RS="---"} /kind: Service/ && /name: c1-control-scheduler[^-]/ {print}' "$tmp/control.yaml")
+client_svc=$(awk 'BEGIN{RS="---"} /kind: Service/ && /name: c1-control-scheduler-client/ {print}' "$tmp/control.yaml")
+[ -n "$peer_svc" ] || fail "headless scheduler peer Service missing"
+[ -z "$client_svc" ] || fail "fork chart must not render a scheduler client Service"
+echo "$peer_svc" | grep -q 'clusterIP: None' || fail "scheduler peer Service must stay headless"
+echo "$peer_svc" | grep -q 'port: 8002' || fail "scheduler peer Service port missing"
+echo "$peer_svc" | grep -q 'targetPort: 8002' || fail "scheduler peer Service targetPort missing"
+grep -q 'advertiseIP: 203.0.113.10' "$tmp/control.yaml" || fail "scheduler advertiseIP missing"
 
 echo "fork chart TLS render checks passed ($repo $version)"
 

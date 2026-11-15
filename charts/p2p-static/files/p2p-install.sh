@@ -13,7 +13,10 @@ ROOT="${P2P_ROOT%/}"
 
 CERT_DIR="/etc/dragonfly/certs"
 DFGET_CONFIG="/etc/dragonfly/dfget.yaml"
+DYNCONFIG="/etc/dragonfly/dynconfig.yaml"
 NYDUS_DIR="/etc/nydus"
+SCHEDULER_PORT=443
+PREFLIGHT_TIMEOUT="${P2P_PREFLIGHT_TIMEOUT:-3}"
 BIN_DIR="${ROOT}/usr/local/bin"
 SERVICE_DIR="${ROOT}/etc/systemd/system"
 RKE2_CONTAINERD_DIR="${ROOT}/var/lib/rancher/rke2/agent/etc/containerd"
@@ -93,13 +96,13 @@ while IFS= read -r line || [ -n "$line" ]; do
   value="${line#*=}"
   value="${value%$'\r'}"
   case "$key" in
-    MANAGER_GRPC|STATIC_URL|SCHEDULER_CLUSTER_ID|CA_CRT_B64|CLIENT_CRT_B64|CLIENT_KEY_B64)
+    MANAGER_GRPC|STATIC_URL|SCHEDULER_HOST|SCHEDULER_CLUSTER_ID|CA_CRT_B64|CLIENT_CRT_B64|CLIENT_KEY_B64)
       printf -v "$key" '%s' "$value"
       ;;
   esac
 done < "$TMP/payload.env"
 
-for key in MANAGER_GRPC STATIC_URL SCHEDULER_CLUSTER_ID CA_CRT_B64 CLIENT_CRT_B64 CLIENT_KEY_B64; do
+for key in MANAGER_GRPC STATIC_URL SCHEDULER_HOST SCHEDULER_CLUSTER_ID CA_CRT_B64 CLIENT_CRT_B64 CLIENT_KEY_B64; do
   if [ -z "${!key:-}" ]; then
     die "cfg is missing $key"
   fi
@@ -128,12 +131,85 @@ case "$STATIC_URL" in
 esac
 STATIC_URL="${STATIC_URL%/}"
 
+case "$SCHEDULER_HOST" in
+  ""|*[!A-Za-z0-9.-]*|*..*|.*|*.) die "scheduler_host is not a DNS name" ;;
+esac
+
 case "$SCHEDULER_CLUSTER_ID" in
   ""|*[!0-9]*) die "scheduler_cluster_id must be a positive integer" ;;
 esac
 if [ "$SCHEDULER_CLUSTER_ID" -lt 1 ] 2>/dev/null; then
   die "scheduler_cluster_id must be a positive integer"
 fi
+
+write_direct_template() {
+  local major template
+  major="${CONTAINERD_MAJOR:-$(detect_containerd_major)}"
+  case "$major" in
+    2) template="${RKE2_CONTAINERD_DIR}/config-v3.toml.tmpl" ;;
+    *) template="${RKE2_CONTAINERD_DIR}/config.toml.tmpl" ;;
+  esac
+  mkdir -p "$RKE2_CONTAINERD_DIR"
+  if [ "$major" = "2" ]; then
+    write_file "$template" 0644 <<'TOML'
+{{ template "base" . }}
+
+# Direct-registry fallback: overlayfs only, no P2P snapshotter or proxy.
+[plugins.'io.containerd.cri.v1.images']
+  snapshotter = 'overlayfs'
+TOML
+  else
+    write_file "$template" 0644 <<'TOML'
+{{ template "base" . }}
+
+# Direct-registry fallback: overlayfs only, no P2P snapshotter or proxy.
+[plugins."io.containerd.grpc.v1.cri".containerd]
+  snapshotter = "overlayfs"
+TOML
+  fi
+  log "direct-registry containerd template written to ${template}"
+}
+
+fallback_direct() {
+  log "P2P unavailable: $*; using direct registry so RKE2 can start"
+  write_direct_template
+  if [ "$REAL_ROOT" = "1" ] && [ "${SKIP_SYSTEMD:-0}" != "1" ] && command -v systemctl >/dev/null 2>&1; then
+    systemctl disable --now dfdaemon-bootstrap.service nydus-snapshotter-bootstrap.service >/dev/null 2>&1 || true
+  fi
+  log "existing certificate/config files, if any, were preserved; P2P services are not enabled"
+  exit 0
+}
+
+tcp_check() {
+  local host port
+  host="$1"
+  port="$2"
+  timeout "$PREFLIGHT_TIMEOUT" bash -c "exec 3<>/dev/tcp/${host}/${port}" >/dev/null 2>&1
+}
+
+preflight() {
+  local manager_host manager_port
+  if [ "${SKIP_PREFLIGHT:-0}" = "1" ]; then
+    log "preflight skipped"
+    return 0
+  fi
+  manager_host="${MANAGER_ADDR%:*}"
+  manager_port="${MANAGER_ADDR##*:}"
+  manager_host="${manager_host#[}"
+  manager_host="${manager_host%]}"
+  if ! tcp_check "$manager_host" "$manager_port"; then
+    fallback_direct "manager gRPC ${manager_host}:${manager_port} is unreachable"
+  fi
+  if command -v getent >/dev/null 2>&1 && ! getent ahosts "$SCHEDULER_HOST" >/dev/null 2>&1; then
+    fallback_direct "scheduler DNS ${SCHEDULER_HOST} did not resolve"
+  fi
+  if ! tcp_check "$SCHEDULER_HOST" "$SCHEDULER_PORT"; then
+    fallback_direct "scheduler ${SCHEDULER_HOST}:${SCHEDULER_PORT} is unreachable"
+  fi
+  log "preflight ok: manager ${manager_host}:${manager_port}, scheduler ${SCHEDULER_HOST}:${SCHEDULER_PORT}"
+}
+
+preflight
 
 mkdir -p \
   "${ROOT}${CERT_DIR}" \
@@ -163,15 +239,6 @@ write_file "${ROOT}${CERT_DIR}/tls.crt" 0644 < "$TMP/tls.crt"
 write_file "${ROOT}${CERT_DIR}/tls.key" 0600 < "$TMP/tls.key"
 
 write_file "${ROOT}${DFGET_CONFIG}" 0644 <<EOF
-manager:
-  addr: "$MANAGER_ADDR"
-  tls:
-    caCert: "$CERT_DIR/ca.crt"
-    cert: "$CERT_DIR/tls.crt"
-    key: "$CERT_DIR/tls.key"
-    tlsVerify: true
-    tlsPolicy: "force"
-    autoIssueCert: false
 scheduler:
   tls:
     caCert: "$CERT_DIR/ca.crt"
@@ -182,6 +249,11 @@ scheduler:
     autoIssueCert: false
 host:
   schedulerClusterID: $SCHEDULER_CLUSTER_ID
+EOF
+
+write_file "${ROOT}${DYNCONFIG}" 0644 <<EOF
+scheduler:
+  addr: "$SCHEDULER_HOST:$SCHEDULER_PORT"
 EOF
 
 write_file "${ROOT}${NYDUS_DIR}/nydusd-config.json" 0644 <<'JSON'
@@ -310,11 +382,11 @@ UNIT
 if [ "${SKIP_DOWNLOAD:-0}" = "1" ]; then
   log "SKIP_DOWNLOAD=1: skipping binary downloads"
 else
-  command -v curl >/dev/null 2>&1 || die "curl is required to download binaries"
+  command -v curl >/dev/null 2>&1 || fallback_direct "curl is required to download binaries"
   for binary in nydusd nydus-image containerd-nydus-grpc dfdaemon; do
     tmp="${BIN_DIR}/.${binary}.tmp.$$"
     curl -fsSL --retry 3 --connect-timeout 10 --max-time 300 \
-      -o "$tmp" "${STATIC_URL}/bin/${binary}" || die "failed to download ${binary}"
+      -o "$tmp" "${STATIC_URL}/bin/${binary}" || fallback_direct "failed to download ${binary}"
     if [ ! -s "$tmp" ]; then
       rm -f "$tmp"
       die "downloaded ${binary} is empty"
@@ -327,7 +399,7 @@ fi
 if [ "${SKIP_DOWNLOAD:-0}" != "1" ]; then
   for binary in nydusd nydus-image containerd-nydus-grpc dfdaemon; do
     if [ ! -x "${BIN_DIR}/${binary}" ]; then
-      die "${binary} is not executable"
+      fallback_direct "${binary} is not executable"
     fi
   done
 fi
@@ -345,15 +417,20 @@ if [ "$REAL_ROOT" = "1" ] && [ "${SKIP_MODULES:-0}" != "1" ]; then
 fi
 
 if [ "$REAL_ROOT" = "1" ] && [ "${SKIP_SYSTEMD:-0}" != "1" ]; then
-  command -v systemctl >/dev/null 2>&1 || die "systemctl is required"
-  systemctl daemon-reload
-  systemctl enable dfdaemon-bootstrap.service nydus-snapshotter-bootstrap.service || die "failed to enable bootstrap services"
+  command -v systemctl >/dev/null 2>&1 || fallback_direct "systemctl is required"
+  systemctl daemon-reload || fallback_direct "systemctl daemon-reload failed"
+  systemctl enable dfdaemon-bootstrap.service nydus-snapshotter-bootstrap.service || \
+    fallback_direct "failed to enable bootstrap services"
   systemctl restart dfdaemon-bootstrap.service nydus-snapshotter-bootstrap.service || \
-    log "warning: bootstrap services will be retried by systemd"
+    fallback_direct "failed to start bootstrap services"
+  sleep 2
+  systemctl is-active --quiet dfdaemon-bootstrap.service || fallback_direct "dfdaemon bootstrap failed to start"
+  systemctl is-active --quiet nydus-snapshotter-bootstrap.service || fallback_direct "nydus bootstrap failed to start"
 fi
 
 log "certificates written to ${CERT_DIR}"
 log "dfget.yaml written with scheduler cluster ID ${SCHEDULER_CLUSTER_ID}"
+log "dynconfig written with scheduler ${SCHEDULER_HOST}:${SCHEDULER_PORT}"
 log "nydus configuration written to ${NYDUS_DIR}"
 log "containerd template written to ${TEMPLATE_PATH}"
 log "bootstrap services installed in ${SERVICE_DIR}"

@@ -36,6 +36,10 @@ spec:
               value: {{ .Values.manager.apiURL | quote }}
             - name: NGINX_STATIC_URL
               value: {{ .Values.nginx.staticURL | quote }}
+            - name: P2P_DOMAIN
+              value: {{ .Values.scheduler.domain | quote }}
+            - name: P2P_CLUSTER_ID
+              value: {{ .Values.scheduler.clusterID | quote }}
             - name: MTLS_SECRET_NAME
               value: {{ .Values.mtlsSecretName | quote }}
             - name: MANAGER_API_CREDENTIALS_SECRET

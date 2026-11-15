@@ -51,7 +51,7 @@ helm template e "$extras" --namespace dragonfly-system \
   --set ingress.className=traefik \
   --set ingress.grpc.enabled=false \
   --set ingress.rest.enabled=true \
-  --set ingress.rest.host=manager-api.koldun.negash.ru \
+  --set ingress.rest.host=manager-api.example.com \
   --set ingress.rest.service=poligon-manager \
   --set ingress.tls.enabled=true \
   --set ingress.tls.secretName=dragonfly-p2p-mtls \
@@ -197,9 +197,55 @@ echo "$grpc_route" | grep -q 'secretName: "dragonfly-p2p-mtls"' || fail "gRPC TL
 [ -n "$(doc ServersTransport e-manager-grpc "$tmp/traefik-grpc-only.yaml")" ] || fail "gRPC ServersTransport must render with the P2P secret"
 if echo "$rest_route" | grep -q 'secretName:'; then fail "REST TLS block rendered while public TLS is disabled"; fi
 
+# Scheduler front: the extras chart owns only the Traefik TCP TLS-passthrough
+# route. The scheduler terminates mTLS itself and no LE certificate is attached.
+helm template e "$extras" --namespace dragonfly-system \
+  --set ingress.enabled=false \
+  --set ingress.controller=traefik \
+  --set ingress.className=traefik \
+  --set scheduler.enabled=true \
+  --set scheduler.publicIP=203.0.113.10 \
+  --set scheduler.clusterID=c-m-example \
+  --set scheduler.domain=example.com \
+  --set scheduler.service=c1-control-scheduler \
+  --set scheduler.port=8002 \
+  --api-versions traefik.io/v1alpha1 >"$tmp/scheduler-tcp.yaml"
+scheduler_route=$(doc IngressRouteTCP e-scheduler "$tmp/scheduler-tcp.yaml")
+[ -n "$scheduler_route" ] || fail "scheduler IngressRouteTCP missing"
+if grep -q 'name: c1-control-scheduler-client' "$tmp/scheduler-tcp.yaml"; then
+  fail "extras must not render a scheduler client ClusterIP Service"
+fi
+echo "$scheduler_route" | grep -q 'HostSNI(`\*`)' || fail "scheduler HostSNI catch-all missing"
+echo "$scheduler_route" | grep -q 'name: "c1-control-scheduler"' || fail "scheduler headless backend Service missing"
+echo "$scheduler_route" | grep -q 'port: 8002' || fail "scheduler backend port missing"
+echo "$scheduler_route" | grep -q 'passthrough: true' || fail "scheduler TLS passthrough missing"
+echo "$scheduler_route" | grep -q 'external-dns.alpha.kubernetes.io/hostname: "d7y-scheduler.c-m-example.example.com"' || fail "scheduler external-dns hostname missing"
+echo "$scheduler_route" | grep -q 'external-dns.alpha.kubernetes.io/target: "203.0.113.10"' || fail "scheduler external-dns target missing"
+if echo "$scheduler_route" | grep -q 'secretName:'; then fail "scheduler passthrough must not reference a TLS Secret"; fi
+if grep -q 'name: e-scheduler' "$tmp/scheduler-tcp.yaml" && grep -q 'kind: TLSOption' "$tmp/scheduler-tcp.yaml"; then
+  fail "scheduler passthrough must not render a TLSOption"
+fi
+if grep -q 'name: e-scheduler' "$tmp/scheduler-tcp.yaml" && grep -q 'kind: ServersTransport' "$tmp/scheduler-tcp.yaml"; then
+  fail "scheduler passthrough must not render a ServersTransport"
+fi
+if grep -q 'name: e-manager-grpc' "$tmp/scheduler-tcp.yaml"; then fail "scheduler-only render emitted the manager gRPC route"; fi
+
+# An explicit HostSNI keeps working when operators share the entry point.
+helm template e "$extras" --namespace dragonfly-system \
+  --set ingress.enabled=false \
+  --set ingress.controller=traefik \
+  --set scheduler.enabled=true \
+  --set scheduler.publicIP=203.0.113.10 \
+  --set scheduler.clusterID=c1 \
+  --set scheduler.domain=example.com \
+  --set scheduler.hostSNI=203.0.113.10 \
+  --set scheduler.service=c1-control-scheduler \
+  --api-versions traefik.io/v1alpha1 >"$tmp/scheduler-tcp-ip.yaml"
+grep -q 'HostSNI(`203.0.113.10`)' "$tmp/scheduler-tcp-ip.yaml" || fail "scheduler explicit HostSNI missing"
+
 # The operator chart must not own Ingress, VPA, or PVC resources.
 helm template t "$operator" >"$tmp/operator.yaml"
-for env_name in EXTRAS_INGRESS_CONTROLLER EXTRAS_INGRESS_CLASS_NAME EXTRAS_INGRESS_GRPC_ENABLED EXTRAS_INGRESS_REST_ENABLED EXTRAS_INGRESS_TLS_SECRET EXTRAS_TRAEFIK_SERVERS_TRANSPORT_ENABLED; do
+for env_name in EXTRAS_INGRESS_CONTROLLER EXTRAS_INGRESS_CLASS_NAME EXTRAS_INGRESS_GRPC_ENABLED EXTRAS_INGRESS_REST_ENABLED EXTRAS_INGRESS_TLS_SECRET EXTRAS_TRAEFIK_SERVERS_TRANSPORT_ENABLED P2P_DOMAIN P2P_CLUSTER_ID; do
   grep -q "name: $env_name" "$tmp/operator.yaml" || fail "operator deployment missing $env_name"
 done
 if grep -Eq '^kind: (Ingress|VerticalPodAutoscaler|PersistentVolumeClaim)$' "$tmp/operator.yaml"; then

@@ -19,7 +19,6 @@ import (
 	"github.com/gorizond/d7y-cattle-operator/pkg/cluster"
 	"github.com/gorizond/d7y-cattle-operator/pkg/config"
 	"github.com/gorizond/d7y-cattle-operator/pkg/helmop"
-	"github.com/gorizond/d7y-cattle-operator/pkg/pki"
 	"github.com/gorizond/d7y-cattle-operator/pkg/webhook"
 	"github.com/gorizond/d7y-cattle-operator/pkg/webhook/machineconfig"
 )
@@ -98,6 +97,9 @@ func run() error {
 		ManagerAPIHost:              apiHost,
 		ManagerAPIURL:               cfg.ManagerAPIURL,
 		ManagerAPICredentialsSecret: cfg.ManagerAPICredentialsSecret,
+		P2PDomain:                   cfg.P2PDomain,
+		ClusterIDFallback:           cfg.ClusterIDFallback,
+		Resolver:                    cluster.NetResolver{},
 		DragonflyChart: helmop.Chart{
 			Repo:    cfg.DragonflyChartRepo,
 			Name:    cfg.DragonflyChartName,
@@ -122,23 +124,6 @@ func run() error {
 		return fmt.Errorf("start controllers: %w", err)
 	}
 
-	bundle, err := pki.Generate(pki.Options{
-		ManagerGRPCDomain: cfg.ManagerGRPCDomain,
-		ManagerAPIURL:     cfg.ManagerAPIURL,
-	})
-	if err != nil {
-		return fmt.Errorf("generate mTLS material: %w", err)
-	}
-
-	created, err := pki.EnsureSecret(secretController, cfg.Namespace, cfg.MTLSSecretName, bundle)
-	if err != nil {
-		return fmt.Errorf("ensure mTLS secret: %w", err)
-	}
-	slog.Info("mTLS secret ready",
-		"namespace", cfg.Namespace,
-		"name", cfg.MTLSSecretName,
-		"created", created,
-	)
 	slog.Info("cluster controller running")
 
 	handler := &machineconfig.Handler{
@@ -149,6 +134,8 @@ func run() error {
 		MTLSSecretName:    cfg.MTLSSecretName,
 		ManagerGRPCDomain: cfg.ManagerGRPCDomain,
 		StaticURL:         cfg.NginxStaticURL,
+		SchedulerDomain:   cfg.P2PDomain,
+		ClusterIDFallback: cfg.ClusterIDFallback,
 	}
 	certLoader, err := webhook.NewCertLoader(cfg.WebhookCertDir, cfg.WebhookServiceName, cfg.Namespace)
 	if err != nil {

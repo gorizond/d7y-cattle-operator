@@ -6,9 +6,12 @@ import (
 	"errors"
 	"fmt"
 	"log/slog"
+	"net"
 	"net/http"
 	"strconv"
+	"strings"
 	"sync"
+	"time"
 
 	fleetv1alpha1 "github.com/rancher/fleet/pkg/apis/fleet.cattle.io/v1alpha1"
 	provv1 "github.com/rancher/rancher/pkg/apis/provisioning.cattle.io/v1"
@@ -16,10 +19,12 @@ import (
 	"github.com/rancher/wrangler/v3/pkg/condition"
 	corectl "github.com/rancher/wrangler/v3/pkg/generated/controllers/core/v1"
 	corev1 "k8s.io/api/core/v1"
+	apierrors "k8s.io/apimachinery/pkg/api/errors"
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
 
 	"github.com/gorizond/d7y-cattle-operator/pkg/apply"
 	"github.com/gorizond/d7y-cattle-operator/pkg/helmop"
+	"github.com/gorizond/d7y-cattle-operator/pkg/pki"
 	"github.com/gorizond/d7y-cattle-operator/pkg/registry"
 )
 
@@ -39,6 +44,9 @@ type Options struct {
 	ManagerAPIHost              string
 	ManagerAPIURL               string
 	ManagerAPICredentialsSecret string
+	P2PDomain                   string
+	ClusterIDFallback           string
+	Resolver                    Resolver
 	DragonflyChart              helmop.Chart
 	ExtrasChart                 helmop.Chart
 	ExtrasIngressController     string
@@ -123,9 +131,24 @@ func (c *Controller) reconcile(key string, cluster *provv1.Cluster) (result *pro
 
 	mtlsReady := true
 	if roles.Manager || roles.Seed {
-		if err := c.ensureMTLSSecret(cluster); err != nil {
+		publicIP, err := c.ensureMTLSCertificate(cluster, roles)
+		if err != nil {
 			errs = append(errs, err)
 			mtlsReady = false
+		} else {
+			// Refresh the HelmOp inputs from the updated Secret and use the
+			// currently resolved public address for advertiseIP/dynconfig.
+			hc = c.helmopCluster(cluster)
+			hc.SchedulerPublicIP = publicIP
+			hc.SchedulerHost = schedulerHost(c.opts.P2PDomain, c.clusterID(cluster))
+		}
+	}
+	if roles.Manager || roles.Seed {
+		if mtlsReady {
+			if err := c.ensureMTLSSecret(cluster); err != nil {
+				errs = append(errs, err)
+				mtlsReady = false
+			}
 		}
 	}
 
@@ -208,6 +231,12 @@ func (c *Controller) reconcile(key string, cluster *provv1.Cluster) (result *pro
 		NydusEnabled:                   c.opts.NydusEnabled,
 		Manager:                        roles.Manager && mtlsReady,
 		Seed:                           seedReady,
+		SchedulerPublicEnabled:         seedReady,
+		SchedulerPublicIP:              hc.SchedulerPublicIP,
+		SchedulerDomain:                c.opts.P2PDomain,
+		SchedulerClusterID:             c.clusterID(cluster),
+		SchedulerService:               helmop.SchedulerServiceName(cluster.Name),
+		SchedulerPort:                  helmop.SchedulerPort,
 	})); err != nil {
 		errs = append(errs, err)
 	}
@@ -288,13 +317,213 @@ func (c *Controller) helmopCluster(cluster *provv1.Cluster) helmop.Cluster {
 		Labels:             apply.Labels(cluster.Namespace, cluster.Name),
 	}
 	// The extras chart renders the CA-only Secret from this PEM. Readiness and
-	// missing ca.crt errors are reported by ensureMTLSSecret.
+	// missing ca.crt errors are reported by ensureMTLSSecret. The certificate
+	// revision is derived from the live Secret so a rotation changes pod
+	// template annotations exactly once.
 	if c.secrets != nil {
 		if mtls, err := c.secrets.Get(c.opts.OperatorNamespace, c.opts.MTLSSecretName, metav1.GetOptions{}); err == nil {
 			hc.MTLSCA = string(mtls.Data["ca.crt"])
+			hc.MTLSCertRevision = pki.CertRevision(mtls.Data[corev1.TLSCertKey])
 		}
 	}
 	return hc
+}
+
+// resolver returns the configured DNS resolver or the production default.
+func (c *Controller) resolver() Resolver {
+	if c.opts.Resolver != nil {
+		return c.opts.Resolver
+	}
+	return NetResolver{}
+}
+
+// clusterID returns the Rancher cluster ID used in the scheduler DNS alias.
+// Provisioning Cluster status.clusterName is authoritative; the explicit
+// operator fallback is used only when status is not populated yet.
+func (c *Controller) clusterID(cluster *provv1.Cluster) string {
+	if cluster != nil {
+		if id := strings.TrimSpace(cluster.Status.ClusterName); id != "" {
+			return id
+		}
+	}
+	return strings.TrimSpace(c.opts.ClusterIDFallback)
+}
+
+func schedulerHost(domain, clusterID string) string {
+	domain = strings.TrimSpace(strings.Trim(domain, "."))
+	if domain == "" || clusterID == "" {
+		return ""
+	}
+	return fmt.Sprintf("d7y-scheduler.%s.%s", clusterID, domain)
+}
+
+// ensureMTLSCertificate creates or updates the operator P2P Secret from the
+// scheduler host resolved at reconcile time. Seed clusters own the full SAN set:
+// resolved public IPs + manager DNS. A DNS failure leaves
+// the existing certificate untouched and returns an error so the reconcile is
+// retried. Manager-only clusters only bootstrap a missing Secret and never
+// rewrite an existing one (a seed reconcile owns the public IP set).
+func (c *Controller) ensureMTLSCertificate(cluster *provv1.Cluster, roles Roles) (string, error) {
+	if !roles.Manager && !roles.Seed {
+		return "", nil
+	}
+	clusterID := c.clusterID(cluster)
+	if clusterID == "" {
+		err := fmt.Errorf("cluster %s/%s has empty status.clusterName and no --p2p-cluster-id fallback", cluster.Namespace, cluster.Name)
+		c.event(cluster, corev1.EventTypeWarning, "SchedulerHostUnavailable", err.Error())
+		return "", err
+	}
+	host := schedulerHost(c.opts.P2PDomain, clusterID)
+	if host == "" {
+		err := fmt.Errorf("scheduler host is empty: --p2p-domain is required")
+		c.event(cluster, corev1.EventTypeWarning, "SchedulerHostUnavailable", err.Error())
+		return "", err
+	}
+
+	existing, getErr := c.secrets.Get(c.opts.OperatorNamespace, c.opts.MTLSSecretName, metav1.GetOptions{})
+	if getErr != nil && !apierrors.IsNotFound(getErr) {
+		err := fmt.Errorf("get mTLS Secret %s/%s: %w", c.opts.OperatorNamespace, c.opts.MTLSSecretName, getErr)
+		c.event(cluster, corev1.EventTypeWarning, "MTLSSecretUnavailable", err.Error())
+		return "", err
+	}
+
+	if !roles.Seed {
+		if getErr == nil {
+			return "", nil
+		}
+		return "", c.bootstrapMTLSSecret(cluster)
+	}
+
+	ctx, cancel := context.WithTimeout(c.ctx, 10*time.Second)
+	defer cancel()
+	resolved, err := c.resolver().LookupHost(ctx, host)
+	if err != nil {
+		msg := fmt.Sprintf("resolve scheduler host %s: %v", host, err)
+		c.event(cluster, corev1.EventTypeWarning, "SchedulerDNSResolutionFailed", msg)
+		return "", errors.New(msg)
+	}
+	resolvedIPs := validPublicIPs(resolved)
+	if len(resolvedIPs) == 0 {
+		msg := fmt.Sprintf("scheduler host %s resolved to no IP addresses", host)
+		c.event(cluster, corev1.EventTypeWarning, "SchedulerDNSResolutionFailed", msg)
+		return "", errors.New(msg)
+	}
+	publicIPs := resolvedIPs
+	if getErr == nil {
+		publicIPs = append(publicIPs, existingPublicIPs(existing)...)
+	}
+	publicIPs = dedupeStrings(publicIPs)
+
+	bundle, err := pki.Generate(pki.Options{
+		ManagerGRPCDomain:  c.opts.ManagerGRPCDomain,
+		ManagerAPIURL:      c.opts.ManagerAPIURL,
+		SchedulerPublicIPs: publicIPs,
+	})
+	if err != nil {
+		c.event(cluster, corev1.EventTypeWarning, "MTLSSecretUnavailable", err.Error())
+		return "", err
+	}
+	result, err := pki.EnsureSecret(c.secrets, c.opts.OperatorNamespace, c.opts.MTLSSecretName, bundle)
+	if err != nil {
+		c.event(cluster, corev1.EventTypeWarning, "MTLSSecretUnavailable", err.Error())
+		return "", err
+	}
+	if result.Created || result.Updated {
+		slog.Info("P2P certificate ensured",
+			"cluster", cluster.Namespace+"/"+cluster.Name,
+			"host", host,
+			"created", result.Created,
+			"updated", result.Updated,
+			"revision", result.Revision,
+		)
+	}
+	return primaryPublicIP(resolvedIPs), nil
+}
+
+// bootstrapMTLSSecret creates a manager-identity-only Secret when no seed
+// cluster has created the full certificate yet. It never updates an existing
+// Secret, so it cannot strip public IP SANs.
+func (c *Controller) bootstrapMTLSSecret(cluster *provv1.Cluster) error {
+	bundle, err := pki.Generate(pki.Options{
+		ManagerGRPCDomain: c.opts.ManagerGRPCDomain,
+		ManagerAPIURL:     c.opts.ManagerAPIURL,
+	})
+	if err != nil {
+		c.event(cluster, corev1.EventTypeWarning, "MTLSSecretUnavailable", err.Error())
+		return err
+	}
+	result, err := pki.EnsureSecret(c.secrets, c.opts.OperatorNamespace, c.opts.MTLSSecretName, bundle)
+	if err != nil {
+		c.event(cluster, corev1.EventTypeWarning, "MTLSSecretUnavailable", err.Error())
+		return err
+	}
+	if result.Created {
+		slog.Info("bootstrap P2P certificate ensured",
+			"cluster", cluster.Namespace+"/"+cluster.Name,
+			"revision", result.Revision,
+		)
+	}
+	return nil
+}
+
+func validPublicIPs(resolved []string) []string {
+	ips := make([]string, 0, len(resolved))
+	for _, raw := range resolved {
+		ip := net.ParseIP(strings.TrimSpace(raw))
+		if !pki.IsPublicIP(ip) {
+			continue
+		}
+		ips = append(ips, ip.String())
+	}
+	return dedupeStrings(ips)
+}
+
+func existingPublicIPs(secret *corev1.Secret) []string {
+	if secret == nil {
+		return nil
+	}
+	certs, err := pki.ParseCertificates(secret.Data[corev1.TLSCertKey])
+	if err != nil || len(certs) == 0 {
+		return nil
+	}
+	ips := make([]string, 0, len(certs[0].IPAddresses))
+	for _, ip := range certs[0].IPAddresses {
+		// Keep previously resolved public addresses through DNS/IP rotation,
+		// but never retain loopback, link-local, private, multicast, or
+		// internal ClusterIP SANs.
+		if !pki.IsPublicIP(ip) {
+			continue
+		}
+		ips = append(ips, ip.String())
+	}
+	return ips
+}
+
+func dedupeStrings(values []string) []string {
+	seen := make(map[string]struct{}, len(values))
+	result := make([]string, 0, len(values))
+	for _, value := range values {
+		if _, ok := seen[value]; ok {
+			continue
+		}
+		seen[value] = struct{}{}
+		result = append(result, value)
+	}
+	return result
+}
+
+// primaryPublicIP prefers an IPv4 address for scheduler advertiseIP and the
+// external-dns target; the certificate still contains every resolved IP.
+func primaryPublicIP(ips []string) string {
+	for _, raw := range ips {
+		if ip := net.ParseIP(raw); ip != nil && ip.To4() != nil {
+			return ip.String()
+		}
+	}
+	if len(ips) > 0 {
+		return ips[0]
+	}
+	return ""
 }
 
 // schedulerClusterID returns the annotation value as the integer the Dragonfly

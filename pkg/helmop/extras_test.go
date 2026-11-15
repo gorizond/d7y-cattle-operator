@@ -13,6 +13,12 @@ func TestExtrasHelmOp(t *testing.T) {
 		NydusEnabled:                   true,
 		Manager:                        true,
 		Seed:                           true,
+		SchedulerPublicEnabled:         true,
+		SchedulerPublicIP:              "203.0.113.10",
+		SchedulerDomain:                "example.com",
+		SchedulerClusterID:             "c-m-test",
+		SchedulerService:               "c1-control-scheduler",
+		SchedulerPort:                  SchedulerPort,
 	})
 
 	if op.Name != "c1-extras" || op.Namespace != "fleet-default" {
@@ -27,7 +33,7 @@ func TestExtrasHelmOp(t *testing.T) {
 	if len(op.Spec.DownstreamResources) != 0 {
 		t.Errorf("downstreamResources = %+v, want none", op.Spec.DownstreamResources)
 	}
-	if op.Spec.Helm.Chart != "dragonfly-extras" || op.Spec.Helm.Version != "0.1.6" {
+	if op.Spec.Helm.Chart != "dragonfly-extras" || op.Spec.Helm.Version != "0.1.7" {
 		t.Errorf("chart = %s %s", op.Spec.Helm.Chart, op.Spec.Helm.Version)
 	}
 
@@ -94,6 +100,24 @@ func TestExtrasHelmOp(t *testing.T) {
 	}
 	if got := valueAt(t, values, "ingress", "traefik", "serversTransport", "insecureSkipVerify"); got != true {
 		t.Errorf("traefik insecureSkipVerify = %v", got)
+	}
+	if got := valueAt(t, values, "scheduler", "enabled"); got != true {
+		t.Errorf("scheduler.enabled = %v", got)
+	}
+	if got := valueAt(t, values, "scheduler", "publicIP"); got != "203.0.113.10" {
+		t.Errorf("scheduler.publicIP = %v", got)
+	}
+	if got := valueAt(t, values, "scheduler", "domain"); got != "example.com" {
+		t.Errorf("scheduler.domain = %v", got)
+	}
+	if got := valueAt(t, values, "scheduler", "clusterID"); got != "c-m-test" {
+		t.Errorf("scheduler.clusterID = %v", got)
+	}
+	if got := valueAt(t, values, "scheduler", "service"); got != "c1-control-scheduler" {
+		t.Errorf("scheduler.service = %v", got)
+	}
+	if got := valueAt(t, values, "scheduler", "port"); got != SchedulerPort {
+		t.Errorf("scheduler.port = %v", got)
 	}
 
 	if got := valueAt(t, values, "vpa", "enabled"); got != true {

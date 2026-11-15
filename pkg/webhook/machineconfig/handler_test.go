@@ -47,6 +47,7 @@ func TestCreateInjectsPayload(t *testing.T) {
 	env := string(raw)
 	if !strings.Contains(env, "MANAGER_GRPC=https://grpc.example.com:65003") ||
 		!strings.Contains(env, "STATIC_URL=http://static.example.com") ||
+		!strings.Contains(env, "SCHEDULER_HOST=d7y-scheduler.c-m-test.example.com") ||
 		!strings.Contains(env, "SCHEDULER_CLUSTER_ID=2") ||
 		!strings.Contains(env, "CA_CRT_B64=") {
 		t.Errorf("payload env = %q", env)
@@ -97,7 +98,8 @@ func TestConfigAnnotationApplicability(t *testing.T) {
 	if err != nil {
 		t.Fatalf("decode cfg: %v", err)
 	}
-	if !strings.Contains(string(raw), "SCHEDULER_CLUSTER_ID=7") {
+	if !strings.Contains(string(raw), "SCHEDULER_HOST=d7y-scheduler.c-m-test.example.com") ||
+		!strings.Contains(string(raw), "SCHEDULER_CLUSTER_ID=7") {
 		t.Errorf("payload env = %q", raw)
 	}
 }
@@ -231,6 +233,7 @@ func newTestHandler() (*Handler, *fakeClusters, *fakeEvents) {
 					AnnotationSchedulerCluster: "2",
 				},
 			},
+			Status: provv1.ClusterStatus{ClusterName: "c-m-test"},
 		},
 	}}
 	secrets := &fakeSecrets{secret: &corev1.Secret{
@@ -250,6 +253,8 @@ func newTestHandler() (*Handler, *fakeClusters, *fakeEvents) {
 		MTLSSecretName:    "dragonfly-p2p-mtls",
 		ManagerGRPCDomain: "grpc.example.com",
 		StaticURL:         "http://static.example.com",
+		SchedulerDomain:   "example.com",
+		ClusterIDFallback: "c-m-fallback",
 	}, clusters, events
 }
 

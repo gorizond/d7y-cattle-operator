@@ -8,9 +8,10 @@ func TestDataHelmOp(t *testing.T) {
 	if op.Name != "c1-data" || op.Namespace != "fleet-default" {
 		t.Errorf("name/namespace = %s/%s", op.Name, op.Namespace)
 	}
-	if len(op.Spec.DependsOn) != 2 ||
+	if len(op.Spec.DependsOn) != 3 ||
 		op.Spec.DependsOn[0].Name != "c1-control" ||
-		op.Spec.DependsOn[1].Name != "c1-keydb" {
+		op.Spec.DependsOn[1].Name != "c1-keydb" ||
+		op.Spec.DependsOn[2].Name != "c1-extras" {
 		t.Errorf("dependsOn = %+v", op.Spec.DependsOn)
 	}
 	if len(op.Spec.DownstreamResources) != 1 || op.Spec.DownstreamResources[0].Name != "dragonfly-p2p-mtls" {
@@ -38,8 +39,11 @@ func TestDataHelmOp(t *testing.T) {
 	if got := valueAt(t, seedClient, "replicas"); got != testCluster().SeedClientReplicas {
 		t.Errorf("seedClient.replicas = %v", got)
 	}
-	if got := valueAt(t, seedClient, "dynconfig", "scheduler", "addr"); got != "c1-control-scheduler.dragonfly-system.svc:8002" {
+	if got := valueAt(t, seedClient, "dynconfig", "scheduler", "addr"); got != "d7y-scheduler.c-m-test.example.com:443" {
 		t.Errorf("seedClient dynconfig addr = %v", got)
+	}
+	if got := valueAt(t, seedClient, "podAnnotations", certRevisionAnnotation); got != "rev1" {
+		t.Errorf("seedClient podAnnotations revision = %v", got)
 	}
 	if got := valueAt(t, seedClient, "config", "host", "schedulerClusterID"); got != 42 {
 		t.Errorf("seedClient config.host.schedulerClusterID = %v", got)
@@ -92,6 +96,9 @@ func TestDataHelmOp(t *testing.T) {
 	}
 	if got := valueAt(t, client, "priorityClassName"); got != "system-node-critical" {
 		t.Errorf("client.priorityClassName = %v", got)
+	}
+	if got := valueAt(t, client, "podAnnotations", certRevisionAnnotation); got != "rev1" {
+		t.Errorf("client podAnnotations revision = %v", got)
 	}
 	assertPorts(t, client, 4000, 4001, 4002, 4003, 4004)
 	clientStorage := nested(t, client, "config", "storage", "server")
@@ -173,6 +180,15 @@ func TestControlHelmOp(t *testing.T) {
 	seedPeerTLS := nested(t, values, "scheduler", "config", "seedPeer", "tls")
 	if seedPeerTLS["caCert"] != CertDir+"/ca.crt" {
 		t.Errorf("seedPeer TLS = %v", seedPeerTLS)
+	}
+	if got := valueAt(t, values, "scheduler", "config", "server", "advertiseIP"); got != "203.0.113.10" {
+		t.Errorf("scheduler advertiseIP = %v, want public LB IP", got)
+	}
+	if got := valueAt(t, values, "scheduler", "config", "server", "advertisePort"); got != SchedulerPublicPort {
+		t.Errorf("scheduler advertisePort = %v, want %d", got, SchedulerPublicPort)
+	}
+	if got := valueAt(t, values, "scheduler", "podAnnotations", certRevisionAnnotation); got != "rev1" {
+		t.Errorf("scheduler podAnnotations revision = %v", got)
 	}
 }
 

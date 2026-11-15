@@ -67,6 +67,8 @@ type Handler struct {
 	MTLSSecretName    string
 	ManagerGRPCDomain string
 	StaticURL         string
+	SchedulerDomain   string
+	ClusterIDFallback string
 }
 
 // NewRouter registers the group/version router. The handler checks operation and
@@ -134,6 +136,16 @@ func (h *Handler) Admit(resp *wranglerwebhook.Response, req *wranglerwebhook.Req
 		return nil
 	}
 
+	clusterID := strings.TrimSpace(h.ClusterIDFallback)
+	if cluster != nil && strings.TrimSpace(cluster.Status.ClusterName) != "" {
+		clusterID = strings.TrimSpace(cluster.Status.ClusterName)
+	}
+	schedulerHostName := schedulerHost(h.SchedulerDomain, clusterID)
+	if schedulerHostName == "" {
+		h.event(req, "SchedulerHostUnavailable", fmt.Errorf("scheduler host is empty: P2P_DOMAIN and cluster ID are required"))
+		return nil
+	}
+
 	if h.Secrets == nil {
 		h.event(req, "MTLSSecretUnavailable", fmt.Errorf("secret cache is not configured"))
 		return nil
@@ -146,6 +158,7 @@ func (h *Handler) Admit(resp *wranglerwebhook.Response, req *wranglerwebhook.Req
 	payload, err := bootstrap.Encode(bootstrap.Payload{
 		ManagerGRPC:        fmt.Sprintf("https://%s:%d", h.ManagerGRPCDomain, managerGRPCPort),
 		StaticURL:          h.StaticURL,
+		SchedulerHost:      schedulerHostName,
 		SchedulerClusterID: schedulerID,
 		CACert:             secret.Data["ca.crt"],
 		ClientCert:         secret.Data[corev1.TLSCertKey],
@@ -184,6 +197,15 @@ func (h *Handler) Admit(resp *wranglerwebhook.Response, req *wranglerwebhook.Req
 		h.event(req, "PatchCreateFailed", err)
 	}
 	return nil
+}
+
+func schedulerHost(domain, clusterID string) string {
+	domain = strings.TrimSpace(strings.Trim(domain, "."))
+	clusterID = strings.TrimSpace(clusterID)
+	if domain == "" || clusterID == "" {
+		return ""
+	}
+	return fmt.Sprintf("d7y-scheduler.%s.%s", clusterID, domain)
 }
 
 func (h *Handler) targetCluster(config *unstructured.Unstructured) (*provv1.Cluster, error) {

@@ -38,7 +38,7 @@ func TestReconcileSeedCreatesHelmOps(t *testing.T) {
 		t.Errorf("control dependsOn = %v", got)
 	}
 	data := store.object("fleet-default/c1-data")
-	if got := dependsOn(data); len(got) != 2 || got[0] != "c1-control" || got[1] != "c1-keydb" {
+	if got := dependsOn(data); len(got) != 3 || got[0] != "c1-control" || got[1] != "c1-keydb" || got[2] != "c1-extras" {
 		t.Errorf("data dependsOn = %v", got)
 	}
 	nydus := store.object("fleet-default/c1-nydus-snapshotter")
@@ -161,8 +161,11 @@ func newTestController(t *testing.T) (*Controller, *fakeHelmOpStore, *fakeEventS
 			ManagerGRPCDomain:        "grpc.example.com",
 			ManagerGRPCPort:          443,
 			ManagerAPIHost:           "api.example.com",
-			DragonflyChart:           helmop.Chart{Repo: "https://charts.example.com", Name: "dragonfly", Version: "1.10.1-patch.1"},
-			ExtrasChart:              helmop.Chart{Repo: "https://charts.example.com", Name: "dragonfly-extras", Version: "0.1.6"},
+			ManagerAPIURL:            "https://manager-api.example.com",
+			P2PDomain:                "example.com",
+			Resolver:                 &fakeResolver{ips: []string{"203.0.113.10"}},
+			DragonflyChart:           helmop.Chart{Repo: "https://charts.example.com", Name: "dragonfly", Version: "1.10.1-patch.2"},
+			ExtrasChart:              helmop.Chart{Repo: "https://charts.example.com", Name: "dragonfly-extras", Version: "0.1.7"},
 			ExtrasIngressController:  "nginx",
 			ExtrasIngressGRPCEnabled: true,
 			ExtrasIngressRESTEnabled: true,
@@ -185,6 +188,7 @@ func testSeedCluster(schedulerID string) *provv1.Cluster {
 			Labels:      map[string]string{LabelEnabled: "true"},
 			Annotations: annotations,
 		},
+		Status: provv1.ClusterStatus{ClusterName: "c-m-test"},
 	}
 }
 
@@ -321,6 +325,29 @@ func (f *fakeSecretStore) Update(secret *corev1.Secret) (*corev1.Secret, error) 
 	return secret.DeepCopy(), nil
 }
 
+func TestHelmopClusterCarriesSchedulerIdentityAndCertRevision(t *testing.T) {
+	controller, _, _ := newTestController(t)
+	cluster := testSeedCluster("42")
+
+	first := controller.helmopCluster(cluster)
+	if first.SchedulerHost != "" {
+		t.Errorf("SchedulerHost = %q, want empty until the certify path runs", first.SchedulerHost)
+	}
+	if first.MTLSCertRevision == "" {
+		t.Fatal("MTLSCertRevision is empty")
+	}
+
+	controller.secrets.(*fakeSecretStore).put(&corev1.Secret{
+		ObjectMeta: metav1.ObjectMeta{Name: "dragonfly-p2p-mtls", Namespace: "dragonfly-system"},
+		Type:       corev1.SecretTypeTLS,
+		Data:       map[string][]byte{"ca.crt": []byte("ca"), "tls.crt": []byte("rotated-cert")},
+	})
+	second := controller.helmopCluster(cluster)
+	if second.MTLSCertRevision == first.MTLSCertRevision {
+		t.Error("MTLSCertRevision did not change after certificate rotation")
+	}
+}
+
 func TestEnsureMTLSSecretRequiresCA(t *testing.T) {
 	controller, _, events := newTestController(t)
 	controller.secrets.(*fakeSecretStore).put(&corev1.Secret{
@@ -330,11 +357,21 @@ func TestEnsureMTLSSecretRequiresCA(t *testing.T) {
 	})
 	cluster := testSeedCluster("42")
 
-	_, err := controller.reconcile("", cluster)
-	if err == nil {
-		t.Fatal("reconcile() error = nil, want missing ca.crt error")
+	if err := controller.ensureMTLSSecret(cluster); err == nil {
+		t.Fatal("ensureMTLSSecret() error = nil, want missing ca.crt error")
 	}
 	if len(events.events) == 0 || events.events[0].Reason != "MTLSSecretUnavailable" {
 		t.Errorf("events = %+v, want MTLSSecretUnavailable", events.events)
 	}
+}
+
+type fakeResolver struct {
+	ips   []string
+	err   error
+	hosts []string
+}
+
+func (f *fakeResolver) LookupHost(_ context.Context, host string) ([]string, error) {
+	f.hosts = append(f.hosts, host)
+	return f.ips, f.err
 }

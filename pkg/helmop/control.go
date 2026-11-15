@@ -28,11 +28,19 @@ func Control(c Cluster) *fleetv1alpha1.HelmOp {
 					"schedulerClusterID": c.SchedulerClusterID,
 					"tls":                tlsPaths(),
 				},
-				"server":   map[string]any{"tls": tlsPaths()},
+				"server": map[string]any{
+					"tls": tlsPaths(),
+					// Bootstrap nodes receive the public Traefik address from
+					// the manager dynconfig; DaemonSets use their local
+					// dynconfig and the same public host.
+					"advertiseIP":   c.SchedulerPublicIP,
+					"advertisePort": SchedulerPublicPort,
+				},
 				"seedPeer": map[string]any{"tls": tlsPaths()},
 			},
 			"extraVolumes":      volumes(c.MTLSSecretName, logVolume()),
 			"extraVolumeMounts": volumeMounts(logVolumeMount("/var/log/dragonfly/scheduler")),
+			"podAnnotations":    certPodAnnotations(c.MTLSCertRevision),
 		},
 		"seedClient": map[string]any{"enable": false},
 		"client":     map[string]any{"enable": false},

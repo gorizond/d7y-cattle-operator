@@ -16,6 +16,7 @@ const MaxEncodedSize = 8 * 1024
 type Payload struct {
 	ManagerGRPC        string
 	StaticURL          string
+	SchedulerHost      string
 	SchedulerClusterID string
 	CACert             []byte
 	ClientCert         []byte
@@ -36,6 +37,25 @@ func Encode(p Payload) (string, error) {
 }
 
 // Env returns the single-line env-file representation.
+func validDNSName(host string) bool {
+	if len(host) > 253 || strings.HasSuffix(host, ".") {
+		return false
+	}
+	for _, label := range strings.Split(host, ".") {
+		if len(label) == 0 || len(label) > 63 ||
+			label[0] == '-' || label[len(label)-1] == '-' {
+			return false
+		}
+		for _, r := range label {
+			if (r >= 'a' && r <= 'z') || (r >= 'A' && r <= 'Z') || (r >= '0' && r <= '9') || r == '-' {
+				continue
+			}
+			return false
+		}
+	}
+	return true
+}
+
 func Env(p Payload) (string, error) {
 	manager, err := url.Parse(strings.TrimSpace(p.ManagerGRPC))
 	if err != nil || manager.Scheme != "https" || manager.Host == "" {
@@ -44,6 +64,10 @@ func Env(p Payload) (string, error) {
 	static, err := url.Parse(strings.TrimSpace(p.StaticURL))
 	if err != nil || (static.Scheme != "http" && static.Scheme != "https") || static.Host == "" {
 		return "", fmt.Errorf("bootstrap: static_url must be an absolute http(s) URL")
+	}
+	host := strings.TrimSpace(p.SchedulerHost)
+	if host == "" || !validDNSName(host) {
+		return "", fmt.Errorf("bootstrap: scheduler_host must be a DNS name")
 	}
 	id, err := strconv.ParseInt(strings.TrimSpace(p.SchedulerClusterID), 10, 64)
 	if err != nil || id < 1 {
@@ -56,6 +80,7 @@ func Env(p Payload) (string, error) {
 	var builder strings.Builder
 	fmt.Fprintf(&builder, "MANAGER_GRPC=%s\n", strings.TrimSpace(p.ManagerGRPC))
 	fmt.Fprintf(&builder, "STATIC_URL=%s\n", strings.TrimRight(strings.TrimSpace(p.StaticURL), "/"))
+	fmt.Fprintf(&builder, "SCHEDULER_HOST=%s\n", host)
 	fmt.Fprintf(&builder, "SCHEDULER_CLUSTER_ID=%d\n", id)
 	fmt.Fprintf(&builder, "CA_CRT_B64=%s\n", base64.StdEncoding.EncodeToString(p.CACert))
 	fmt.Fprintf(&builder, "CLIENT_CRT_B64=%s\n", base64.StdEncoding.EncodeToString(p.ClientCert))

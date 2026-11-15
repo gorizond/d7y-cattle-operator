@@ -26,6 +26,18 @@ func ReplicasOrOne(annotation, value string) string {
 	return ReplicasTemplate(annotation)
 }
 
+// certRevisionAnnotation is stamped on every workload that mounts the P2P
+// Secret. The value is the leaf certificate hash, so unchanged certificates do
+// not cause rollouts and a rotation changes the pod template exactly once.
+const certRevisionAnnotation = "p2p.dragonfly.io/cert-revision"
+
+func certPodAnnotations(revision string) map[string]any {
+	if revision == "" {
+		return nil
+	}
+	return map[string]any{certRevisionAnnotation: revision}
+}
+
 func tlsPaths() map[string]any {
 	return map[string]any{
 		"caCert": CertDir + "/ca.crt",

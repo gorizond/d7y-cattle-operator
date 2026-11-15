@@ -8,14 +8,17 @@ func testCluster() Cluster {
 		Namespace:          "fleet-default",
 		MTLSSecretName:     "dragonfly-p2p-mtls",
 		MTLSCA:             "ca",
-		Chart:              Chart{Repo: "https://charts.example.com", Name: "dragonfly", Version: "1.10.1-patch.1"},
-		ExtrasChart:        Chart{Repo: "https://charts.example.com", Name: "dragonfly-extras", Version: "0.1.6"},
+		Chart:              Chart{Repo: "https://charts.example.com", Name: "dragonfly", Version: "1.10.1-patch.2"},
+		ExtrasChart:        Chart{Repo: "https://charts.example.com", Name: "dragonfly-extras", Version: "0.1.7"},
 		ManagerGRPCDomain:  "grpc.example.com",
 		ManagerGRPCPort:    ManagerGRPCEdgePort,
 		ManagerAPIHost:     "api.example.com",
 		SchedulerClusterID: 42,
 		SchedulerReplicas:  ReplicasTemplate("p2p.dragonfly.io/scheduler-replicas"),
 		SeedClientReplicas: ReplicasTemplate("p2p.dragonfly.io/seedclient-replicas"),
+		SchedulerPublicIP:  "203.0.113.10",
+		SchedulerHost:      "d7y-scheduler.c-m-test.example.com",
+		MTLSCertRevision:   "rev1",
 		Labels:             map[string]string{"app.kubernetes.io/managed-by": "d7y-cattle-operator"},
 	}
 }
@@ -76,7 +79,7 @@ func TestManagerHelmOp(t *testing.T) {
 	if helm == nil {
 		t.Fatal("spec.helm is nil")
 	}
-	if helm.Repo != "https://charts.example.com" || helm.Chart != "dragonfly" || helm.Version != "1.10.1-patch.1" {
+	if helm.Repo != "https://charts.example.com" || helm.Chart != "dragonfly" || helm.Version != "1.10.1-patch.2" {
 		t.Errorf("chart = %s/%s/%s", helm.Repo, helm.Chart, helm.Version)
 	}
 	if helm.ReleaseName != "c1-manager" {
@@ -139,5 +142,8 @@ func TestManagerHelmOp(t *testing.T) {
 	}
 	if !foundMTLS {
 		t.Error("manager values have no mTLS volume")
+	}
+	if got := valueAt(t, values, "manager", "podAnnotations", certRevisionAnnotation); got != "rev1" {
+		t.Errorf("manager podAnnotations revision = %v", got)
 	}
 }

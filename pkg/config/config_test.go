@@ -10,6 +10,8 @@ var envKeys = []string{
 	"MANAGER_GRPC_PORT",
 	"NYDUS_ENABLED",
 	"MANAGER_API_URL",
+	"P2P_DOMAIN",
+	"P2P_CLUSTER_ID",
 	"NGINX_STATIC_URL",
 	"MTLS_SECRET_NAME",
 	"MANAGER_API_CREDENTIALS_SECRET",
@@ -43,6 +45,7 @@ func requiredArgs() []string {
 	return []string{
 		"--manager-grpc-domain=manager-grpc.example.com",
 		"--manager-api-url=https://manager-api.example.com",
+		"--p2p-domain=example.com",
 		"--nginx-static-url=https://static.example.com",
 		"--manager-api-credentials-secret=dragonfly-manager-api",
 	}
@@ -58,6 +61,12 @@ func TestLoadDefaults(t *testing.T) {
 
 	if cfg.ManagerGRPCPort != DefaultManagerGRPCPort {
 		t.Errorf("ManagerGRPCPort = %d, want %d", cfg.ManagerGRPCPort, DefaultManagerGRPCPort)
+	}
+	if cfg.ClusterIDFallback != "" {
+		t.Errorf("ClusterIDFallback = %q, want empty", cfg.ClusterIDFallback)
+	}
+	if cfg.P2PDomain != "example.com" {
+		t.Errorf("P2PDomain = %q, want example.com", cfg.P2PDomain)
 	}
 	if cfg.NydusEnabled {
 		t.Error("NydusEnabled = true, want false")
@@ -122,10 +131,10 @@ func TestForkChartDefaults(t *testing.T) {
 	if DefaultDragonflyChartRepo != "https://gorizond.github.io/dragonflyoss-helm-charts" {
 		t.Errorf("DefaultDragonflyChartRepo = %q", DefaultDragonflyChartRepo)
 	}
-	if DefaultDragonflyChartVersion != "1.10.1-patch.1" {
+	if DefaultDragonflyChartVersion != "1.10.1-patch.2" {
 		t.Errorf("DefaultDragonflyChartVersion = %q", DefaultDragonflyChartVersion)
 	}
-	if DefaultExtrasChartVersion != "0.1.6" {
+	if DefaultExtrasChartVersion != "0.1.7" {
 		t.Errorf("DefaultExtrasChartVersion = %q", DefaultExtrasChartVersion)
 	}
 }
@@ -134,6 +143,7 @@ func TestLoadRequiredFlags(t *testing.T) {
 	for _, required := range []string{
 		"--manager-grpc-domain",
 		"--manager-api-url",
+		"--p2p-domain",
 		"--nginx-static-url",
 		"--manager-api-credentials-secret",
 	} {
@@ -180,6 +190,8 @@ func TestLoadInvalidValues(t *testing.T) {
 		"webhook port too large":            "--webhook-port=70000",
 		"empty webhook cert dir":            "--webhook-cert-dir=",
 		"invalid webhook service name":      "--webhook-service-name=Bad_Name",
+		"invalid p2p domain":                "--p2p-domain=Bad_Suffix",
+		"invalid p2p cluster id":            "--p2p-cluster-id=Bad_Cluster",
 	}
 
 	for name, override := range tests {
@@ -200,6 +212,8 @@ func TestLoadEnvOverride(t *testing.T) {
 	t.Setenv("MANAGER_GRPC_PORT", "8443")
 	t.Setenv("NYDUS_ENABLED", "true")
 	t.Setenv("MANAGER_API_URL", "https://api.env.example.com")
+	t.Setenv("P2P_DOMAIN", "env.example.com")
+	t.Setenv("P2P_CLUSTER_ID", "c-m-env")
 	t.Setenv("NGINX_STATIC_URL", "http://static.env.example.com")
 	t.Setenv("MTLS_SECRET_NAME", "env-mtls")
 	t.Setenv("MANAGER_API_CREDENTIALS_SECRET", "env-credentials")
@@ -237,6 +251,12 @@ func TestLoadEnvOverride(t *testing.T) {
 	}
 	if cfg.ManagerAPIURL != "https://api.env.example.com" {
 		t.Errorf("ManagerAPIURL = %q", cfg.ManagerAPIURL)
+	}
+	if cfg.P2PDomain != "env.example.com" {
+		t.Errorf("P2PDomain = %q", cfg.P2PDomain)
+	}
+	if cfg.ClusterIDFallback != "c-m-env" {
+		t.Errorf("ClusterIDFallback = %q", cfg.ClusterIDFallback)
 	}
 	if cfg.NginxStaticURL != "http://static.env.example.com" {
 		t.Errorf("NginxStaticURL = %q", cfg.NginxStaticURL)
@@ -321,6 +341,18 @@ func TestLoadFlagOverridesEnv(t *testing.T) {
 	}
 	if !cfg.NydusEnabled {
 		t.Error("NydusEnabled = false, want flag value true")
+	}
+}
+
+func TestLoadClusterIDFallbackFlag(t *testing.T) {
+	clearEnv(t)
+	args := append(requiredArgs(), "--p2p-cluster-id=c-m-fallback")
+	cfg, err := Load(args)
+	if err != nil {
+		t.Fatalf("Load() error = %v", err)
+	}
+	if cfg.ClusterIDFallback != "c-m-fallback" {
+		t.Errorf("ClusterIDFallback = %q", cfg.ClusterIDFallback)
 	}
 }
 

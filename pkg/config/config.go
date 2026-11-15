@@ -21,10 +21,10 @@ const (
 	DefaultNydusEnabled                  = false
 	DefaultDragonflyChartRepo            = "https://gorizond.github.io/dragonflyoss-helm-charts"
 	DefaultDragonflyChartName            = "dragonfly"
-	DefaultDragonflyChartVersion         = "1.10.1-patch.1"
+	DefaultDragonflyChartVersion         = "1.10.1-patch.2"
 	DefaultExtrasChartRepo               = "https://gorizond.github.io/d7y-cattle-operator"
 	DefaultExtrasChartName               = "dragonfly-extras"
-	DefaultExtrasChartVersion            = "0.1.6"
+	DefaultExtrasChartVersion            = "0.1.7"
 	DefaultExtrasIngressController       = "nginx"
 	DefaultExtrasIngressClassName        = ""
 	DefaultExtrasIngressGRPCEnabled      = true
@@ -44,6 +44,8 @@ type Config struct {
 	ManagerGRPCDomain           string
 	ManagerGRPCPort             int
 	ManagerAPIURL               string
+	P2PDomain                   string
+	ClusterIDFallback           string
 	NginxStaticURL              string
 	MTLSSecretName              string
 	ManagerAPICredentialsSecret string
@@ -101,6 +103,8 @@ func Load(args []string) (*Config, error) {
 	fs.StringVar(&cfg.ManagerGRPCDomain, "manager-grpc-domain", envOr("MANAGER_GRPC_DOMAIN", ""), "public hostname of the manager gRPC endpoint (no scheme)")
 	fs.IntVar(&cfg.ManagerGRPCPort, "manager-grpc-port", defaultManagerGRPCPort, "public port of the manager gRPC endpoint")
 	fs.StringVar(&cfg.ManagerAPIURL, "manager-api-url", envOr("MANAGER_API_URL", ""), "public HTTPS URL of the manager REST API")
+	fs.StringVar(&cfg.P2PDomain, "p2p-domain", envOr("P2P_DOMAIN", ""), "base domain for the per-cluster scheduler alias d7y-scheduler.<cluster>.<domain>")
+	fs.StringVar(&cfg.ClusterIDFallback, "p2p-cluster-id", envOr("P2P_CLUSTER_ID", ""), "fallback cluster ID when provisioning Cluster status.clusterName is empty")
 	fs.StringVar(&cfg.NginxStaticURL, "nginx-static-url", envOr("NGINX_STATIC_URL", ""), "base URL of the static asset server (http or https)")
 	fs.StringVar(&cfg.MTLSSecretName, "mtls-secret-name", envOr("MTLS_SECRET_NAME", DefaultMTLSSecretName), "name of the mTLS Secret")
 	fs.StringVar(&cfg.ManagerAPICredentialsSecret, "manager-api-credentials-secret", envOr("MANAGER_API_CREDENTIALS_SECRET", ""), "name of the Secret holding manager API credentials")
@@ -149,6 +153,16 @@ func (c *Config) Validate() error {
 		add("--manager-api-url is required")
 	} else if err := validateURL(c.ManagerAPIURL, "https"); err != nil {
 		add("--manager-api-url: %v", err)
+	}
+	if c.P2PDomain == "" {
+		add("--p2p-domain is required")
+	} else if msgs := validation.IsDNS1123Subdomain(c.P2PDomain); len(msgs) > 0 {
+		add("--p2p-domain: %s", strings.Join(msgs, "; "))
+	}
+	if c.ClusterIDFallback != "" {
+		if msgs := validation.IsDNS1123Label(c.ClusterIDFallback); len(msgs) > 0 {
+			add("--p2p-cluster-id: %s", strings.Join(msgs, "; "))
+		}
 	}
 	if c.NginxStaticURL == "" {
 		add("--nginx-static-url is required")

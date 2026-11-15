@@ -27,6 +27,19 @@ type ExtrasOptions struct {
 	NydusEnabled                   bool
 	Manager                        bool
 	Seed                           bool
+	// SchedulerPublicEnabled renders the Traefik TCP passthrough front for the
+	// fork chart's headless scheduler Service. It is independent of the manager
+	// Ingress toggle.
+	SchedulerPublicEnabled bool
+	SchedulerPublicIP      string
+	// SchedulerDomain and SchedulerClusterID build the DNS alias
+	// d7y-scheduler.<cluster-id>.<domain>.
+	SchedulerDomain    string
+	SchedulerClusterID string
+	// SchedulerService is the fork chart's headless scheduler Service that
+	// backs the public Traefik TCP route.
+	SchedulerService string
+	SchedulerPort    int
 }
 
 // Extras returns the dragonfly-extras HelmOp. The Ingress and
@@ -77,6 +90,14 @@ func Extras(c Cluster, opts ExtrasOptions) *fleetv1alpha1.HelmOp {
 			"mtlsSecret":   c.MTLSSecretName,
 			"mtlsCA":       c.MTLSCA,
 			"mtlsCASecret": c.MTLSSecretName + "-ca",
+		},
+		"scheduler": map[string]any{
+			"enabled":   opts.SchedulerPublicEnabled,
+			"clusterID": opts.SchedulerClusterID,
+			"domain":    opts.SchedulerDomain,
+			"publicIP":  opts.SchedulerPublicIP,
+			"service":   opts.SchedulerService,
+			"port":      opts.SchedulerPort,
 		},
 		"vpa": map[string]any{
 			"enabled":     opts.VPAEnabled,

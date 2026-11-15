@@ -1,6 +1,10 @@
 package helmop
 
-import fleetv1alpha1 "github.com/rancher/fleet/pkg/apis/fleet.cattle.io/v1alpha1"
+import (
+	"fmt"
+
+	fleetv1alpha1 "github.com/rancher/fleet/pkg/apis/fleet.cattle.io/v1alpha1"
+)
 
 // Data returns the seedClient/client HelmOp. It deliberately leaves
 // externalManager.host empty so the chart renders the local dynconfig.yaml and
@@ -10,7 +14,10 @@ import fleetv1alpha1 "github.com/rancher/fleet/pkg/apis/fleet.cattle.io/v1alpha1
 // schedulers and other peers; with hostNetwork they are bound on the node.
 // The Dragonfly chart has no separate advertise fields for dfdaemon.
 func Data(c Cluster) *fleetv1alpha1.HelmOp {
-	schedulerAddr := SchedulerServiceName(c.Name) + "." + TargetNamespace + ".svc:8002"
+	// DaemonSets use the same public scheduler front as bootstrap clients:
+	// the P2P client resolves this host to the public LB IP that is in the
+	// certificate SAN set, and Traefik passes TLS through to the scheduler.
+	schedulerAddr := fmt.Sprintf("%s:%d", c.SchedulerHost, SchedulerPublicPort)
 	seedClient := map[string]any{
 		"enable":      true,
 		"hostNetwork": true,
@@ -39,6 +46,7 @@ func Data(c Cluster) *fleetv1alpha1.HelmOp {
 		},
 		"extraVolumes":      volumes(c.MTLSSecretName, logVolume()),
 		"extraVolumeMounts": volumeMounts(logVolumeMount("/var/log/dragonfly/dfdaemon/")),
+		"podAnnotations":    certPodAnnotations(c.MTLSCertRevision),
 	}
 	client := map[string]any{
 		"enable":            true,
@@ -70,6 +78,7 @@ func Data(c Cluster) *fleetv1alpha1.HelmOp {
 			map[string]any{"name": "storage", "mountPath": "/var/lib/dragonfly/"},
 			logVolumeMount("/var/log/dragonfly/dfdaemon/"),
 		),
+		"podAnnotations": certPodAnnotations(c.MTLSCertRevision),
 	}
 
 	values := map[string]any{
@@ -82,8 +91,10 @@ func Data(c Cluster) *fleetv1alpha1.HelmOp {
 		"seedClient":       seedClient,
 		"client":           client,
 	}
+	// The extras release owns the public scheduler TCP route used by the local
+	// dynconfig, so data waits for it before starting clients.
 	op := newHelmOp(DataName(c.Name), c, c.Chart, "data", values,
-		[]string{ControlName(c.Name), KeyDBName(c.Name)})
+		[]string{ControlName(c.Name), KeyDBName(c.Name), ExtrasName(c.Name)})
 	return withMTLS(op, c.MTLSSecretName)
 }
 
