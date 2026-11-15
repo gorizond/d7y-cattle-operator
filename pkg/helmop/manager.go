@@ -49,6 +49,7 @@ func Manager(c Cluster) *fleetv1alpha1.HelmOp {
 		"seedClient": map[string]any{"enable": false},
 		"client":     map[string]any{"enable": false},
 	}
+	applyMonitoring(values, c.Monitoring)
 	op := newHelmOp(ManagerName(c.Name), c, c.Chart, "manager", values, []string{KeyDBName(c.Name)})
 	return withMTLS(op, c.MTLSSecretName)
 }

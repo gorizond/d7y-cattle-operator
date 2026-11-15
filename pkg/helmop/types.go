@@ -78,7 +78,10 @@ type Cluster struct {
 	// MTLSCertRevision changes only when the P2P leaf certificate changes; it
 	// is stamped on pod templates to trigger a controlled rollout.
 	MTLSCertRevision string
-	Labels           map[string]string
+	// Monitoring enables Dragonfly metrics and ServiceMonitors for the
+	// manager, scheduler, seedClient, and client components.
+	Monitoring bool
+	Labels     map[string]string
 }
 
 // KeyDBName returns the KeyDB HelmOp and release name.
