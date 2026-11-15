@@ -41,15 +41,6 @@ func TestReconcileManagerExtrasIngress(t *testing.T) {
 	if got := valueAtPath(t, values, "ingress", "grpc", "port"); got != int64(65003) {
 		t.Errorf("ingress.grpc.port = %v", got)
 	}
-	if got := valueAtPath(t, values, "ingress", "grpc", "serversTransport", "enabled"); got != true {
-		t.Errorf("ingress.grpc.serversTransport.enabled = %v", got)
-	}
-	if got := valueAtPath(t, values, "ingress", "grpc", "serversTransport", "serverName"); got != "grpc.example.com" {
-		t.Errorf("ingress.grpc.serversTransport.serverName = %v", got)
-	}
-	if got := valueAtPath(t, values, "ingress", "grpc", "serversTransport", "secretName"); got != "dragonfly-p2p-mtls" {
-		t.Errorf("ingress.grpc.serversTransport.secretName = %v", got)
-	}
 	if got := valueAtPath(t, values, "ingress", "rest", "host"); got != "api.example.com" {
 		t.Errorf("ingress.rest.host = %v", got)
 	}
@@ -61,12 +52,6 @@ func TestReconcileManagerExtrasIngress(t *testing.T) {
 	}
 	if got := valueAtPath(t, values, "ingress", "mtlsSecret"); got != "dragonfly-p2p-mtls" {
 		t.Errorf("ingress.mtlsSecret = %v", got)
-	}
-	if got := valueAtPath(t, values, "ingress", "mtlsCASecret"); got != "dragonfly-p2p-mtls-ca" {
-		t.Errorf("ingress.mtlsCASecret = %v", got)
-	}
-	if got := valueAtPath(t, values, "ingress", "mtlsCA"); got != "ca" {
-		t.Errorf("ingress.mtlsCA = %v", got)
 	}
 	if got := valueAtPath(t, values, "ingress", "controller"); got != "nginx" {
 		t.Errorf("ingress.controller = %v", got)
@@ -199,8 +184,6 @@ func TestReconcileManagerOnlyTraefikExtras(t *testing.T) {
 		"rest.enabled":                     true,
 		"tls.enabled":                      true,
 		"tls.secretName":                   "dragonfly-p2p-mtls",
-		"mtlsCASecret":                     "dragonfly-p2p-mtls-ca",
-		"mtlsCA":                           "ca",
 		"traefik.serversTransport.enabled": true,
 		"traefik.serversTransport.insecureSkipVerify": true,
 	} {

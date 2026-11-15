@@ -61,7 +61,6 @@ type Cluster struct {
 	Name               string
 	Namespace          string
 	MTLSSecretName     string
-	MTLSCA             string
 	Chart              Chart
 	ExtrasChart        Chart
 	ManagerGRPCDomain  string

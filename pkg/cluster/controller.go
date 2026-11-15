@@ -317,13 +317,11 @@ func (c *Controller) helmopCluster(cluster *provv1.Cluster) helmop.Cluster {
 		SeedClientReplicas: helmop.ReplicasOrOne(AnnotationSeedClientReplicas, cluster.Annotations[AnnotationSeedClientReplicas]),
 		Labels:             apply.Labels(cluster.Namespace, cluster.Name),
 	}
-	// The extras chart renders the CA-only Secret from this PEM. Readiness and
-	// missing ca.crt errors are reported by ensureMTLSSecret. The certificate
-	// revision is derived from the live Secret so a rotation changes pod
-	// template annotations exactly once.
+	// The certificate revision is derived from the live Secret so a rotation
+	// changes pod template annotations exactly once. Missing ca.crt errors are
+	// reported by ensureMTLSSecret.
 	if c.secrets != nil {
 		if mtls, err := c.secrets.Get(c.opts.OperatorNamespace, c.opts.MTLSSecretName, metav1.GetOptions{}); err == nil {
-			hc.MTLSCA = string(mtls.Data["ca.crt"])
 			hc.MTLSCertRevision = pki.CertRevision(mtls.Data[corev1.TLSCertKey])
 		}
 	}

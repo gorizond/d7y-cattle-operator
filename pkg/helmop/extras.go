@@ -60,16 +60,10 @@ func Extras(c Cluster, opts ExtrasOptions) *fleetv1alpha1.HelmOp {
 				"host":    c.ManagerGRPCDomain,
 				"service": ManagerServiceName(c.Name),
 				"port":    ManagerGRPCPort,
-				// The scheduler verifies the manager with the P2P CA, so the
-				// gRPC edge must serve the P2P cert. REST keeps opts.TLSSecret.
+				// nginx-only P2P Secret for the GRPCS backend and mTLS.
+				// Traefik uses TCP passthrough and does not consume it. REST
+				// keeps opts.TLSSecret.
 				"tlsSecret": c.MTLSSecretName,
-				// Traefik connects to the manager with TLS + client mTLS and
-				// verifies it against the P2P CA.
-				"serversTransport": map[string]any{
-					"enabled":    true,
-					"serverName": c.ManagerGRPCDomain,
-					"secretName": c.MTLSSecretName,
-				},
 			},
 			"rest": map[string]any{
 				"enabled": opts.RESTEnabled,
@@ -87,9 +81,7 @@ func Extras(c Cluster, opts ExtrasOptions) *fleetv1alpha1.HelmOp {
 					"insecureSkipVerify": true,
 				},
 			},
-			"mtlsSecret":   c.MTLSSecretName,
-			"mtlsCA":       c.MTLSCA,
-			"mtlsCASecret": c.MTLSSecretName + "-ca",
+			"mtlsSecret": c.MTLSSecretName,
 		},
 		"scheduler": map[string]any{
 			"enabled":   opts.SchedulerPublicEnabled,

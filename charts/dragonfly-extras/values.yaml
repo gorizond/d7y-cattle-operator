@@ -1,9 +1,9 @@
-# Manager Ingresses (gRPC with client mTLS + REST over HTTPS).
+# Manager exposure: public manager gRPC via Traefik TCP TLS passthrough, and
+# manager REST over HTTPS (public certificate).
 ingress:
   enabled: false
-  # Both controllers terminate client mTLS at the edge. The manager now serves
-  # gRPC over TLS, so nginx uses a GRPCS backend and Traefik uses an HTTPS
-  # backend with a CRD ServersTransport.
+  # traefik uses IngressRouteTCP passthrough for manager gRPC and an HTTPS
+  # IngressRoute for REST. nginx keeps its existing GRPCS/mTLS Ingress path.
   controller: nginx
   className: ""
   grpc:
@@ -11,19 +11,9 @@ ingress:
     host: ""
     service: ""
     port: 65003
-    # P2P Secret served on the gRPC edge and used for the manager backend
-    # mTLS. The scheduler verifies the manager with the P2P CA, so this must
-    # stay the P2P Secret while REST keeps the public one.
+    # nginx-only P2P Secret for the GRPCS backend and client mTLS. Traefik
+    # uses TCP passthrough and does not consume this value.
     tlsSecret: ""
-    # Traefik ServersTransport for the manager gRPC backend. The manager serves
-    # TLS with client mTLS; rootCAs and the client certificate come from the
-    # P2P Secret (ca.crt and tls.crt/tls.key). insecureSkipVerify is not set.
-    serversTransport:
-      enabled: true
-      # Defaults to ingress.grpc.host.
-      serverName: ""
-      # Defaults to ingress.grpc.tlsSecret.
-      secretName: ""
   rest:
     enabled: true
     host: ""
@@ -33,19 +23,15 @@ ingress:
     enabled: false
     secretName: ""
   traefik:
-    # Entry points used by the REST and gRPC IngressRoutes.
+    # Entry points used by the REST IngressRoute and the manager/scheduler TCP
+    # passthrough routes.
     entryPoints: ["websecure"]
     serversTransport:
       enabled: true
       insecureSkipVerify: true
-  # Secret in this namespace that holds ca.crt for nginx client certificate
-  # verification.
+  # nginx-only Secret in this namespace that holds ca.crt for client
+  # certificate verification.
   mtlsSecret: dragonfly-p2p-mtls
-  # Internal CA PEM. When non-empty together with mtlsCASecret, the chart
-  # renders an Opaque Secret with key tls.ca for the Traefik TLSOption.
-  mtlsCA: ""
-  # CA-only Secret (key tls.ca) used by the Traefik TLSOption clientAuth.
-  mtlsCASecret: dragonfly-p2p-mtls-ca
 
 # Public scheduler front owned by this chart. The backend is the Dragonfly fork
 # chart's headless scheduler Service. DaemonSets and bootstrap clients use the

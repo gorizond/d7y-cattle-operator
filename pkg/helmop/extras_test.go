@@ -33,7 +33,7 @@ func TestExtrasHelmOp(t *testing.T) {
 	if len(op.Spec.DownstreamResources) != 0 {
 		t.Errorf("downstreamResources = %+v, want none", op.Spec.DownstreamResources)
 	}
-	if op.Spec.Helm.Chart != "dragonfly-extras" || op.Spec.Helm.Version != "0.1.7" {
+	if op.Spec.Helm.Chart != "dragonfly-extras" || op.Spec.Helm.Version != "0.1.8" {
 		t.Errorf("chart = %s %s", op.Spec.Helm.Chart, op.Spec.Helm.Version)
 	}
 
@@ -50,15 +50,6 @@ func TestExtrasHelmOp(t *testing.T) {
 	if got := valueAt(t, values, "ingress", "grpc", "port"); got != ManagerGRPCPort {
 		t.Errorf("ingress.grpc.port = %v", got)
 	}
-	if got := valueAt(t, values, "ingress", "grpc", "serversTransport", "enabled"); got != true {
-		t.Errorf("ingress.grpc.serversTransport.enabled = %v", got)
-	}
-	if got := valueAt(t, values, "ingress", "grpc", "serversTransport", "serverName"); got != "grpc.example.com" {
-		t.Errorf("ingress.grpc.serversTransport.serverName = %v", got)
-	}
-	if got := valueAt(t, values, "ingress", "grpc", "serversTransport", "secretName"); got != "dragonfly-p2p-mtls" {
-		t.Errorf("ingress.grpc.serversTransport.secretName = %v", got)
-	}
 	if got := valueAt(t, values, "ingress", "rest", "host"); got != "api.example.com" {
 		t.Errorf("ingress.rest.host = %v", got)
 	}
@@ -70,12 +61,6 @@ func TestExtrasHelmOp(t *testing.T) {
 	}
 	if got := valueAt(t, values, "ingress", "mtlsSecret"); got != "dragonfly-p2p-mtls" {
 		t.Errorf("ingress.mtlsSecret = %v", got)
-	}
-	if got := valueAt(t, values, "ingress", "mtlsCASecret"); got != "dragonfly-p2p-mtls-ca" {
-		t.Errorf("ingress.mtlsCASecret = %v", got)
-	}
-	if got := valueAt(t, values, "ingress", "mtlsCA"); got != "ca" {
-		t.Errorf("ingress.mtlsCA = %v", got)
 	}
 	if got := valueAt(t, values, "ingress", "controller"); got != "nginx" {
 		t.Errorf("ingress.controller = %v", got)
@@ -211,9 +196,6 @@ func TestExtrasGRPCUsesP2PCert(t *testing.T) {
 	}
 	if got := valueAt(t, values, "ingress", "tls", "secretName"); got != "poligon-manager-public-tls" {
 		t.Errorf("ingress.tls.secretName = %v, want the public REST secret", got)
-	}
-	if got := valueAt(t, values, "ingress", "grpc", "serversTransport", "secretName"); got != "dragonfly-p2p-mtls" {
-		t.Errorf("ingress.grpc.serversTransport.secretName = %v, want the P2P secret", got)
 	}
 }
 
