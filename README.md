@@ -408,6 +408,12 @@ The operator only acts on Clusters labeled `p2p-dragonfly-io: "true"`.
 | `p2p.dragonfly.io/monitoring` | label selector, `true`, or `enabled` | Enable metrics and ServiceMonitors for manager/scheduler/seedClient/client when the selector matches the Cluster labels; empty, invalid, or non-matching disables. Requires the Prometheus Operator ServiceMonitor CRD. |
 | `p2p.dragonfly.io/node-config-key` | field name | Machine-config `spec` field patched by the webhook (default `userData`, e.g. `postBootScript`) |
 
+When monitoring is enabled, a Dragonfly component with `enable=false` is
+explicitly given `metrics.enable=false` and `metrics.serviceMonitor.enable=false`
+so the fork chart does not render an empty metrics Service for it. When
+monitoring is disabled, the operator leaves the chart metrics defaults
+untouched.
+
 ## Manager API client and scheduler ID allocator
 
 `pkg/managerapi` is a stdlib-only client for the Dragonfly v2.5.4 manager REST

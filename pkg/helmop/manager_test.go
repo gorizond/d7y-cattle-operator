@@ -169,24 +169,20 @@ func TestMonitoringValues(t *testing.T) {
 			}
 			isEnabled, _ := componentValues["enable"].(bool)
 			metrics, hasMetrics := componentValues["metrics"].(map[string]any)
-			if !isEnabled {
-				if hasMetrics {
-					t.Errorf("%s %s.metrics should be absent for a disabled component", name, component)
-				}
-				continue
-			}
 			if !hasMetrics {
 				t.Errorf("%s %s.metrics is missing", name, component)
 				continue
 			}
-			if metrics["enable"] != true {
-				t.Errorf("%s %s.metrics.enable = %v, want true", name, component, metrics["enable"])
+			if metrics["enable"] != isEnabled {
+				t.Errorf("%s %s.metrics.enable = %v, want %v", name, component, metrics["enable"], isEnabled)
 			}
 			serviceMonitor := nested(t, metrics, "serviceMonitor")
-			if serviceMonitor["enable"] != true {
-				t.Errorf("%s %s.metrics.serviceMonitor.enable = %v, want true", name, component, serviceMonitor["enable"])
+			if serviceMonitor["enable"] != isEnabled {
+				t.Errorf("%s %s.metrics.serviceMonitor.enable = %v, want %v", name, component, serviceMonitor["enable"], isEnabled)
 			}
-			seen[component] = true
+			if isEnabled {
+				seen[component] = true
+			}
 		}
 	}
 	for _, component := range components {

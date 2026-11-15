@@ -91,9 +91,12 @@ func logVolumeMount(path string) map[string]any {
 // metrics and ServiceMonitor toggles.
 var monitoringComponents = []string{"manager", "scheduler", "seedClient", "client"}
 
-// applyMonitoring enables chart-level metrics and ServiceMonitors on every
-// Dragonfly component when the Cluster monitoring selector matched. When
-// disabled it leaves the chart defaults untouched (no forced ServiceMonitor).
+// applyMonitoring writes an explicit chart-level metrics block for every
+// Dragonfly component when the Cluster monitoring selector matched. Enabled
+// components get metrics/ServiceMonitor=true; disabled components get both
+// false so the fork chart does not render empty metrics Services from its
+// default metrics.enable=true. When monitoring is disabled, chart defaults
+// remain untouched (no forced ServiceMonitor).
 func applyMonitoring(values map[string]any, enabled bool) {
 	if !enabled {
 		return
@@ -103,13 +106,11 @@ func applyMonitoring(values map[string]any, enabled bool) {
 		if !ok {
 			continue
 		}
-		if enabled, _ := component["enable"].(bool); !enabled {
-			continue
-		}
+		componentEnabled, _ := component["enable"].(bool)
 		component["metrics"] = map[string]any{
-			"enable": true,
+			"enable": componentEnabled,
 			"serviceMonitor": map[string]any{
-				"enable": true,
+				"enable": componentEnabled,
 			},
 		}
 	}
