@@ -396,6 +396,11 @@ func (c *Controller) ensureMTLSCertificate(cluster *provv1.Cluster, roles Roles)
 		}
 		return "", c.bootstrapMTLSSecret(cluster)
 	}
+	if c.opts.SchedulerServiceIP == "" {
+		err := fmt.Errorf("--p2p-scheduler-service-ip is required for the seed role")
+		c.event(cluster, corev1.EventTypeWarning, "SchedulerServiceIPMissing", err.Error())
+		return "", err
+	}
 
 	ctx, cancel := context.WithTimeout(c.ctx, 10*time.Second)
 	defer cancel()

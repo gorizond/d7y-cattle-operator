@@ -249,3 +249,20 @@ func TestManagerOnlyBootstrapsMissingCertificate(t *testing.T) {
 		t.Error("manager-only bootstrap unexpectedly added a public IP")
 	}
 }
+
+func TestEnsureMTLSCertificateRequiresServiceIP(t *testing.T) {
+	controller, _, events := newTestController(t)
+	controller.opts.SchedulerServiceIP = ""
+	cluster := testSeedCluster("42")
+	before := certPEM(t, controller)
+
+	if _, err := controller.reconcile("", cluster); err == nil {
+		t.Fatal("reconcile() error = nil, want missing service IP error")
+	}
+	if got := certPEM(t, controller); string(got) != string(before) {
+		t.Error("certificate changed after a missing service IP")
+	}
+	if !hasEventReason(events.events, "SchedulerServiceIPMissing") {
+		t.Errorf("events = %+v, want SchedulerServiceIPMissing", events.events)
+	}
+}
