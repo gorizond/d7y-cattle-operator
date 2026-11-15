@@ -93,6 +93,7 @@ helm template e "$extras" --namespace dragonfly-system \
   --set ingress.rest.service=c1-manager \
   --set ingress.tls.enabled=true \
   --set ingress.tls.secretName=poligon-manager-public-tls \
+  --set ingress.grpc.tlsSecret=dragonfly-p2p-mtls \
   --set ingress.mtlsCASecret=dragonfly-p2p-mtls-ca \
   --api-versions traefik.io/v1alpha1 >"$tmp/traefik-grpc.yaml"
 if grep -q 'kind: IngressRouteTCP' "$tmp/traefik-grpc.yaml"; then fail "Traefik gRPC must not render an IngressRouteTCP"; fi
@@ -103,7 +104,10 @@ grep -q 'name: e-manager-grpc' "$tmp/traefik-grpc.yaml" || fail "Traefik gRPC In
 grep -q 'kind: IngressRoute' "$tmp/traefik-grpc.yaml" || fail "Traefik gRPC kind missing"
 grep -q 'Host(`grpc.example.com`)' "$tmp/traefik-grpc.yaml" || fail "Traefik gRPC Host match missing"
 grep -q 'scheme: h2c' "$tmp/traefik-grpc.yaml" || fail "Traefik gRPC h2c backend missing"
-grep -q 'secretName: "poligon-manager-public-tls"' "$tmp/traefik-grpc.yaml" || fail "Traefik gRPC TLS Secret missing"
+grpc_route=$(awk 'BEGIN{RS="---"} /kind: IngressRoute/ && /name: e-manager-grpc/ {print}' "$tmp/traefik-grpc.yaml")
+rest_route=$(awk 'BEGIN{RS="---"} /kind: IngressRoute/ && /name: e-manager-api/ {print}' "$tmp/traefik-grpc.yaml")
+echo "$grpc_route" | grep -q 'secretName: "dragonfly-p2p-mtls"' || fail "Traefik gRPC route must serve the P2P TLS Secret"
+echo "$rest_route" | grep -q 'secretName: "poligon-manager-public-tls"' || fail "Traefik REST route must keep the public TLS Secret"
 grep -A 2 'options:' "$tmp/traefik-grpc.yaml" | grep -q 'name: e-manager-grpc' || fail "Traefik gRPC TLSOption reference missing"
 grep -B 2 'port: 65003' "$tmp/traefik-grpc.yaml" | grep -q 'name: "c1-manager"' || fail "Traefik gRPC service/port missing"
 grep -q 'kind: TLSOption' "$tmp/traefik-grpc.yaml" || fail "Traefik gRPC TLSOption missing"
@@ -122,6 +126,44 @@ if [ "$(printf '%s' "$ca_b64" | base64 -d | head -n 1)" != "-----BEGIN CERTIFICA
 fi
 if grep -q '^kind: Ingress$' "$tmp/traefik-grpc.yaml"; then fail "Traefik gRPC rendered a plain Ingress"; fi
 if grep -q 'nginx.ingress.kubernetes.io' "$tmp/traefik-grpc.yaml"; then fail "Traefik gRPC output contains nginx annotations"; fi
+
+# Empty grpc.tlsSecret falls back to the public Secret for the gRPC route.
+helm template e "$extras" --namespace dragonfly-system \
+  --set ingress.enabled=true \
+  --set ingress.controller=traefik \
+  --set ingress.className=traefik \
+  --set ingress.grpc.enabled=true \
+  --set ingress.grpc.host=grpc.example.com \
+  --set ingress.grpc.service=c1-manager \
+  --set ingress.rest.enabled=true \
+  --set ingress.rest.host=api.example.com \
+  --set ingress.rest.service=c1-manager \
+  --set ingress.tls.enabled=true \
+  --set ingress.tls.secretName=poligon-manager-public-tls \
+  --api-versions traefik.io/v1alpha1 >"$tmp/traefik-fallback.yaml"
+grpc_route=$(awk 'BEGIN{RS="---"} /kind: IngressRoute/ && /name: e-manager-grpc/ {print}' "$tmp/traefik-fallback.yaml")
+rest_route=$(awk 'BEGIN{RS="---"} /kind: IngressRoute/ && /name: e-manager-api/ {print}' "$tmp/traefik-fallback.yaml")
+echo "$grpc_route" | grep -q 'secretName: "poligon-manager-public-tls"' || fail "Traefik gRPC route must fall back to the public TLS Secret"
+echo "$rest_route" | grep -q 'secretName: "poligon-manager-public-tls"' || fail "Traefik REST fallback Secret missing"
+
+# A gRPC-specific Secret alone enables the gRPC TLS block; REST keeps no TLS.
+helm template e "$extras" --namespace dragonfly-system \
+  --set ingress.enabled=true \
+  --set ingress.controller=traefik \
+  --set ingress.className=traefik \
+  --set ingress.grpc.enabled=true \
+  --set ingress.grpc.host=grpc.example.com \
+  --set ingress.grpc.service=c1-manager \
+  --set ingress.rest.enabled=true \
+  --set ingress.rest.host=api.example.com \
+  --set ingress.rest.service=c1-manager \
+  --set ingress.tls.enabled=false \
+  --set ingress.grpc.tlsSecret=dragonfly-p2p-mtls \
+  --api-versions traefik.io/v1alpha1 >"$tmp/traefik-grpc-only.yaml"
+grpc_route=$(awk 'BEGIN{RS="---"} /kind: IngressRoute/ && /name: e-manager-grpc/ {print}' "$tmp/traefik-grpc-only.yaml")
+rest_route=$(awk 'BEGIN{RS="---"} /kind: IngressRoute/ && /name: e-manager-api/ {print}' "$tmp/traefik-grpc-only.yaml")
+echo "$grpc_route" | grep -q 'secretName: "dragonfly-p2p-mtls"' || fail "gRPC TLS Secret must render without public TLS"
+if echo "$rest_route" | grep -q 'secretName:'; then fail "REST TLS block rendered while public TLS is disabled"; fi
 
 # The operator chart must not own Ingress, VPA, or PVC resources.
 helm template t "$operator" >"$tmp/operator.yaml"

@@ -162,6 +162,25 @@ func TestExtrasNydusVPADeferred(t *testing.T) {
 	}
 }
 
+func TestExtrasGRPCUsesP2PCert(t *testing.T) {
+	op := Extras(testCluster(), ExtrasOptions{
+		IngressEnabled:    true,
+		IngressController: "traefik",
+		GRPCEnabled:       true,
+		RESTEnabled:       true,
+		TLSSecret:         "poligon-manager-public-tls",
+		Manager:           true,
+	})
+
+	values := op.Spec.Helm.Values.Data
+	if got := valueAt(t, values, "ingress", "grpc", "tlsSecret"); got != "dragonfly-p2p-mtls" {
+		t.Errorf("ingress.grpc.tlsSecret = %v, want the P2P secret", got)
+	}
+	if got := valueAt(t, values, "ingress", "tls", "secretName"); got != "poligon-manager-public-tls" {
+		t.Errorf("ingress.tls.secretName = %v, want the public REST secret", got)
+	}
+}
+
 func TestExtrasVPADisabled(t *testing.T) {
 	op := Extras(testCluster(), ExtrasOptions{IngressEnabled: true, Manager: true})
 	if got := valueAt(t, op.Spec.Helm.Values.Data, "vpa", "enabled"); got != false {
