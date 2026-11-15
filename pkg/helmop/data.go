@@ -15,6 +15,15 @@ func Data(c Cluster) *fleetv1alpha1.HelmOp {
 		"enable":      true,
 		"hostNetwork": true,
 		"replicas":    c.SeedClientReplicas,
+		// The chart defaults to 8 CPU / 16Gi requests, which no pilot node can
+		// fit for three replicas. 1 CPU / 2Gi per replica leaves at least
+		// 2.2 CPU / 3.4Gi free on the busiest node even if all three land on
+		// one node; in the normal one-replica-per-node spread it leaves at
+		// least 4.2 CPU / 7.5Gi with a control scheduler and client on the node.
+		"resources": map[string]any{
+			"requests": map[string]any{"cpu": "1", "memory": "2Gi"},
+			"limits":   map[string]any{"cpu": "4", "memory": "8Gi"},
+		},
 		// The chart defaults to a 100Gi PVC; the seed client must stay PVC-free.
 		"persistence": map[string]any{"enable": false},
 		"dynconfig":   map[string]any{"scheduler": map[string]any{"addr": schedulerAddr}},
@@ -36,7 +45,13 @@ func Data(c Cluster) *fleetv1alpha1.HelmOp {
 		"hostNetwork":       true,
 		"dfinit":            map[string]any{"enable": false},
 		"priorityClassName": "system-node-critical",
-		"dynconfig":         map[string]any{"scheduler": map[string]any{"addr": schedulerAddr}},
+		// Pin the already-modest chart request and halve the 4 CPU / 8Gi
+		// default limit so every node keeps a bounded client pod.
+		"resources": map[string]any{
+			"requests": map[string]any{"cpu": "250m", "memory": "512Mi"},
+			"limits":   map[string]any{"cpu": "2", "memory": "4Gi"},
+		},
+		"dynconfig": map[string]any{"scheduler": map[string]any{"addr": schedulerAddr}},
 		"config": map[string]any{
 			"host":      map[string]any{"schedulerClusterID": c.SchedulerClusterID},
 			"scheduler": tlsPaths(),

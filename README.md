@@ -121,6 +121,27 @@ annotations add the Dragonfly releases:
 | manager + seed | manager, control, data, extras; nydus only when `nydus.enabled=true` |
 | `seed: "true"` without scheduler ID | KeyDB + extras (KeyDB VPA); `SchedulerClusterIDMissing` event, no seed releases |
 
+### Pilot data resource sizing
+
+The fork dragonfly chart defaults to `8 CPU / 16Gi` requests for `seedClient`,
+which cannot fit three replicas on the pilot nodes. `pkg/helmop/data.go` pins:
+
+| Workload | Requests | Limits |
+|---|---|---|
+| `seedClient` | `1 CPU / 2Gi` | `4 CPU / 8Gi` |
+| `client` | `250m / 512Mi` | `2 CPU / 4Gi` |
+
+The four poligon nodes each have 16 CPU and 32,100 MiB allocatable. Before the
+seed role they carried 8.7-10.3 CPU and 18.2-21.0 GiB of requests per node,
+leaving 5.7-7.3 CPU and 10.4-13.1 GiB free. Three `seedClient` replicas plus
+one `client` pod per node and two control schedulers add 4.25 CPU / 8.5 GiB
+in total (1.5 CPU / 3 GiB on the busiest node), so all requests fit with at
+least 4.2 CPU / 7.5 GiB still free per node. In the normal one-seed-per-node
+spread, `seedClient` plus `client` plus a control scheduler also fit their
+limits on a node (14 CPU / 28 GiB of 16 CPU / 31.3 GiB). The `seedClient`
+hostNetwork ports 4100-4106 force the three replicas onto distinct nodes at
+runtime.
+
 The operator requires Rancher 2.15+ with Fleet 0.16+ (the `HelmOp` CRD).
 The KeyDB chart (`enapter/keydb` `0.48.0`) and nydus-snapshotter chart
 (`0.0.10`) are pinned in the operator; KeyDB is external and is not published

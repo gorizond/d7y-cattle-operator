@@ -121,3 +121,64 @@ for flag in "-tls-ca-cert=/etc/dragonfly/certs/ca.crt" "-tls-client-cert=/etc/dr
 done
 
 echo "fork chart TLS render checks passed ($repo $version)"
+
+# Data workloads must render the pilot-sized requests/limits pinned by the
+# operator (the chart defaults request 8 CPU / 16Gi for seedClient).
+cat >"$tmp/data-values.yaml" <<'YAML'
+fullnameOverride: c1-data
+manager:
+  enable: false
+mysql:
+  enable: false
+redis:
+  enable: false
+externalRedis:
+  addrs:
+    - c1-keydb.dragonfly-system.svc.cluster.local:6379
+scheduler:
+  enable: false
+seedClient:
+  enable: true
+  hostNetwork: true
+  replicas: 3
+  persistence:
+    enable: false
+  resources:
+    requests:
+      cpu: "1"
+      memory: 2Gi
+    limits:
+      cpu: "4"
+      memory: 8Gi
+client:
+  enable: true
+  hostNetwork: true
+  dfinit:
+    enable: false
+  priorityClassName: system-node-critical
+  resources:
+    requests:
+      cpu: 250m
+      memory: 512Mi
+    limits:
+      cpu: "2"
+      memory: 4Gi
+YAML
+
+helm template c1-data "$chart" --namespace dragonfly-system -f "$tmp/data-values.yaml" >"$tmp/data.yaml"
+client_doc=$(awk 'BEGIN{RS="---"} /kind: DaemonSet/ && /name: c1-data-client/ {print}' "$tmp/data.yaml")
+seed_doc=$(awk 'BEGIN{RS="---"} /kind: StatefulSet/ && /name: c1-data-seed-client/ {print}' "$tmp/data.yaml")
+
+assert_workload_resources() {
+  local doc="$1" requests_cpu="$2" requests_memory="$3" limits_cpu="$4" limits_memory="$5" label="$6"
+  [ -n "$doc" ] || fail "$label was not rendered"
+  echo "$doc" | grep -A2 'requests:' | grep -q "cpu: $requests_cpu" || fail "$label requests.cpu missing"
+  echo "$doc" | grep -A2 'requests:' | grep -q "memory: $requests_memory" || fail "$label requests.memory missing"
+  echo "$doc" | grep -A2 'limits:' | grep -q "cpu: $limits_cpu" || fail "$label limits.cpu missing"
+  echo "$doc" | grep -A2 'limits:' | grep -q "memory: $limits_memory" || fail "$label limits.memory missing"
+}
+
+assert_workload_resources "$seed_doc" '"1"' '2Gi' '"4"' '8Gi' "seedClient"
+assert_workload_resources "$client_doc" '250m' '512Mi' '"2"' '4Gi' "client"
+
+echo "fork chart data resource render checks passed ($repo $version)"
