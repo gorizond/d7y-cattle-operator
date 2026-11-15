@@ -470,7 +470,7 @@ func validPublicIPs(resolved []string) []string {
 	ips := make([]string, 0, len(resolved))
 	for _, raw := range resolved {
 		ip := net.ParseIP(strings.TrimSpace(raw))
-		if ip == nil || ip.IsLoopback() || ip.IsUnspecified() {
+		if !pki.IsPublicIP(ip) {
 			continue
 		}
 		ips = append(ips, ip.String())
@@ -489,9 +489,9 @@ func existingPublicIPs(secret *corev1.Secret) []string {
 	ips := make([]string, 0, len(certs[0].IPAddresses))
 	for _, ip := range certs[0].IPAddresses {
 		// Keep previously resolved public addresses through DNS/IP rotation,
-		// but never retain loopback, link-local, private, or internal
-		// ClusterIP SANs.
-		if ip.IsLoopback() || ip.IsPrivate() || ip.IsLinkLocalUnicast() || ip.IsUnspecified() {
+		// but never retain loopback, link-local, private, multicast, or
+		// internal ClusterIP SANs.
+		if !pki.IsPublicIP(ip) {
 			continue
 		}
 		ips = append(ips, ip.String())

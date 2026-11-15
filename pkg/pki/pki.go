@@ -202,6 +202,21 @@ func leafDNSNames(grpcDomain, apiHost string) []string {
 	return names
 }
 
+// IsPublicIP reports whether ip is a globally routable unicast address that
+// may be used as a public P2P certificate SAN. It rejects nil, loopback,
+// unspecified, private, link-local unicast/multicast, multicast, and any
+// non-global-unicast address.
+func IsPublicIP(ip net.IP) bool {
+	if ip == nil || !ip.IsGlobalUnicast() {
+		return false
+	}
+	if ip.IsLoopback() || ip.IsUnspecified() || ip.IsPrivate() ||
+		ip.IsLinkLocalUnicast() || ip.IsLinkLocalMulticast() || ip.IsMulticast() {
+		return false
+	}
+	return true
+}
+
 // schedulerIPs returns the loopback addresses plus the DNS-resolved public
 // scheduler IPs. Node IPs and internal ClusterIPs are deliberately never part
 // of the P2P certificate.
@@ -214,6 +229,9 @@ func schedulerIPs(publicIPs []string) ([]net.IP, error) {
 		ip := net.ParseIP(raw)
 		if ip == nil {
 			return nil, fmt.Errorf("pki: invalid scheduler IP %q", raw)
+		}
+		if !IsPublicIP(ip) {
+			return nil, fmt.Errorf("pki: scheduler IP %q is not public", raw)
 		}
 		ips = append(ips, ip)
 	}

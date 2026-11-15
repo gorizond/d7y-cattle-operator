@@ -91,8 +91,8 @@ func Data(c Cluster) *fleetv1alpha1.HelmOp {
 		"seedClient":       seedClient,
 		"client":           client,
 	}
-	// The extras release owns the non-headless scheduler client Service used
-	// by the local dynconfig, so data waits for it before starting clients.
+	// The extras release owns the public scheduler TCP route used by the local
+	// dynconfig, so data waits for it before starting clients.
 	op := newHelmOp(DataName(c.Name), c, c.Chart, "data", values,
 		[]string{ControlName(c.Name), KeyDBName(c.Name), ExtrasName(c.Name)})
 	return withMTLS(op, c.MTLSSecretName)

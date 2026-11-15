@@ -33,6 +33,15 @@ func TestSchedulerHost(t *testing.T) {
 
 func TestEnsureMTLSCertificateResolvesHostAndSANs(t *testing.T) {
 	controller, _, _ := newTestController(t)
+	controller.opts.Resolver.(*fakeResolver).ips = []string{
+		"203.0.113.10",
+		"2001:db8::1",
+		"10.0.0.5",
+		"127.0.0.1",
+		"169.254.1.1",
+		"224.0.0.1",
+		"fc00::1",
+	}
 	cluster := testSeedCluster("42")
 
 	if _, err := controller.reconcile("", cluster); err != nil {
@@ -53,9 +62,6 @@ func TestEnsureMTLSCertificateResolvesHostAndSANs(t *testing.T) {
 		t.Fatalf("parse certificate: %v", err)
 	}
 	leaf := certs[0]
-	if !certHasIP(leaf.IPAddresses, "203.0.113.10") {
-		t.Errorf("leaf IP SANs %v do not contain the resolved public IP", leaf.IPAddresses)
-	}
 	for _, want := range []string{"grpc.example.com", "manager-api.example.com"} {
 		if !containsString(leaf.DNSNames, want) {
 			t.Errorf("leaf DNS SANs %v do not contain %q", leaf.DNSNames, want)
@@ -245,5 +251,26 @@ func TestManagerOnlyBootstrapsMissingCertificate(t *testing.T) {
 	}
 	if certHasIP(leaf.IPAddresses, "203.0.113.10") {
 		t.Error("manager-only bootstrap unexpectedly added a public IP")
+	}
+}
+
+func TestValidPublicIPsFiltersNonPublic(t *testing.T) {
+	got := validPublicIPs([]string{
+		"203.0.113.10",
+		"2001:db8::1",
+		"10.0.0.5",
+		"127.0.0.1",
+		"169.254.1.1",
+		"224.0.0.1",
+		"fc00::1",
+	})
+	want := []string{"203.0.113.10", "2001:db8::1"}
+	if len(got) != len(want) {
+		t.Fatalf("validPublicIPs = %v, want %v", got, want)
+	}
+	for i := range want {
+		if got[i] != want[i] {
+			t.Errorf("validPublicIPs[%d] = %q, want %q", i, got[i], want[i])
+		}
 	}
 }

@@ -349,3 +349,44 @@ func keysOf(data map[string][]byte) []string {
 	}
 	return keys
 }
+
+func TestIsPublicIP(t *testing.T) {
+	tests := map[string]struct {
+		ip   net.IP
+		want bool
+	}{
+		"public ipv4":          {net.ParseIP("203.0.113.10"), true},
+		"public ipv6":          {net.ParseIP("2001:db8::1"), true},
+		"private ipv4":         {net.ParseIP("10.0.0.1"), false},
+		"private ipv6 ula":     {net.ParseIP("fc00::1"), false},
+		"loopback ipv4":        {net.ParseIP("127.0.0.1"), false},
+		"loopback ipv6":        {net.ParseIP("::1"), false},
+		"unspecified ipv4":     {net.ParseIP("0.0.0.0"), false},
+		"link local unicast":   {net.ParseIP("169.254.1.1"), false},
+		"link local multicast": {net.ParseIP("ff02::1"), false},
+		"multicast":            {net.ParseIP("224.0.0.1"), false},
+		"nil":                  {nil, false},
+	}
+	for name, tc := range tests {
+		t.Run(name, func(t *testing.T) {
+			if got := IsPublicIP(tc.ip); got != tc.want {
+				t.Errorf("IsPublicIP(%v) = %v, want %v", tc.ip, got, tc.want)
+			}
+		})
+	}
+}
+
+func TestGenerateRejectsNonPublicSchedulerIPs(t *testing.T) {
+	for _, raw := range []string{"10.0.0.5", "127.0.0.1", "169.254.1.1", "224.0.0.1", "fc00::1"} {
+		t.Run(raw, func(t *testing.T) {
+			_, err := Generate(Options{
+				ManagerGRPCDomain:  testGRPCDomain,
+				ManagerAPIURL:      testAPIURL,
+				SchedulerPublicIPs: []string{raw},
+			})
+			if err == nil {
+				t.Fatalf("Generate(%s) error = nil, want non-public error", raw)
+			}
+		})
+	}
+}
