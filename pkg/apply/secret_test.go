@@ -111,3 +111,55 @@ func (f *fakeSecretStore) Update(secret *corev1.Secret) (*corev1.Secret, error) 
 	f.secrets[key] = secret.DeepCopy()
 	return secret.DeepCopy(), nil
 }
+
+func TestReplicateSecretStripsLastAppliedAnnotation(t *testing.T) {
+	store := newFakeSecretStore()
+	source := &corev1.Secret{
+		ObjectMeta: metav1.ObjectMeta{Name: "dragonfly-p2p-mtls", Namespace: "d7y-system"},
+		Type:       corev1.SecretTypeTLS,
+		Data:       map[string][]byte{"ca.crt": []byte("ca"), corev1.TLSCertKey: []byte("cert"), corev1.TLSPrivateKeyKey: []byte("key")},
+	}
+	if _, err := ReplicateSecret(source, "fleet-default", store); err != nil {
+		t.Fatalf("ReplicateSecret() error = %v", err)
+	}
+	copy, err := store.Get("fleet-default", source.Name, metav1.GetOptions{})
+	if err != nil {
+		t.Fatalf("get copy: %v", err)
+	}
+	copy.Annotations = map[string]string{
+		lastAppliedAnnotation: `{"data":{"tls.key":"private"}}`,
+		"keep":                "yes",
+	}
+	if _, err := store.Update(copy); err != nil {
+		t.Fatalf("seed annotation: %v", err)
+	}
+
+	changed, err := ReplicateSecret(source, "fleet-default", store)
+	if err != nil {
+		t.Fatalf("ReplicateSecret() error = %v", err)
+	}
+	if !changed {
+		t.Error("ReplicateSecret() changed = false, want annotation cleanup")
+	}
+	cleaned, err := store.Get("fleet-default", source.Name, metav1.GetOptions{})
+	if err != nil {
+		t.Fatalf("get copy: %v", err)
+	}
+	if _, ok := cleaned.Annotations[lastAppliedAnnotation]; ok {
+		t.Error("last-applied annotation was not removed")
+	}
+	if cleaned.Annotations["keep"] != "yes" {
+		t.Error("unrelated annotation was removed")
+	}
+	if string(cleaned.Data[corev1.TLSCertKey]) != "cert" {
+		t.Error("data changed during annotation cleanup")
+	}
+
+	changed, err = ReplicateSecret(source, "fleet-default", store)
+	if err != nil {
+		t.Fatalf("ReplicateSecret(noop) error = %v", err)
+	}
+	if changed {
+		t.Error("ReplicateSecret(noop) changed = true, want false")
+	}
+}

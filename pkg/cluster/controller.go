@@ -295,8 +295,9 @@ func (c *Controller) ensureMTLSSecret(cluster *provv1.Cluster) error {
 		return err
 	}
 	if _, err := apply.ReplicateSecret(source, cluster.Namespace, c.secrets); err != nil {
-		c.event(cluster, corev1.EventTypeWarning, "SecretReplicationFailed", err.Error())
-		return err
+		message := fmt.Sprintf("replicate mTLS Secret to %s/%s: %v", cluster.Namespace, source.Name, err)
+		c.event(cluster, corev1.EventTypeWarning, "SecretReplicationFailed", message)
+		return fmt.Errorf("replicate mTLS Secret to %s/%s: %w", cluster.Namespace, source.Name, err)
 	}
 	return nil
 }
