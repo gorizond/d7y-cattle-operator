@@ -11,6 +11,11 @@ ingress:
     host: ""
     service: ""
     port: 65003
+    # Secret served on the Traefik gRPC edge. Empty falls back to
+    # ingress.tls.secretName. The scheduler verifies the manager with the P2P
+    # CA, so production sets this to the P2P Secret while REST keeps the public
+    # one.
+    tlsSecret: ""
   rest:
     enabled: true
     host: ""
