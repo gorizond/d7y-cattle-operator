@@ -175,3 +175,24 @@ func TestControlHelmOp(t *testing.T) {
 		t.Errorf("seedPeer TLS = %v", seedPeerTLS)
 	}
 }
+
+func TestDataResourceSizing(t *testing.T) {
+	values := Data(testCluster()).Spec.Helm.Values.Data
+
+	seedClient := nested(t, values, "seedClient")
+	assertResources(t, seedClient, "1", "2Gi", "4", "8Gi")
+	client := nested(t, values, "client")
+	assertResources(t, client, "250m", "512Mi", "2", "4Gi")
+}
+
+func assertResources(t *testing.T, component map[string]any, requestsCPU, requestsMemory, limitsCPU, limitsMemory string) {
+	t.Helper()
+	requests := nested(t, component, "resources", "requests")
+	if requests["cpu"] != requestsCPU || requests["memory"] != requestsMemory {
+		t.Errorf("resources.requests = %v, want cpu=%s memory=%s", requests, requestsCPU, requestsMemory)
+	}
+	limits := nested(t, component, "resources", "limits")
+	if limits["cpu"] != limitsCPU || limits["memory"] != limitsMemory {
+		t.Errorf("resources.limits = %v, want cpu=%s memory=%s", limits, limitsCPU, limitsMemory)
+	}
+}
