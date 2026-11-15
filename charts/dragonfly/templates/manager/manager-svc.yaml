@@ -1,0 +1,43 @@
+{{- if .Values.manager.enable }}
+apiVersion: v1
+kind: Service
+metadata:
+  name: {{ template "dragonfly.manager.fullname" . }}
+  namespace: {{ include "common.names.namespace" . | quote }}
+  labels:
+    app: {{ template "dragonfly.name" . }}
+    release: {{ .Release.Name }}
+    heritage: {{ .Release.Service }}
+    component: {{ .Values.manager.name }}
+{{- if .Values.manager.service.labels }}
+{{ toYaml .Values.manager.service.labels | indent 4 }}
+{{- end }}
+{{- if .Values.manager.service.annotations }}
+  annotations:
+{{ toYaml .Values.manager.service.annotations | indent 4 }}
+{{- end }}
+spec:
+  type: {{ .Values.manager.service.type }}
+  clusterIP: {{ .Values.manager.service.clusterIP }}
+  ports:
+    - port: {{ .Values.manager.restPort }}
+      name: http-rest
+      {{- if semverCompare ">=1.20" .Capabilities.KubeVersion.Version }}
+      appProtocol: http
+      {{- end }}
+      protocol: TCP
+      targetPort: {{ .Values.manager.restPort }}
+{{- if eq .Values.manager.service.type "NodePort" }}
+      nodePort: {{ .Values.manager.service.nodePort }}
+{{- end }}
+    - port: {{ .Values.manager.grpcPort }}
+      name: grpc
+      {{- if semverCompare ">=1.20" .Capabilities.KubeVersion.Version }}
+      appProtocol: grpc
+      {{- end }}
+      protocol: TCP
+      targetPort: {{ .Values.manager.grpcPort }}
+  selector:
+    app: {{ template "dragonfly.fullname" . }}
+    component: {{ .Values.manager.name }}
+{{- end }}

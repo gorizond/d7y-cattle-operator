@@ -103,11 +103,21 @@ fi
 grep -q 'name: e-manager-grpc' "$tmp/traefik-grpc.yaml" || fail "Traefik gRPC IngressRoute missing"
 grep -q 'kind: IngressRoute' "$tmp/traefik-grpc.yaml" || fail "Traefik gRPC kind missing"
 grep -q 'Host(`grpc.example.com`)' "$tmp/traefik-grpc.yaml" || fail "Traefik gRPC Host match missing"
-grep -q 'scheme: h2c' "$tmp/traefik-grpc.yaml" || fail "Traefik gRPC h2c backend missing"
+grep -q 'scheme: https' "$tmp/traefik-grpc.yaml" || fail "Traefik gRPC https backend missing"
+grep -q 'serversTransport: "e-manager-grpc"' "$tmp/traefik-grpc.yaml" || fail "Traefik gRPC ServersTransport reference missing"
+if grep -q 'scheme: h2c' "$tmp/traefik-grpc.yaml"; then fail "Traefik gRPC must not use h2c (manager gRPC is TLS)"; fi
 grpc_route=$(awk 'BEGIN{RS="---"} /kind: IngressRoute/ && /name: e-manager-grpc/ {print}' "$tmp/traefik-grpc.yaml")
 rest_route=$(awk 'BEGIN{RS="---"} /kind: IngressRoute/ && /name: e-manager-api/ {print}' "$tmp/traefik-grpc.yaml")
 echo "$grpc_route" | grep -q 'secretName: "dragonfly-p2p-mtls"' || fail "Traefik gRPC route must serve the P2P TLS Secret"
 echo "$rest_route" | grep -q 'secretName: "poligon-manager-public-tls"' || fail "Traefik REST route must keep the public TLS Secret"
+if [ "$(grep -c '^kind: ServersTransport$' "$tmp/traefik-grpc.yaml")" -ne 2 ]; then
+  fail "Traefik must render REST and gRPC ServersTransports"
+fi
+grpc_transport=$(awk 'BEGIN{RS="---"} /kind: ServersTransport/ && /name: e-manager-grpc/ {print}' "$tmp/traefik-grpc.yaml")
+echo "$grpc_transport" | grep -q 'serverName: "grpc.example.com"' || fail "Traefik gRPC ServersTransport serverName missing"
+echo "$grpc_transport" | grep -q -- '- "dragonfly-p2p-mtls"' || fail "Traefik gRPC ServersTransport P2P CA/client Secret missing"
+echo "$grpc_transport" | grep -q 'certificatesSecrets:' || fail "Traefik gRPC ServersTransport client certificate missing"
+if echo "$grpc_transport" | grep -q '^  insecureSkipVerify:'; then fail "Traefik gRPC ServersTransport must verify the backend"; fi
 grep -A 2 'options:' "$tmp/traefik-grpc.yaml" | grep -q 'name: e-manager-grpc' || fail "Traefik gRPC TLSOption reference missing"
 grep -B 2 'port: 65003' "$tmp/traefik-grpc.yaml" | grep -q 'name: "c1-manager"' || fail "Traefik gRPC service/port missing"
 grep -q 'kind: TLSOption' "$tmp/traefik-grpc.yaml" || fail "Traefik gRPC TLSOption missing"

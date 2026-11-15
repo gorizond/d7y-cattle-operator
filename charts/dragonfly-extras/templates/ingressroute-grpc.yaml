@@ -2,10 +2,10 @@
 {{- $grpcTLSSecret := .Values.ingress.grpc.tlsSecret -}}
 {{- $grpcSecret := $grpcTLSSecret | default .Values.ingress.tls.secretName -}}
 {{- if and .Values.ingress.enabled .Values.ingress.grpc.enabled (eq $controller "traefik") (.Capabilities.APIVersions.Has "traefik.io/v1alpha1") }}
-# gRPC TLS terminates at Traefik because the manager serves plaintext h2c on
-# its gRPC port. The scheduler verifies the manager with the P2P CA, so the
-# gRPC server cert is the P2P cert used by the scheduler; REST keeps the public
-# cert. Client certificates are verified at the edge by the TLSOption.
+# gRPC TLS terminates at Traefik because the manager serves TLS on its gRPC
+# port. The scheduler verifies the manager with the P2P CA, so the gRPC server
+# cert is the P2P cert used by the scheduler; REST keeps the public cert.
+# Traefik re-encrypts to the manager with the P2P CA and client certificate.
 apiVersion: traefik.io/v1alpha1
 kind: IngressRoute
 metadata:
@@ -25,7 +25,10 @@ spec:
       services:
         - name: {{ .Values.ingress.grpc.service | quote }}
           port: {{ .Values.ingress.grpc.port }}
-          scheme: h2c
+          scheme: https
+          {{- if .Values.ingress.traefik.serversTransport.enabled }}
+          serversTransport: {{ printf "%s-manager-grpc" .Release.Name | quote }}
+          {{- end }}
   {{- if or .Values.ingress.tls.enabled $grpcTLSSecret }}
   tls:
     secretName: {{ $grpcSecret | quote }}

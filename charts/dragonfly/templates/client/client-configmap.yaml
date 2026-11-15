@@ -1,0 +1,72 @@
+{{- if .Values.client.enable }}
+apiVersion: v1
+kind: ConfigMap
+metadata:
+  name: {{ template "dragonfly.client.fullname" . }}
+  namespace: {{ include "common.names.namespace" . | quote }}
+  labels:
+    app: {{ template "dragonfly.fullname" . }}
+    release: {{ .Release.Name }}
+    heritage: {{ .Release.Service }}
+    component: {{ .Values.client.name }}
+data:
+  dfdaemon.yaml: |-
+    host:
+{{ toYaml .Values.client.config.host | indent 6 }}
+    server:
+{{ toYaml .Values.client.config.server | indent 6 }}
+    download:
+{{ toYaml .Values.client.config.download | indent 6 }}
+    upload:
+{{ toYaml .Values.client.config.upload | indent 6 }}
+    {{- if .Values.manager.enable }}
+    manager:
+      addr: http://{{ template "dragonfly.manager.fullname" . }}.{{ .Release.Namespace }}.svc.{{ .Values.clusterDomain }}:{{ .Values.manager.grpcPort }}
+    {{- else if .Values.externalManager.host }}
+    manager:
+      addr: http://{{ .Values.externalManager.host }}:{{ .Values.externalManager.grpcPort }}
+    {{- end }}
+    scheduler:
+{{ toYaml .Values.client.config.scheduler | indent 6 }}
+    dynconfig:
+{{ toYaml .Values.client.config.dynconfig | indent 6 }}
+    storage:
+{{ toYaml .Values.client.config.storage | indent 6 }}
+    gc:
+{{ toYaml .Values.client.config.gc | indent 6 }}
+    proxy:
+{{ toYaml .Values.client.config.proxy | indent 6 }}
+    health:
+{{ toYaml .Values.client.config.health | indent 6 }}
+    metrics:
+{{ toYaml .Values.client.config.metrics | indent 6 }}
+    stats:
+{{ toYaml .Values.client.config.stats | indent 6 }}
+    tracing:
+{{ toYaml .Values.client.config.tracing | indent 6 }}
+    backend:
+{{ toYaml .Values.client.config.backend | indent 6 }}
+    network:
+{{ toYaml .Values.client.config.network | indent 6 }}
+  {{- if not (include "dragonfly.manager.enable" .) }}
+  dynconfig.yaml: |-
+    scheduler:
+      {{- if .Values.client.dynconfig.scheduler.addr }}
+      addr: {{ .Values.client.dynconfig.scheduler.addr }}
+      {{- else }}
+      addr: {{ template "dragonfly.scheduler.fullname" . }}.{{ .Release.Namespace }}.svc.{{ .Values.clusterDomain }}:{{ .Values.scheduler.config.server.port }}
+      {{- end }}
+      {{- if .Values.client.dynconfig.scheduler.addrs }}
+      addrs:
+{{ toYaml .Values.client.dynconfig.scheduler.addrs | indent 6 }}
+      {{- end }}
+    {{- if .Values.client.dynconfig.clientConfig }}
+    clientConfig:
+{{ toYaml .Values.client.dynconfig.clientConfig | indent 6 }}
+    {{- end }}
+    {{- if .Values.client.dynconfig.seedClientConfig }}
+    seedClientConfig:
+{{ toYaml .Values.client.dynconfig.seedClientConfig | indent 6 }}
+    {{- end }}
+  {{- end }}
+{{- end }}

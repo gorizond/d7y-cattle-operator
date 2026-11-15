@@ -56,8 +56,9 @@ jobs:
           git fetch origin gh-pages:refs/remotes/origin/gh-pages
           git branch -f gh-pages refs/remotes/origin/gh-pages
 
-      # Publish every chart checked into charts/. The external enapter/keydb
-      # chart is pinned by the operator but is not vendored here.
+      # Publish every chart checked into charts/ (d7y-cattle-operator,
+      # dragonfly-extras, p2p-static, and the vendored dragonfly chart). The
+      # external enapter/keydb chart is pinned by the operator but not vendored.
       - name: Lint charts
         run: helm lint charts/*
 

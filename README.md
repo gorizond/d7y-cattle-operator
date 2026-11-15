@@ -3,8 +3,8 @@
 Kubernetes operator that runs [Dragonfly](https://d7y.io) P2P on Rancher-managed
 RKE2 clusters.
 
-**Status**: MR-9 (CA-only Secret rendered by the `dragonfly-extras` chart; MR-8
-edge TLS termination for gRPC with h2c backends). The Cluster controller, role
+**Status**: MR-9 (CA-only Secret rendered by the `dragonfly-extras` chart; the
+vendored Dragonfly chart serves gRPC TLS and Traefik re-encrypts to it). The Cluster controller, role
 resolution, KeyDB, manager, seed role, manager registration,
 `dragonfly-extras`, the `p2p-static` chart, and the admission webhook are
 implemented. Live envtest/pilot verification remains deferred.
@@ -98,8 +98,8 @@ not used until the p2p-static and registration MRs.
 | `nydus.enabled` | `NYDUS_ENABLED` | Deploy the nydus-snapshotter HelmOp; default `false` (deferred) |
 
 Defaults: `mtlsSecretName=dragonfly-p2p-mtls`, `dragonfly.chart.name=dragonfly`,
-`dragonfly.chart.version=1.10.1`, `extras.chart.name=dragonfly-extras`,
-`extras.chart.version=0.1.5`, `extras.ingress.controller=nginx`,
+`dragonfly.chart.version=1.10.1-patch.1`, `extras.chart.name=dragonfly-extras`,
+`extras.chart.version=0.1.6`, `extras.ingress.controller=nginx`,
 `extras.ingress.grpcEnabled=true`, `extras.ingress.restEnabled=true`,
 `manager.grpcPort=443`, `nydus.enabled=false`, `webhook.port=9443`,
 `leaderElect=false`.
@@ -149,7 +149,8 @@ never contain Secret values or certificate material.
 
 ### Dragonfly chart version
 
-`dragonfly.chart.version` defaults to the verified `1.10.1` and is passed to
+`dragonfly.chart.version` defaults to the verified vendored `1.10.1-patch.1`
+(see `charts/dragonfly/PATCHES.md`) and is passed to
 every Dragonfly HelmOp (`manager`, `control`, `data`). A different value is
 allowed for experiments, but the operator emits an `UnsupportedChartVersion`
 warning event on each reconcile because TLS fields and topology control/data
@@ -171,12 +172,12 @@ security groups:
 | `4100` | seedClient upload | mTLS required; allow only cluster peers/scheduler |
 | `4101/4102/4103/4104` | seedClient proxy/metrics/health/stats | bind to `127.0.0.1`; do not expose |
 | `4105/4106` | seedClient storage TCP/QUIC | cluster network only |
-| `65003` | manager gRPC backend | plaintext h2c behind the Ingress; edge TLS + client mTLS |
+| `65003` | manager gRPC backend | TLS + client mTLS; Traefik re-encrypts with the P2P CA |
 | `443` | manager gRPC edge | TLS + client mTLS; schedulers use `manager.grpcPort` |
 | `8080` | manager REST | JWT required; public Ingress is allowed |
 
-Do not use `proxy.basicAuth` for peer authentication: chart 1.10.1 places it in
-the wrong configuration block. The operator keeps `proxy`, `metrics`, `health`,
+Do not use `proxy.basicAuth` for peer authentication: chart 1.10.1 (including
+the `-patch.1` vendor) places it in the wrong configuration block. The operator keeps `proxy`, `metrics`, `health`,
 and `stats` on `127.0.0.1` for both `client` and `seedClient`. Because both
 DaemonSets may run on the same node, seedClient ports are shifted to
 `4100–4106` so they do not collide with client `4000–4006`.
@@ -210,9 +211,13 @@ HelmOp:
   and no nginx annotations are added.
 - In Traefik mode the gRPC endpoint is an `IngressRoute` named
   `<release>-manager-grpc` (CRD `traefik.io/v1alpha1`, entry point `websecure`)
-  with `Host` matching `ingress.grpc.host` and an `h2c` backend. TLS uses
-  `ingress.tls.secretName` (the public Let's Encrypt Secret created directly on
-  the cluster) and the `<release>-manager-grpc` `TLSOption`, whose
+  with `Host` matching `ingress.grpc.host` and a `scheme: https` backend
+  (the manager gRPC server is TLS). It references the
+  `<release>-manager-grpc` `ServersTransport`, which sets `serverName` to the
+  gRPC host and uses the P2P Secret for `rootCAs` (`ca.crt`) and
+  `certificatesSecrets` (`tls.crt`/`tls.key`); it does not skip verification.
+  Edge TLS uses `ingress.grpc.tlsSecret` (the P2P Secret, falling back to
+  `ingress.tls.secretName`) and the `<release>-manager-grpc` `TLSOption`, whose
   `RequireAndVerifyClientCert` client auth reads the internal CA from the
   CA-only `dragonfly-p2p-mtls-ca` Secret (`tls.ca`). The chart renders that
   Secret from `ingress.mtlsCA` (the internal CA PEM passed by the operator);
@@ -232,8 +237,9 @@ HelmOp:
       restEnabled: true
       tlsSecret: dragonfly-p2p-mtls
   ```
-- The manager gRPC server stays plaintext on `:65003`; TLS and client mTLS are
-  enforced by the edge controller. The manager REST server keeps its internal
+- The manager gRPC server serves TLS/mTLS with the P2P certificate on `:65003`;
+  the edge terminates P2P TLS, and Traefik re-encrypts to the backend with the
+  P2P CA and client certificate. The manager REST server keeps its internal
   `/etc/dragonfly/certs` certificate because REST stays HTTPS between Traefik
   and the manager. No cert-manager or Let's Encrypt resources are part of this
   repo; the public TLS Secret is supplied directly on the cluster.

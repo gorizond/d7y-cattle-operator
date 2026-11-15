@@ -38,3 +38,6 @@ jobs:
 
       - name: Render extras ingress modes
         run: bash scripts/test-extras-ingress.sh
+
+      - name: Render vendored Dragonfly TLS probes
+        run: bash scripts/test-dragonfly-tls.sh

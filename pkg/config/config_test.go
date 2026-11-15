@@ -122,7 +122,6 @@ func TestLoadRequiredFlags(t *testing.T) {
 		"--manager-api-url",
 		"--nginx-static-url",
 		"--manager-api-credentials-secret",
-		"--dragonfly-chart-repo",
 	} {
 		t.Run(required, func(t *testing.T) {
 			clearEnv(t)

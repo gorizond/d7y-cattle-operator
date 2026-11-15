@@ -1,0 +1,12 @@
+dependencies:
+- name: mysql
+  repository: https://charts.bitnami.com/bitnami
+  version: 11.1.20
+- name: postgres
+  repository: https://cloudpirates-io.github.io/helm-charts
+  version: 0.22.0
+- name: valkey
+  repository: https://valkey.io/valkey-helm/
+  version: 0.12.1
+digest: sha256:5042a2d5c231b07713e7bd900e7a6fd4a67ee4058dae3572c768afc2f2385d30
+generated: "2026-11-13T02:35:15.404147862Z"
