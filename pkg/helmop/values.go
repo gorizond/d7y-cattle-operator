@@ -86,3 +86,31 @@ func logVolume() map[string]any {
 func logVolumeMount(path string) map[string]any {
 	return map[string]any{"name": "logs", "mountPath": path}
 }
+
+// monitoringComponents are the Dragonfly components with top-level chart
+// metrics and ServiceMonitor toggles.
+var monitoringComponents = []string{"manager", "scheduler", "seedClient", "client"}
+
+// applyMonitoring enables chart-level metrics and ServiceMonitors on every
+// Dragonfly component when the Cluster monitoring selector matched. When
+// disabled it leaves the chart defaults untouched (no forced ServiceMonitor).
+func applyMonitoring(values map[string]any, enabled bool) {
+	if !enabled {
+		return
+	}
+	for _, name := range monitoringComponents {
+		component, ok := values[name].(map[string]any)
+		if !ok {
+			continue
+		}
+		if enabled, _ := component["enable"].(bool); !enabled {
+			continue
+		}
+		component["metrics"] = map[string]any{
+			"enable": true,
+			"serviceMonitor": map[string]any{
+				"enable": true,
+			},
+		}
+	}
+}

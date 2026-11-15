@@ -93,6 +93,7 @@ func Data(c Cluster) *fleetv1alpha1.HelmOp {
 	}
 	// The extras release owns the public scheduler TCP route used by the local
 	// dynconfig, so data waits for it before starting clients.
+	applyMonitoring(values, c.Monitoring)
 	op := newHelmOp(DataName(c.Name), c, c.Chart, "data", values,
 		[]string{ControlName(c.Name), KeyDBName(c.Name), ExtrasName(c.Name)})
 	return withMTLS(op, c.MTLSSecretName)

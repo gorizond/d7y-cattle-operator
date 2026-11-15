@@ -1,6 +1,10 @@
 package helmop
 
-import "testing"
+import (
+	"testing"
+
+	fleetv1alpha1 "github.com/rancher/fleet/pkg/apis/fleet.cattle.io/v1alpha1"
+)
 
 func testCluster() Cluster {
 	return Cluster{
@@ -144,5 +148,68 @@ func TestManagerHelmOp(t *testing.T) {
 	}
 	if got := valueAt(t, values, "manager", "podAnnotations", certRevisionAnnotation); got != "rev1" {
 		t.Errorf("manager podAnnotations revision = %v", got)
+	}
+}
+
+func TestMonitoringValues(t *testing.T) {
+	components := []string{"manager", "scheduler", "seedClient", "client"}
+	enabled := testCluster()
+	enabled.Monitoring = true
+	seen := map[string]bool{}
+	for name, op := range map[string]*fleetv1alpha1.HelmOp{
+		"manager": Manager(enabled),
+		"control": Control(enabled),
+		"data":    Data(enabled),
+	} {
+		values := op.Spec.Helm.Values.Data
+		for _, component := range components {
+			componentValues, ok := values[component].(map[string]any)
+			if !ok {
+				t.Fatalf("%s %s values are not a map", name, component)
+			}
+			isEnabled, _ := componentValues["enable"].(bool)
+			metrics, hasMetrics := componentValues["metrics"].(map[string]any)
+			if !isEnabled {
+				if hasMetrics {
+					t.Errorf("%s %s.metrics should be absent for a disabled component", name, component)
+				}
+				continue
+			}
+			if !hasMetrics {
+				t.Errorf("%s %s.metrics is missing", name, component)
+				continue
+			}
+			if metrics["enable"] != true {
+				t.Errorf("%s %s.metrics.enable = %v, want true", name, component, metrics["enable"])
+			}
+			serviceMonitor := nested(t, metrics, "serviceMonitor")
+			if serviceMonitor["enable"] != true {
+				t.Errorf("%s %s.metrics.serviceMonitor.enable = %v, want true", name, component, serviceMonitor["enable"])
+			}
+			seen[component] = true
+		}
+	}
+	for _, component := range components {
+		if !seen[component] {
+			t.Errorf("enabled component %s did not receive monitoring metrics", component)
+		}
+	}
+
+	disabled := testCluster()
+	for name, op := range map[string]*fleetv1alpha1.HelmOp{
+		"manager": Manager(disabled),
+		"control": Control(disabled),
+		"data":    Data(disabled),
+	} {
+		values := op.Spec.Helm.Values.Data
+		for _, component := range components {
+			componentValues, ok := values[component].(map[string]any)
+			if !ok {
+				t.Fatalf("%s %s values are not a map", name, component)
+			}
+			if _, ok := componentValues["metrics"]; ok {
+				t.Errorf("%s %s.metrics should be absent when monitoring is disabled", name, component)
+			}
+		}
 	}
 }
