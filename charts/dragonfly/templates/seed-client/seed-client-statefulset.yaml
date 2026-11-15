@@ -1,0 +1,221 @@
+{{- if .Values.seedClient.enable }}
+apiVersion: apps/v1
+kind: StatefulSet
+metadata:
+  labels:
+    app: {{ template "dragonfly.fullname" . }}
+    release: {{ .Release.Name }}
+    heritage: {{ .Release.Service }}
+    component: {{ .Values.seedClient.name }}
+  name: {{ template "dragonfly.seedClient.fullname" . }}
+  namespace: {{ include "common.names.namespace" . | quote }}
+  annotations:
+  {{- if .Values.seedClient.statefulsetAnnotations }}
+{{ toYaml .Values.seedClient.statefulsetAnnotations | indent 4 }}
+  {{- end }}
+spec:
+  {{- if .Values.seedClient.updateStrategy }}
+  updateStrategy:
+{{ toYaml .Values.seedClient.updateStrategy | indent 4 }}
+  {{- end }}
+  replicas: {{ .Values.seedClient.replicas }}
+  selector:
+    matchLabels:
+      app: {{ template "dragonfly.fullname" . }}
+      component: {{ .Values.seedClient.name }}
+  serviceName: seed-client
+  template:
+    metadata:
+      labels:
+        app: {{ template "dragonfly.fullname" . }}
+        component: {{ .Values.seedClient.name }}
+        {{- if .Values.seedClient.podLabels }}
+{{ toYaml .Values.seedClient.podLabels | indent 8 }}
+        {{- end }}
+      annotations:
+        checksum/config: {{ include (print $.Template.BasePath "/seed-client/seed-client-configmap.yaml") . | sha256sum }}
+      {{- if .Values.seedClient.podAnnotations }}
+{{ toYaml .Values.seedClient.podAnnotations | indent 8 }}
+      {{- end }}
+    spec:
+      hostNetwork: {{ .Values.seedClient.hostNetwork }}
+      {{- if .Values.seedClient.hostNetwork }}
+      dnsPolicy: "ClusterFirstWithHostNet"
+      {{- end }}
+      {{- with .Values.seedClient.nodeSelector | default .Values.global.nodeSelector }}
+      nodeSelector:
+        {{- toYaml . | nindent 8 }}
+      {{- end }}
+      {{- if .Values.seedClient.tolerations }}
+      tolerations:
+{{ toYaml .Values.seedClient.tolerations | indent 8 }}
+      {{- end }}
+      {{- if .Values.seedClient.affinity }}
+      affinity:
+{{ toYaml .Values.seedClient.affinity | indent 8 }}
+      {{- end }}
+      {{- if quote .Values.seedClient.terminationGracePeriodSeconds }}
+      terminationGracePeriodSeconds: {{ .Values.seedClient.terminationGracePeriodSeconds }}
+      {{- end }}
+      {{- if .Values.seedClient.priorityClassName }}
+      priorityClassName: {{ .Values.seedClient.priorityClassName }}
+      {{- end }}
+      {{- with .Values.seedClient.image.pullSecrets | default .Values.global.imagePullSecrets }}
+      imagePullSecrets:
+        {{- toYaml . | nindent 8 }}
+      {{- end }}
+      {{- if .Values.seedClient.hostAliases }}
+      hostAliases:
+{{ toYaml .Values.seedClient.hostAliases | indent 8 }}
+      {{- end }}
+      initContainers:
+      {{- if .Values.seedClient.sysctlInit.enable }}
+      - name: sysctl
+        image: {{ template "seedClient.initContainer.image" . }}
+        imagePullPolicy: {{ .Values.seedClient.initContainer.image.pullPolicy }}
+        securityContext:
+          # Sysctl needs privilege permission.
+          privileged: true
+        command:
+        - /bin/sh
+        - -cx
+        - |-
+          {{- range $key, $value := .Values.seedClient.sysctlInit.sysctls }}
+          sysctl -w {{ $key }}={{ $value }}
+          {{- end }}
+        resources:
+{{ toYaml .Values.seedClient.initContainer.resources | indent 10 }}
+      {{- end }}
+      {{- if include "dragonfly.manager.enable" . }}
+      - name: wait-for-manager
+        image: {{ template "seedClient.initContainer.image" . }}
+        imagePullPolicy: {{ .Values.seedClient.initContainer.image.pullPolicy }}
+        {{- if .Values.manager.enable }}
+        command: ['sh', '-c', 'until nslookup {{ template "dragonfly.manager.fullname" . }}.{{ .Release.Namespace }}.svc.{{ .Values.clusterDomain }} && nc -vz {{ template "dragonfly.manager.fullname" . }}.{{ .Release.Namespace }}.svc.{{ .Values.clusterDomain }} {{ .Values.manager.grpcPort }}; do echo waiting for manager; sleep 2; done;']
+        {{- else }}
+        command: ['sh', '-c', 'until nslookup {{ .Values.externalManager.host }} && nc -vz {{ .Values.externalManager.host }} {{ .Values.externalManager.grpcPort }}; do echo waiting for external manager; sleep 2; done;']
+        {{- end }}
+        resources:
+{{ toYaml .Values.seedClient.initContainer.resources | indent 10 }}
+      {{- else if .Values.scheduler.enable }}
+      - name: wait-for-scheduler
+        image: {{ template "seedClient.initContainer.image" . }}
+        imagePullPolicy: {{ .Values.seedClient.initContainer.image.pullPolicy }}
+        command: ['sh', '-c', 'until nslookup {{ template "dragonfly.scheduler.fullname" . }}.{{ .Release.Namespace }}.svc.{{ .Values.clusterDomain }} && nc -vz {{ template "dragonfly.scheduler.fullname" . }}.{{ .Release.Namespace }}.svc.{{ .Values.clusterDomain }} {{ .Values.scheduler.config.server.port }}; do echo waiting for scheduler; sleep 2; done;']
+        resources:
+{{ toYaml .Values.seedClient.initContainer.resources | indent 10 }}
+      {{- end }}
+      {{- if .Values.seedClient.extraInitContainers }}
+      {{- include "common.tplvalues.render" (dict "value" .Values.seedClient.extraInitContainers "context" $) | nindent 6 }}
+      {{- end }}
+      containers:
+      - name: seed-client
+        image: {{ template "seedClient.image" . }}
+        imagePullPolicy: {{ .Values.seedClient.image.pullPolicy | quote }}
+        args:
+        - --log-level={{ .Values.client.config.log.level }}
+        {{- if .Values.seedClient.config.console }}
+        - --console
+        {{- end }}
+        resources:
+{{ toYaml .Values.seedClient.resources | indent 10 }}
+        env:
+        {{- if .Values.seedClient.maxProcs }}
+        - name: GOMAXPROCS
+          value: {{ .Values.seedClient.maxProcs }}
+        {{- end }}
+        {{- if .Values.seedClient.extraEnvVars }}
+        {{- include "common.tplvalues.render" (dict "value" .Values.seedClient.extraEnvVars "context" $) | nindent 8 }}
+        {{- end }}
+        - name: POD_NAMESPACE
+          valueFrom:
+            fieldRef:
+              fieldPath: metadata.namespace
+        - name: POD_NAME
+          valueFrom:
+            fieldRef:
+              fieldPath: metadata.name
+        ports:
+        - containerPort: {{ .Values.seedClient.config.upload.server.port }}
+          protocol: TCP
+        - containerPort: {{ .Values.seedClient.config.proxy.server.port }}
+          protocol: TCP
+        - containerPort: {{ .Values.seedClient.config.health.server.port }}
+          protocol: TCP
+        - containerPort: {{ .Values.seedClient.config.metrics.server.port }}
+          protocol: TCP
+        - containerPort: {{ .Values.seedClient.config.stats.server.port }}
+          protocol: TCP
+        - containerPort: {{ .Values.seedClient.config.storage.server.tcpPort }}
+          protocol: TCP
+        - containerPort: {{ .Values.seedClient.config.storage.server.quicPort }}
+          protocol: UDP
+        {{- if .Values.startupProbe.enable }}
+        startupProbe:
+          exec:
+            command: ["/bin/grpc_health_probe", "-addr=unix://{{ .Values.seedClient.config.download.server.socketPath }}", "-connect-timeout={{ .Values.startupProbe.timeoutSeconds }}s", "-rpc-timeout={{ .Values.startupProbe.timeoutSeconds }}s"]
+          initialDelaySeconds: {{ .Values.startupProbe.initialDelaySeconds }}
+          periodSeconds: {{ .Values.startupProbe.periodSeconds }}
+          timeoutSeconds: {{ .Values.startupProbe.timeoutSeconds }}
+          successThreshold: {{ .Values.startupProbe.successThreshold }}
+          failureThreshold: {{ .Values.startupProbe.failureThreshold }}
+        {{- end }}
+        readinessProbe:
+          exec:
+            command: ["/bin/grpc_health_probe", "-addr=unix://{{ .Values.seedClient.config.download.server.socketPath }}", "-connect-timeout={{ .Values.readinessProbe.timeoutSeconds }}s", "-rpc-timeout={{ .Values.readinessProbe.timeoutSeconds }}s"]
+          initialDelaySeconds: {{ .Values.readinessProbe.initialDelaySeconds }}
+          periodSeconds: {{ .Values.readinessProbe.periodSeconds }}
+          timeoutSeconds: {{ .Values.readinessProbe.timeoutSeconds }}
+          successThreshold: {{ .Values.readinessProbe.successThreshold }}
+          failureThreshold: {{ .Values.readinessProbe.failureThreshold }}
+        livenessProbe:
+          exec:
+            command: ["/bin/grpc_health_probe", "-addr=unix://{{ .Values.seedClient.config.download.server.socketPath }}", "-connect-timeout={{ .Values.livenessProbe.timeoutSeconds }}s", "-rpc-timeout={{ .Values.livenessProbe.timeoutSeconds }}s"]
+          initialDelaySeconds: {{ .Values.livenessProbe.initialDelaySeconds }}
+          periodSeconds: {{ .Values.livenessProbe.periodSeconds }}
+          timeoutSeconds: {{ .Values.livenessProbe.timeoutSeconds }}
+          successThreshold: {{ .Values.livenessProbe.successThreshold }}
+          failureThreshold: {{ .Values.livenessProbe.failureThreshold }}
+        volumeMounts:
+        - name: config
+          mountPath: "/etc/dragonfly"
+        - name: storage
+          mountPath: {{ .Values.seedClient.config.storage.dir }}
+        {{- if .Values.seedClient.extraVolumeMounts }}
+        {{- toYaml .Values.seedClient.extraVolumeMounts | nindent 8 }}
+        {{- end }}
+      volumes:
+      - name: config
+        configMap:
+          name: {{ template "dragonfly.seedClient.fullname" . }}
+      {{- if not (.Values.seedClient.persistence.enable) }}
+      - name: storage
+        emptyDir: {}
+      {{- else if .Values.seedClient.persistence.hostPath }}
+      - name: storage
+        hostPath:
+          path: {{ .Values.seedClient.persistence.hostPath.path }}
+          type: {{ .Values.seedClient.persistence.hostPath.type | default "DirectoryOrCreate" }}
+      {{- end }}
+      {{- if .Values.seedClient.extraVolumes }}
+      {{- toYaml .Values.seedClient.extraVolumes | nindent 6 }}
+      {{- end }}
+  {{- if and .Values.seedClient.persistence.enable (not .Values.seedClient.persistence.hostPath) }}
+  volumeClaimTemplates:
+    - metadata:
+        name: storage
+        {{- if .Values.seedClient.persistence.annotations }}
+        annotations:
+        {{- toYaml .Values.seedClient.persistence.annotations | nindent 10 }}
+        {{- end }}
+      spec:
+        accessModes:
+          {{- range .Values.seedClient.persistence.accessModes }}
+          - {{ . | quote }}
+          {{- end }}
+        resources:
+          requests:
+            storage: {{ .Values.seedClient.persistence.size | quote }}
+        {{- include "common.storage.class" (dict "persistence" .Values.seedClient.persistence "global" .Values.global) | nindent 8 }}
+  {{- end }}
+{{- end }}

@@ -1,0 +1,275 @@
+{{- if .Values.client.enable }}
+apiVersion: apps/v1
+kind: DaemonSet
+metadata:
+  name: {{ template "dragonfly.client.fullname" . }}
+  namespace: {{ include "common.names.namespace" . | quote }}
+  labels:
+    app: {{ template "dragonfly.fullname" . }}
+    release: {{ .Release.Name }}
+    heritage: {{ .Release.Service }}
+    component: {{ .Values.client.name }}
+  annotations:
+  {{- if .Values.client.daemonsetAnnotations }}
+{{ toYaml .Values.client.daemonsetAnnotations | indent 4 }}
+  {{- end }}
+spec:
+  {{- if .Values.client.updateStrategy }}
+  updateStrategy:
+{{ toYaml .Values.client.updateStrategy | indent 4 }}
+  {{- end }}
+  selector:
+    matchLabels:
+      app: {{ template "dragonfly.fullname" . }}
+      component: "{{ .Values.client.name }}"
+  template:
+    metadata:
+      labels:
+        app: {{ template "dragonfly.fullname" . }}
+        component: "{{ .Values.client.name }}"
+        {{- if .Values.client.podLabels }}
+{{ toYaml .Values.client.podLabels | indent 8 }}
+        {{- end }}
+      annotations:
+        checksum/config: {{ include (print $.Template.BasePath "/client/client-configmap.yaml") . | sha256sum }}
+        {{- if .Values.client.dfinit.enable }}
+        checksum/dfinit-config: {{ include (print $.Template.BasePath "/client/dfinit-configmap.yaml") . | sha256sum }}
+        {{- end }}
+      {{- if .Values.client.podAnnotations }}
+{{ toYaml .Values.client.podAnnotations | indent 8 }}
+      {{- end }}
+    spec:
+      hostNetwork: {{ .Values.client.hostNetwork }}
+      {{- if .Values.client.hostNetwork }}
+      dnsPolicy: "ClusterFirstWithHostNet"
+      {{- end }}
+      hostPID: {{ .Values.client.hostPID }}
+      hostIPC: {{ .Values.client.hostIPC }}
+      {{- with .Values.client.nodeSelector | default .Values.global.nodeSelector }}
+      nodeSelector:
+        {{- toYaml . | nindent 8 }}
+      {{- end }}
+      {{- if .Values.client.tolerations }}
+      tolerations:
+{{ toYaml .Values.client.tolerations | indent 8 }}
+      {{- end }}
+      {{- if .Values.client.affinity }}
+      affinity:
+{{ toYaml .Values.client.affinity | indent 8 }}
+      {{- end }}
+      {{- if quote .Values.client.terminationGracePeriodSeconds }}
+      terminationGracePeriodSeconds: {{ .Values.client.terminationGracePeriodSeconds }}
+      {{- end }}
+      {{- if .Values.client.priorityClassName }}
+      priorityClassName: {{ .Values.client.priorityClassName }}
+      {{- end }}
+      {{- with .Values.client.image.pullSecrets | default .Values.global.imagePullSecrets }}
+      imagePullSecrets:
+        {{- toYaml . | nindent 8 }}
+      {{- end }}
+      {{- if .Values.client.hostAliases }}
+      hostAliases:
+{{ toYaml .Values.client.hostAliases | indent 8 }}
+      {{- end }}
+      initContainers:
+      {{- if .Values.client.sysctlInit.enable }}
+      - name: sysctl
+        image: {{ template "client.initContainer.image" . }}
+        imagePullPolicy: {{ .Values.client.initContainer.image.pullPolicy }}
+        securityContext:
+          privileged: true
+        command:
+        - /bin/sh
+        - -cx
+        - |-
+          {{- range $key, $value := .Values.client.sysctlInit.sysctls }}
+          sysctl -w {{ $key }}={{ $value }}
+          {{- end }}
+        resources:
+{{ toYaml .Values.client.initContainer.resources | indent 10 }}
+      {{- end }}
+      {{- if .Values.scheduler.enable }}
+      - name: wait-for-scheduler
+        image: {{ template "client.initContainer.image" . }}
+        imagePullPolicy: {{ .Values.client.initContainer.image.pullPolicy }}
+        command: ['sh', '-c', 'until nslookup {{ template "dragonfly.scheduler.fullname" . }}.{{ .Release.Namespace }}.svc.{{ .Values.clusterDomain }} && nc -vz {{ template "dragonfly.scheduler.fullname" . }}.{{ .Release.Namespace }}.svc.{{ .Values.clusterDomain }} {{ .Values.scheduler.config.server.port }}; do echo waiting for scheduler; sleep 2; done;']
+      {{- end }}
+      {{- if .Values.client.dfinit.enable }}
+      - name: dfinit
+        image: {{ template "client.dfinit.image" . }}
+        imagePullPolicy: {{ .Values.client.dfinit.image.pullPolicy }}
+        args:
+        - --log-level={{ .Values.client.dfinit.config.log.level }}
+        {{- if .Values.client.dfinit.config.console }}
+        - --console
+        {{- end }}
+        resources:
+{{ toYaml .Values.client.initContainer.resources | indent 10 }}
+        volumeMounts:
+        - name: dfinit-config
+          mountPath: "/etc/dragonfly"
+        - name: dfinit-run
+          mountPath: /var/run/dragonfly/dfinit
+        {{- if and (.Values.client.dfinit.enable) (.Values.client.dfinit.config.containerRuntime.containerd) }}
+        - name: containerd-config-dir
+          mountPath: {{ dir .Values.client.dfinit.config.containerRuntime.containerd.configPath }}
+        {{- end }}
+        {{- if and (.Values.client.dfinit.enable) (.Values.client.dfinit.config.containerRuntime.crio) }}
+        - name: crio-config-dir
+          mountPath: {{ dir .Values.client.dfinit.config.containerRuntime.crio.configPath }}
+        {{- end }}
+        {{- if and (.Values.client.dfinit.enable) (.Values.client.dfinit.config.containerRuntime.podman) }}
+        - name: podman-config-dir
+          mountPath: {{ dir .Values.client.dfinit.config.containerRuntime.podman.configPath }}
+        {{- end }}
+        {{- if and (.Values.client.dfinit.enable) (.Values.client.dfinit.config.containerRuntime.docker) }}
+        - name: docker-config-dir
+          mountPath: {{ dir .Values.client.dfinit.config.containerRuntime.docker.configPath }}
+        {{- end }}
+      {{- end }}
+      {{- if .Values.client.dfinit.enable }}
+      - name: restart-container-runtime
+        image: {{ template "client.initContainer.image" . }}
+        imagePullPolicy: {{ .Values.client.initContainer.image.pullPolicy }}
+        securityContext:
+          privileged: true
+        command:
+        - /bin/sh
+        - -cx
+        - |-
+          # dfinit creates the sentinel only when the runtime must be restarted. Remove it
+          # before restarting, the restart may kill this container and kubelet retries it.
+          sentinel=/var/run/dragonfly/dfinit/restart-required
+          [ -f "$sentinel" ] || exit 0
+          rm -f "$sentinel"
+          {{- range $runtime := list "containerd" "crio" "podman" "docker" }}
+          {{- if index $.Values.client.dfinit.config.containerRuntime $runtime }}
+          nsenter -t 1 -m -- systemctl restart {{ $runtime }}.service
+          {{- end }}
+          {{- end }}
+        resources:
+{{ toYaml .Values.client.initContainer.resources | indent 10 }}
+        volumeMounts:
+        - name: dfinit-run
+          mountPath: /var/run/dragonfly/dfinit
+      {{- end }}
+      {{- if .Values.client.extraInitContainers }}
+      {{- include "common.tplvalues.render" (dict "value" .Values.client.extraInitContainers "context" $) | nindent 6 }}
+      {{- end }}
+      containers:
+      - name: client
+        image: {{ template "client.image" . }}
+        imagePullPolicy: {{ .Values.client.image.pullPolicy | quote }}
+        args:
+        - --log-level={{ .Values.client.config.log.level }}
+        {{- if .Values.client.config.console }}
+        - --console
+        {{- end }}
+        resources:
+{{ toYaml .Values.client.resources | indent 10 }}
+        env:
+        {{- if .Values.client.maxProcs }}
+        - name: GOMAXPROCS
+          value: {{ .Values.client.maxProcs }}
+        {{- end }}
+        {{- if .Values.client.extraEnvVars }}
+        {{- include "common.tplvalues.render" (dict "value" .Values.client.extraEnvVars "context" $) | nindent 8 }}
+        {{- end }}
+        - name: POD_NAMESPACE
+          valueFrom:
+            fieldRef:
+              fieldPath: metadata.namespace
+        - name: POD_NAME
+          valueFrom:
+            fieldRef:
+              fieldPath: metadata.name
+        ports:
+        - containerPort: {{ .Values.client.config.upload.server.port }}
+          protocol: TCP
+        - containerPort: {{ .Values.client.config.health.server.port }}
+          protocol: TCP
+        - containerPort: {{ .Values.client.config.metrics.server.port }}
+          protocol: TCP
+        - containerPort: {{ .Values.client.config.stats.server.port }}
+          protocol: TCP
+        - containerPort: {{ .Values.client.config.storage.server.tcpPort }}
+          protocol: TCP
+        - containerPort: {{ .Values.client.config.storage.server.quicPort }}
+          protocol: UDP
+        {{- if .Values.startupProbe.enable }}
+        startupProbe:
+          exec:
+            command: ["/bin/grpc_health_probe", "-addr=unix://{{ .Values.client.config.download.server.socketPath }}", "-connect-timeout={{ .Values.startupProbe.timeoutSeconds }}s", "-rpc-timeout={{ .Values.startupProbe.timeoutSeconds }}s"]
+          initialDelaySeconds: {{ .Values.startupProbe.initialDelaySeconds }}
+          periodSeconds: {{ .Values.startupProbe.periodSeconds }}
+          timeoutSeconds: {{ .Values.startupProbe.timeoutSeconds }}
+          successThreshold: {{ .Values.startupProbe.successThreshold }}
+          failureThreshold: {{ .Values.startupProbe.failureThreshold }}
+        {{- end }}
+        readinessProbe:
+          exec:
+            command: ["/bin/grpc_health_probe", "-addr=unix://{{ .Values.client.config.download.server.socketPath }}", "-connect-timeout={{ .Values.readinessProbe.timeoutSeconds }}s", "-rpc-timeout={{ .Values.readinessProbe.timeoutSeconds }}s"]
+          initialDelaySeconds: {{ .Values.readinessProbe.initialDelaySeconds }}
+          periodSeconds: {{ .Values.readinessProbe.periodSeconds }}
+          timeoutSeconds: {{ .Values.readinessProbe.timeoutSeconds }}
+          successThreshold: {{ .Values.readinessProbe.successThreshold }}
+          failureThreshold: {{ .Values.readinessProbe.failureThreshold }}
+        livenessProbe:
+          exec:
+            command: ["/bin/grpc_health_probe", "-addr=unix://{{ .Values.client.config.download.server.socketPath }}", "-connect-timeout={{ .Values.livenessProbe.timeoutSeconds }}s", "-rpc-timeout={{ .Values.livenessProbe.timeoutSeconds }}s"]
+          initialDelaySeconds: {{ .Values.livenessProbe.initialDelaySeconds }}
+          periodSeconds: {{ .Values.livenessProbe.periodSeconds }}
+          timeoutSeconds: {{ .Values.livenessProbe.timeoutSeconds }}
+          successThreshold: {{ .Values.livenessProbe.successThreshold }}
+          failureThreshold: {{ .Values.livenessProbe.failureThreshold }}
+        volumeMounts:
+        - name: config
+          mountPath: "/etc/dragonfly"
+        - name: socket-dir
+          mountPath: /var/run/dragonfly
+        {{- if .Values.client.extraVolumeMounts }}
+        {{- toYaml .Values.client.extraVolumeMounts | nindent 8 }}
+        {{- end }}
+      volumes:
+      - name: config
+        configMap:
+          name: {{ template "dragonfly.client.fullname" . }}
+      - name: socket-dir
+        hostPath:
+          path: /var/run/dragonfly
+          type: DirectoryOrCreate
+      {{- if .Values.client.dfinit.enable }}
+      - name: dfinit-config
+        configMap:
+          name: {{ template "dragonfly.dfinit.fullname" . }}
+      - name: dfinit-run
+        emptyDir: {}
+      {{- end }}
+      {{- if and (.Values.client.dfinit.enable) (.Values.client.dfinit.config.containerRuntime.containerd) }}
+      - name: containerd-config-dir
+        hostPath:
+          path: {{ dir .Values.client.dfinit.config.containerRuntime.containerd.configPath }}
+          type: DirectoryOrCreate
+      {{- end }}
+      {{- if and (.Values.client.dfinit.enable) (.Values.client.dfinit.config.containerRuntime.crio) }}
+      - name: crio-config-dir
+        hostPath:
+          path: {{ dir .Values.client.dfinit.config.containerRuntime.crio.configPath }}
+          type: DirectoryOrCreate
+      {{- end }}
+      {{- if and (.Values.client.dfinit.enable) (.Values.client.dfinit.config.containerRuntime.podman) }}
+      - name: podman-config-dir
+        hostPath:
+          path: {{ dir .Values.client.dfinit.config.containerRuntime.podman.configPath }}
+          type: DirectoryOrCreate
+      {{- end }}
+      {{- if and (.Values.client.dfinit.enable) (.Values.client.dfinit.config.containerRuntime.docker) }}
+      - name: docker-config-dir
+        hostPath:
+          path: {{ dir .Values.client.dfinit.config.containerRuntime.docker.configPath }}
+          type: DirectoryOrCreate
+      {{- end }}
+      {{- if .Values.client.extraVolumes }}
+      {{- toYaml .Values.client.extraVolumes | nindent 6 }}
+      {{- end }}
+{{- end }}

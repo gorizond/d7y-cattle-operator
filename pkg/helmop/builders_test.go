@@ -105,8 +105,8 @@ func TestBuildersUseConfiguredChartVersion(t *testing.T) {
 }
 
 func TestVerifiedDragonflyChartVersion(t *testing.T) {
-	if VerifiedDragonflyChartVersion != "1.10.1" {
-		t.Errorf("VerifiedDragonflyChartVersion = %q, want 1.10.1", VerifiedDragonflyChartVersion)
+	if VerifiedDragonflyChartVersion != "1.10.1-patch.1" {
+		t.Errorf("VerifiedDragonflyChartVersion = %q, want 1.10.1-patch.1", VerifiedDragonflyChartVersion)
 	}
 }
 

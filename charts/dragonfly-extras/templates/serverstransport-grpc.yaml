@@ -1,0 +1,20 @@
+{{- $controller := .Values.ingress.controller | default "nginx" -}}
+{{- if and .Values.ingress.enabled .Values.ingress.grpc.enabled (eq $controller "traefik") .Values.ingress.traefik.serversTransport.enabled (.Capabilities.APIVersions.Has "traefik.io/v1alpha1") }}
+# Traefik re-encrypts to the manager gRPC backend with the P2P CA and a P2P
+# client certificate. The manager serves the P2P server cert, so verification
+# is strict (no insecureSkipVerify). rootCAs accepts the ca.crt key in the
+# Secret; certificatesSecrets uses tls.crt/tls.key.
+apiVersion: traefik.io/v1alpha1
+kind: ServersTransport
+metadata:
+  name: {{ .Release.Name }}-manager-grpc
+  namespace: {{ .Release.Namespace }}
+  labels:
+    {{- include "dragonfly-extras.labels" . | nindent 4 }}
+spec:
+  serverName: {{ .Values.ingress.grpc.host | quote }}
+  rootCAs:
+    - {{ .Values.ingress.mtlsSecret | quote }}
+  certificatesSecrets:
+    - {{ .Values.ingress.mtlsSecret | quote }}
+{{- end }}

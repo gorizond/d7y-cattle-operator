@@ -1,0 +1,32 @@
+{{- if .Values.seedClient.metrics.enable }}
+apiVersion: v1
+kind: Service
+metadata:
+  name: {{ template "dragonfly.seedClient.fullname" . }}-metrics
+  namespace: {{ include "common.names.namespace" . | quote }}
+  labels:
+    app: {{ template "dragonfly.name" . }}
+    release: {{ .Release.Name }}
+    heritage: {{ .Release.Service }}
+    component: {{ .Values.seedClient.name }}-metrics
+{{- if .Values.seedClient.metrics.service.labels }}
+{{ toYaml .Values.seedClient.metrics.service.labels | indent 4 }}
+{{- end }}
+{{- if .Values.seedClient.metrics.service.annotations }}
+  annotations:
+{{ toYaml .Values.seedClient.metrics.service.annotations | indent 4 }}
+{{- end }}
+spec:
+  type: {{ .Values.seedClient.metrics.service.type }}
+  ports:
+  - port: {{ .Values.seedClient.config.metrics.server.port }}
+    name: http-metrics
+    {{- if semverCompare ">=1.20" .Capabilities.KubeVersion.Version }}
+    appProtocol: http
+    {{- end }}
+    protocol: TCP
+    targetPort: {{ .Values.seedClient.config.metrics.server.port }}
+  selector:
+    app: {{ template "dragonfly.fullname" . }}
+    component: {{ .Values.seedClient.name }}
+{{- end }}

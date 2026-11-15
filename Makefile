@@ -32,3 +32,4 @@ helm-template:
 
 chart-test:
 	bash scripts/test-extras-ingress.sh
+	bash scripts/test-dragonfly-tls.sh
