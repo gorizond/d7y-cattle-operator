@@ -21,9 +21,12 @@ const (
 	// the manager through the edge.
 	ManagerGRPCEdgePort = 443
 	ManagerRESTPort     = 8080
-	// SchedulerPort is the scheduler gRPC port exposed by both the headless
-	// peer Service and the non-headless client Service.
+	// SchedulerPort is the scheduler gRPC container port exposed by the
+	// headless peer Service behind the public Traefik front.
 	SchedulerPort = 8002
+	// SchedulerPublicPort is the public Traefik websecure port used by
+	// bootstrap clients and DaemonSets.
+	SchedulerPublicPort = 443
 
 	// CertDir is where the mTLS Secret is mounted in Dragonfly pods.
 	CertDir = "/etc/dragonfly/certs"
@@ -70,9 +73,9 @@ type Cluster struct {
 	// SchedulerPublicIP is the currently resolved public scheduler address
 	// used as the scheduler advertiseIP and the external-dns target.
 	SchedulerPublicIP string
-	// SchedulerServiceIP is pinned as the scheduler client Service ClusterIP
-	// and as a P2P certificate SAN.
-	SchedulerServiceIP string
+	// SchedulerHost is the per-cluster public scheduler host used by local
+	// dynconfig (DaemonSets) and bootstrap clients.
+	SchedulerHost string
 	// MTLSCertRevision changes only when the P2P leaf certificate changes; it
 	// is stamped on pod templates to trigger a controlled rollout.
 	MTLSCertRevision string
@@ -111,13 +114,6 @@ func ManagerServiceName(cluster string) string { return objectName(cluster, "man
 // by the control release.
 func SchedulerServiceName(cluster string) string {
 	return objectName(cluster, "control-scheduler")
-}
-
-// SchedulerClientServiceName returns the non-headless ClusterIP Service used by
-// DaemonSets and the public Traefik front. Its clusterIP is pinned through the
-// SchedulerServiceIP value so the P2P certificate can include it as a SAN.
-func SchedulerClientServiceName(cluster string) string {
-	return SchedulerServiceName(cluster) + "-client"
 }
 
 const (

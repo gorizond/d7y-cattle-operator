@@ -47,11 +47,10 @@ ingress:
   # CA-only Secret (key tls.ca) used by the Traefik TLSOption clientAuth.
   mtlsCASecret: dragonfly-p2p-mtls-ca
 
-# Scheduler client front owned by this chart so the Dragonfly fork chart keeps
-# its upstream-shaped headless scheduler Service. The non-headless ClusterIP
-# Service provides a stable address for DaemonSets and the public Traefik TCP
-# route. TLS is passed through end-to-end; Traefik never terminates it and no
-# LE certificate is used.
+# Public scheduler front owned by this chart. The backend is the Dragonfly fork
+# chart's headless scheduler Service. DaemonSets and bootstrap clients use the
+# same public host. TLS is passed through end-to-end; Traefik never terminates
+# it and no LE certificate is used.
 scheduler:
   enabled: false
   # Fleet cluster ID and base domain build d7y-scheduler.<cluster-id>.<domain>.
@@ -65,16 +64,9 @@ scheduler:
   # that dial the public IP and send no SNI. Set an explicit host or IP when
   # the entry point is shared with other TCP passthrough routes.
   hostSNI: "*"
-  clientService:
-    # Name of the non-headless Service; the IngressRouteTCP uses it as backend.
-    name: ""
-    # Pin the ClusterIP. Empty lets Kubernetes allocate one; the operator pins
-    # it so the P2P certificate can include the address as an IP SAN.
-    clusterIP: ""
-    port: 8002
-    targetPort: 8002
-    # Selector for the scheduler pods created by the control release.
-    selector: {}
+  # Headless scheduler Service created by the fork chart control release.
+  service: ""
+  port: 8002
 
 # VerticalPodAutoscalers in recommendation-only mode. Rendered only when the
 # autoscaling.k8s.io/v1 CRD is installed and vpa.enabled is true.

@@ -97,7 +97,6 @@ func run() error {
 		ManagerAPIHost:              apiHost,
 		ManagerAPIURL:               cfg.ManagerAPIURL,
 		ManagerAPICredentialsSecret: cfg.ManagerAPICredentialsSecret,
-		SchedulerServiceIP:          cfg.SchedulerServiceIP,
 		P2PDomain:                   cfg.P2PDomain,
 		ClusterIDFallback:           cfg.ClusterIDFallback,
 		Resolver:                    cluster.NetResolver{},
@@ -135,6 +134,8 @@ func run() error {
 		MTLSSecretName:    cfg.MTLSSecretName,
 		ManagerGRPCDomain: cfg.ManagerGRPCDomain,
 		StaticURL:         cfg.NginxStaticURL,
+		SchedulerDomain:   cfg.P2PDomain,
+		ClusterIDFallback: cfg.ClusterIDFallback,
 	}
 	certLoader, err := webhook.NewCertLoader(cfg.WebhookCertDir, cfg.WebhookServiceName, cfg.Namespace)
 	if err != nil {

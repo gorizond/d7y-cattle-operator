@@ -36,11 +36,9 @@ type Options struct {
 	// ManagerAPIURL is the public REST API URL; its hostname becomes a SAN.
 	ManagerAPIURL string
 	// SchedulerPublicIPs are the IPs resolved from the per-cluster scheduler
-	// host. They are public Traefik LB addresses used by bootstrap clients.
+	// host. They are public Traefik LB addresses used by bootstrap clients and
+	// DaemonSets.
 	SchedulerPublicIPs []string
-	// SchedulerServiceIP is the pinned in-cluster ClusterIP of the scheduler
-	// client Service used by DaemonSets.
-	SchedulerServiceIP string
 }
 
 // Bundle holds PEM-encoded mTLS material. The CA private key is intentionally
@@ -65,7 +63,7 @@ func Generate(opts Options) (*Bundle, error) {
 		return nil, fmt.Errorf("pki: invalid manager API URL %q", opts.ManagerAPIURL)
 	}
 
-	ips, err := schedulerIPs(opts.SchedulerPublicIPs, opts.SchedulerServiceIP)
+	ips, err := schedulerIPs(opts.SchedulerPublicIPs)
 	if err != nil {
 		return nil, err
 	}
@@ -204,12 +202,12 @@ func leafDNSNames(grpcDomain, apiHost string) []string {
 	return names
 }
 
-// schedulerIPs returns the loopback addresses plus the configured scheduler
-// identities. Only the public LB IP and the internal ClusterIP are included:
-// node IPs are deliberately never part of the P2P certificate.
-func schedulerIPs(publicIPs []string, serviceIP string) ([]net.IP, error) {
+// schedulerIPs returns the loopback addresses plus the DNS-resolved public
+// scheduler IPs. Node IPs and internal ClusterIPs are deliberately never part
+// of the P2P certificate.
+func schedulerIPs(publicIPs []string) ([]net.IP, error) {
 	ips := []net.IP{net.IPv4(127, 0, 0, 1), net.IPv6loopback}
-	for _, raw := range append(append([]string(nil), publicIPs...), serviceIP) {
+	for _, raw := range publicIPs {
 		if raw == "" {
 			continue
 		}

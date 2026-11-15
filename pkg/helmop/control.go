@@ -30,10 +30,11 @@ func Control(c Cluster) *fleetv1alpha1.HelmOp {
 				},
 				"server": map[string]any{
 					"tls": tlsPaths(),
-					// Bootstrap nodes receive this address from the manager
-					// dynconfig; DaemonSets use their local dynconfig and the
-					// internal ClusterIP instead.
-					"advertiseIP": c.SchedulerPublicIP,
+					// Bootstrap nodes receive the public Traefik address from
+					// the manager dynconfig; DaemonSets use their local
+					// dynconfig and the same public host.
+					"advertiseIP":   c.SchedulerPublicIP,
+					"advertisePort": SchedulerPublicPort,
 				},
 				"seedPeer": map[string]any{"tls": tlsPaths()},
 			},

@@ -14,10 +14,10 @@ import (
 // schedulers and other peers; with hostNetwork they are bound on the node.
 // The Dragonfly chart has no separate advertise fields for dfdaemon.
 func Data(c Cluster) *fleetv1alpha1.HelmOp {
-	// DaemonSets on the cluster resolve the stable ClusterIP Service, not the
-	// headless peer Service: the P2P client verifies the resolved scheduler IP
-	// against an IP SAN, and only the pinned ClusterIP is in the certificate.
-	schedulerAddr := fmt.Sprintf("%s.%s.svc:%d", SchedulerClientServiceName(c.Name), TargetNamespace, SchedulerPort)
+	// DaemonSets use the same public scheduler front as bootstrap clients:
+	// the P2P client resolves this host to the public LB IP that is in the
+	// certificate SAN set, and Traefik passes TLS through to the scheduler.
+	schedulerAddr := fmt.Sprintf("%s:%d", c.SchedulerHost, SchedulerPublicPort)
 	seedClient := map[string]any{
 		"enable":      true,
 		"hostNetwork": true,

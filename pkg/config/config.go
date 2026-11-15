@@ -5,7 +5,6 @@ import (
 	"errors"
 	"flag"
 	"fmt"
-	"net"
 	"net/url"
 	"os"
 	"regexp"
@@ -45,7 +44,6 @@ type Config struct {
 	ManagerGRPCDomain           string
 	ManagerGRPCPort             int
 	ManagerAPIURL               string
-	SchedulerServiceIP          string
 	P2PDomain                   string
 	ClusterIDFallback           string
 	NginxStaticURL              string
@@ -105,7 +103,6 @@ func Load(args []string) (*Config, error) {
 	fs.StringVar(&cfg.ManagerGRPCDomain, "manager-grpc-domain", envOr("MANAGER_GRPC_DOMAIN", ""), "public hostname of the manager gRPC endpoint (no scheme)")
 	fs.IntVar(&cfg.ManagerGRPCPort, "manager-grpc-port", defaultManagerGRPCPort, "public port of the manager gRPC endpoint")
 	fs.StringVar(&cfg.ManagerAPIURL, "manager-api-url", envOr("MANAGER_API_URL", ""), "public HTTPS URL of the manager REST API")
-	fs.StringVar(&cfg.SchedulerServiceIP, "p2p-scheduler-service-ip", envOr("P2P_SCHEDULER_SERVICE_IP", ""), "pinned internal ClusterIP of the scheduler client Service and the P2P leaf SAN")
 	fs.StringVar(&cfg.P2PDomain, "p2p-domain", envOr("P2P_DOMAIN", ""), "base domain for the per-cluster scheduler alias d7y-scheduler.<cluster>.<domain>")
 	fs.StringVar(&cfg.ClusterIDFallback, "p2p-cluster-id", envOr("P2P_CLUSTER_ID", ""), "fallback cluster ID when provisioning Cluster status.clusterName is empty")
 	fs.StringVar(&cfg.NginxStaticURL, "nginx-static-url", envOr("NGINX_STATIC_URL", ""), "base URL of the static asset server (http or https)")
@@ -156,11 +153,6 @@ func (c *Config) Validate() error {
 		add("--manager-api-url is required")
 	} else if err := validateURL(c.ManagerAPIURL, "https"); err != nil {
 		add("--manager-api-url: %v", err)
-	}
-	if c.SchedulerServiceIP != "" {
-		if err := validateIP(c.SchedulerServiceIP); err != nil {
-			add("--p2p-scheduler-service-ip: %v", err)
-		}
 	}
 	if c.P2PDomain == "" {
 		add("--p2p-domain is required")
@@ -263,17 +255,6 @@ func validateHost(host string) error {
 	}
 	if strings.Contains(host, ":") {
 		return errors.New("must not include a port")
-	}
-	return nil
-}
-
-func validateIP(raw string) error {
-	ip := net.ParseIP(raw)
-	if ip == nil {
-		return fmt.Errorf("%q is not an IP address", raw)
-	}
-	if ip.IsUnspecified() {
-		return fmt.Errorf("%q is not a usable unicast address", raw)
 	}
 	return nil
 }

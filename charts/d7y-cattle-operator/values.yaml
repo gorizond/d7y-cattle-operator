@@ -39,9 +39,6 @@ nginx:
 # pinned as the non-headless scheduler client Service ClusterIP. The resolved
 # public IP(s), the service IP, and manager DNS names are the P2P leaf SANs.
 scheduler:
-  # Required for the seed role: the pinned internal scheduler client Service
-  # ClusterIP (also a P2P leaf IP SAN). No default is hardcoded.
-  serviceIP: ""
   # Optional fallback when provisioning Cluster status.clusterName is empty.
   # Leave empty to always require status.clusterName.
   clusterID: ""

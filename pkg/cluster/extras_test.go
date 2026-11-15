@@ -3,6 +3,8 @@ package cluster
 import (
 	"strings"
 	"testing"
+
+	"github.com/gorizond/d7y-cattle-operator/pkg/helmop"
 )
 
 func TestReconcileManagerExtrasIngress(t *testing.T) {
@@ -113,17 +115,11 @@ func TestReconcileSeedOnlyExtrasVPA(t *testing.T) {
 	if got := valueAtPath(t, values, "scheduler", "clusterID"); got != "c-m-test" {
 		t.Errorf("seed-only scheduler clusterID = %v", got)
 	}
-	if got := valueAtPath(t, values, "scheduler", "clientService", "name"); got != "c1-control-scheduler-client" {
-		t.Errorf("seed-only scheduler clientService.name = %v", got)
+	if got := valueAtPath(t, values, "scheduler", "service"); got != "c1-control-scheduler" {
+		t.Errorf("seed-only scheduler service = %v", got)
 	}
-	if got := valueAtPath(t, values, "scheduler", "clientService", "clusterIP"); got != "10.43.0.230" {
-		t.Errorf("seed-only scheduler clusterIP = %v", got)
-	}
-	if got := valueAtPath(t, values, "scheduler", "clientService", "selector", "app"); got != "c1-control" {
-		t.Errorf("seed-only scheduler selector.app = %v", got)
-	}
-	if got := valueAtPath(t, values, "scheduler", "clientService", "selector", "component"); got != "scheduler" {
-		t.Errorf("seed-only scheduler selector.component = %v", got)
+	if got := valueAtPath(t, values, "scheduler", "port"); got != int64(helmop.SchedulerPort) {
+		t.Errorf("seed-only scheduler port = %v", got)
 	}
 	for component, want := range map[string]bool{
 		"keydb": true, "manager": false, "control": true, "data": true, "nydus": true,

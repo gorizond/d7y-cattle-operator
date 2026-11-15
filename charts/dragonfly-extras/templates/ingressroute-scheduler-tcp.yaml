@@ -4,7 +4,7 @@
 {{- if and $scheduler.clusterID $scheduler.domain -}}
 {{- $host = printf "d7y-scheduler.%s.%s" $scheduler.clusterID $scheduler.domain -}}
 {{- end -}}
-{{- if and $scheduler.enabled $scheduler.clientService.name (eq $controller "traefik") (.Capabilities.APIVersions.Has "traefik.io/v1alpha1") }}
+{{- if and $scheduler.enabled $scheduler.service (eq $controller "traefik") (.Capabilities.APIVersions.Has "traefik.io/v1alpha1") }}
 # Public scheduler front: TCP TLS passthrough on websecure. The scheduler
 # terminates mTLS itself, so Traefik must not attach a certificate, a
 # TLSOption, or a ServersTransport here. Public IP clients have no SNI; the
@@ -36,8 +36,8 @@ spec:
   routes:
     - match: {{ printf "HostSNI(`%s`)" ($scheduler.hostSNI | default "*") | quote }}
       services:
-        - name: {{ $scheduler.clientService.name | quote }}
-          port: {{ $scheduler.clientService.port | default 8002 }}
+        - name: {{ $scheduler.service | quote }}
+          port: {{ $scheduler.port | default 8002 }}
   tls:
     passthrough: true
 {{- end }}

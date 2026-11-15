@@ -162,7 +162,6 @@ func newTestController(t *testing.T) (*Controller, *fakeHelmOpStore, *fakeEventS
 			ManagerGRPCPort:          443,
 			ManagerAPIHost:           "api.example.com",
 			ManagerAPIURL:            "https://manager-api.example.com",
-			SchedulerServiceIP:       "10.43.0.230",
 			P2PDomain:                "example.com",
 			Resolver:                 &fakeResolver{ips: []string{"203.0.113.10"}},
 			DragonflyChart:           helmop.Chart{Repo: "https://charts.example.com", Name: "dragonfly", Version: "1.10.1-patch.2"},
@@ -331,8 +330,8 @@ func TestHelmopClusterCarriesSchedulerIdentityAndCertRevision(t *testing.T) {
 	cluster := testSeedCluster("42")
 
 	first := controller.helmopCluster(cluster)
-	if first.SchedulerServiceIP != "10.43.0.230" {
-		t.Errorf("SchedulerServiceIP = %q", first.SchedulerServiceIP)
+	if first.SchedulerHost != "" {
+		t.Errorf("SchedulerHost = %q, want empty until the certify path runs", first.SchedulerHost)
 	}
 	if first.MTLSCertRevision == "" {
 		t.Fatal("MTLSCertRevision is empty")

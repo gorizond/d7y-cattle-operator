@@ -44,7 +44,6 @@ type Options struct {
 	ManagerAPIHost              string
 	ManagerAPIURL               string
 	ManagerAPICredentialsSecret string
-	SchedulerServiceIP          string
 	P2PDomain                   string
 	ClusterIDFallback           string
 	Resolver                    Resolver
@@ -141,6 +140,7 @@ func (c *Controller) reconcile(key string, cluster *provv1.Cluster) (result *pro
 			// currently resolved public address for advertiseIP/dynconfig.
 			hc = c.helmopCluster(cluster)
 			hc.SchedulerPublicIP = publicIP
+			hc.SchedulerHost = schedulerHost(c.opts.P2PDomain, c.clusterID(cluster))
 		}
 	}
 	if roles.Manager || roles.Seed {
@@ -235,9 +235,7 @@ func (c *Controller) reconcile(key string, cluster *provv1.Cluster) (result *pro
 		SchedulerPublicIP:              hc.SchedulerPublicIP,
 		SchedulerDomain:                c.opts.P2PDomain,
 		SchedulerClusterID:             c.clusterID(cluster),
-		SchedulerServiceName:           helmop.SchedulerClientServiceName(cluster.Name),
-		SchedulerServiceIP:             c.opts.SchedulerServiceIP,
-		SchedulerSelectorApp:           helmop.ControlName(cluster.Name),
+		SchedulerService:               helmop.SchedulerServiceName(cluster.Name),
 		SchedulerPort:                  helmop.SchedulerPort,
 	})); err != nil {
 		errs = append(errs, err)
@@ -316,7 +314,6 @@ func (c *Controller) helmopCluster(cluster *provv1.Cluster) helmop.Cluster {
 		SchedulerClusterID: schedulerClusterID(cluster),
 		SchedulerReplicas:  helmop.ReplicasOrOne(AnnotationSchedulerReplicas, cluster.Annotations[AnnotationSchedulerReplicas]),
 		SeedClientReplicas: helmop.ReplicasOrOne(AnnotationSeedClientReplicas, cluster.Annotations[AnnotationSeedClientReplicas]),
-		SchedulerServiceIP: c.opts.SchedulerServiceIP,
 		Labels:             apply.Labels(cluster.Namespace, cluster.Name),
 	}
 	// The extras chart renders the CA-only Secret from this PEM. Readiness and
@@ -362,7 +359,7 @@ func schedulerHost(domain, clusterID string) string {
 
 // ensureMTLSCertificate creates or updates the operator P2P Secret from the
 // scheduler host resolved at reconcile time. Seed clusters own the full SAN set:
-// resolved public IPs + internal ClusterIP + manager DNS. A DNS failure leaves
+// resolved public IPs + manager DNS. A DNS failure leaves
 // the existing certificate untouched and returns an error so the reconcile is
 // retried. Manager-only clusters only bootstrap a missing Secret and never
 // rewrite an existing one (a seed reconcile owns the public IP set).
@@ -396,11 +393,6 @@ func (c *Controller) ensureMTLSCertificate(cluster *provv1.Cluster, roles Roles)
 		}
 		return "", c.bootstrapMTLSSecret(cluster)
 	}
-	if c.opts.SchedulerServiceIP == "" {
-		err := fmt.Errorf("--p2p-scheduler-service-ip is required for the seed role")
-		c.event(cluster, corev1.EventTypeWarning, "SchedulerServiceIPMissing", err.Error())
-		return "", err
-	}
 
 	ctx, cancel := context.WithTimeout(c.ctx, 10*time.Second)
 	defer cancel()
@@ -426,7 +418,6 @@ func (c *Controller) ensureMTLSCertificate(cluster *provv1.Cluster, roles Roles)
 		ManagerGRPCDomain:  c.opts.ManagerGRPCDomain,
 		ManagerAPIURL:      c.opts.ManagerAPIURL,
 		SchedulerPublicIPs: publicIPs,
-		SchedulerServiceIP: c.opts.SchedulerServiceIP,
 	})
 	if err != nil {
 		c.event(cluster, corev1.EventTypeWarning, "MTLSSecretUnavailable", err.Error())
@@ -454,9 +445,8 @@ func (c *Controller) ensureMTLSCertificate(cluster *provv1.Cluster, roles Roles)
 // Secret, so it cannot strip public IP SANs.
 func (c *Controller) bootstrapMTLSSecret(cluster *provv1.Cluster) error {
 	bundle, err := pki.Generate(pki.Options{
-		ManagerGRPCDomain:  c.opts.ManagerGRPCDomain,
-		ManagerAPIURL:      c.opts.ManagerAPIURL,
-		SchedulerServiceIP: c.opts.SchedulerServiceIP,
+		ManagerGRPCDomain: c.opts.ManagerGRPCDomain,
+		ManagerAPIURL:     c.opts.ManagerAPIURL,
 	})
 	if err != nil {
 		c.event(cluster, corev1.EventTypeWarning, "MTLSSecretUnavailable", err.Error())
@@ -498,7 +488,10 @@ func existingPublicIPs(secret *corev1.Secret) []string {
 	}
 	ips := make([]string, 0, len(certs[0].IPAddresses))
 	for _, ip := range certs[0].IPAddresses {
-		if ip.IsLoopback() {
+		// Keep previously resolved public addresses through DNS/IP rotation,
+		// but never retain loopback, link-local, private, or internal
+		// ClusterIP SANs.
+		if ip.IsLoopback() || ip.IsPrivate() || ip.IsLinkLocalUnicast() || ip.IsUnspecified() {
 			continue
 		}
 		ips = append(ips, ip.String())

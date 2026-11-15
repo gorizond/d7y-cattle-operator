@@ -39,7 +39,7 @@ func TestDataHelmOp(t *testing.T) {
 	if got := valueAt(t, seedClient, "replicas"); got != testCluster().SeedClientReplicas {
 		t.Errorf("seedClient.replicas = %v", got)
 	}
-	if got := valueAt(t, seedClient, "dynconfig", "scheduler", "addr"); got != "c1-control-scheduler-client.dragonfly-system.svc:8002" {
+	if got := valueAt(t, seedClient, "dynconfig", "scheduler", "addr"); got != "d7y-scheduler.c-m-test.example.com:443" {
 		t.Errorf("seedClient dynconfig addr = %v", got)
 	}
 	if got := valueAt(t, seedClient, "podAnnotations", certRevisionAnnotation); got != "rev1" {
@@ -183,6 +183,9 @@ func TestControlHelmOp(t *testing.T) {
 	}
 	if got := valueAt(t, values, "scheduler", "config", "server", "advertiseIP"); got != "203.0.113.10" {
 		t.Errorf("scheduler advertiseIP = %v, want public LB IP", got)
+	}
+	if got := valueAt(t, values, "scheduler", "config", "server", "advertisePort"); got != SchedulerPublicPort {
+		t.Errorf("scheduler advertisePort = %v, want %d", got, SchedulerPublicPort)
 	}
 	if got := valueAt(t, values, "scheduler", "podAnnotations", certRevisionAnnotation); got != "rev1" {
 		t.Errorf("scheduler podAnnotations revision = %v", got)

@@ -19,10 +19,9 @@ import (
 var _ SecretStore = (wranglercorev1.SecretController)(nil)
 
 const (
-	testGRPCDomain         = "manager-grpc.example.com"
-	testAPIURL             = "https://manager-api.example.com"
-	testSchedulerPublicIP  = "203.0.113.10"
-	testSchedulerServiceIP = "10.43.0.230"
+	testGRPCDomain        = "manager-grpc.example.com"
+	testAPIURL            = "https://manager-api.example.com"
+	testSchedulerPublicIP = "203.0.113.10"
 )
 
 func testBundle(t *testing.T) *Bundle {
@@ -31,7 +30,6 @@ func testBundle(t *testing.T) *Bundle {
 		ManagerGRPCDomain:  testGRPCDomain,
 		ManagerAPIURL:      testAPIURL,
 		SchedulerPublicIPs: []string{testSchedulerPublicIP},
-		SchedulerServiceIP: testSchedulerServiceIP,
 	})
 	if err != nil {
 		t.Fatalf("Generate() error = %v", err)
@@ -106,7 +104,7 @@ func TestGenerate(t *testing.T) {
 			t.Errorf("leaf SANs %v do not contain %q", leaf.DNSNames, name)
 		}
 	}
-	for _, want := range []string{testSchedulerPublicIP, testSchedulerServiceIP, "127.0.0.1", "::1"} {
+	for _, want := range []string{testSchedulerPublicIP, "127.0.0.1", "::1"} {
 		if !hasIP(leaf.IPAddresses, want) {
 			t.Errorf("leaf IP SANs %v do not contain %q", leaf.IPAddresses, want)
 		}
@@ -143,11 +141,6 @@ func TestGenerateRejectsInvalidOptions(t *testing.T) {
 			ManagerGRPCDomain:  testGRPCDomain,
 			ManagerAPIURL:      testAPIURL,
 			SchedulerPublicIPs: []string{"not-an-ip"},
-		},
-		"invalid service IP": {
-			ManagerGRPCDomain:  testGRPCDomain,
-			ManagerAPIURL:      testAPIURL,
-			SchedulerServiceIP: "10.43.0.999",
 		},
 	}
 	for name, opts := range tests {
@@ -268,7 +261,6 @@ func TestEnsureSecretRotatesWhenSANsChange(t *testing.T) {
 		ManagerGRPCDomain:  testGRPCDomain,
 		ManagerAPIURL:      testAPIURL,
 		SchedulerPublicIPs: []string{"203.0.113.11"},
-		SchedulerServiceIP: testSchedulerServiceIP,
 	})
 	if err != nil {
 		t.Fatalf("Generate(rotated) error = %v", err)

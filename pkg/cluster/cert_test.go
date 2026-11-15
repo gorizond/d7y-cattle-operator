@@ -53,10 +53,8 @@ func TestEnsureMTLSCertificateResolvesHostAndSANs(t *testing.T) {
 		t.Fatalf("parse certificate: %v", err)
 	}
 	leaf := certs[0]
-	for _, want := range []string{"203.0.113.10", "10.43.0.230"} {
-		if !certHasIP(leaf.IPAddresses, want) {
-			t.Errorf("leaf IP SANs %v do not contain %q", leaf.IPAddresses, want)
-		}
+	if !certHasIP(leaf.IPAddresses, "203.0.113.10") {
+		t.Errorf("leaf IP SANs %v do not contain the resolved public IP", leaf.IPAddresses)
 	}
 	for _, want := range []string{"grpc.example.com", "manager-api.example.com"} {
 		if !containsString(leaf.DNSNames, want) {
@@ -242,27 +240,10 @@ func TestManagerOnlyBootstrapsMissingCertificate(t *testing.T) {
 	if !containsString(leaf.DNSNames, "grpc.example.com") {
 		t.Errorf("bootstrap leaf DNS SANs = %v", leaf.DNSNames)
 	}
-	if !certHasIP(leaf.IPAddresses, "10.43.0.230") {
-		t.Errorf("bootstrap leaf IP SANs = %v, want service IP", leaf.IPAddresses)
+	if len(leaf.IPAddresses) != 2 {
+		t.Errorf("bootstrap leaf IP SANs = %v, want only loopbacks", leaf.IPAddresses)
 	}
 	if certHasIP(leaf.IPAddresses, "203.0.113.10") {
 		t.Error("manager-only bootstrap unexpectedly added a public IP")
-	}
-}
-
-func TestEnsureMTLSCertificateRequiresServiceIP(t *testing.T) {
-	controller, _, events := newTestController(t)
-	controller.opts.SchedulerServiceIP = ""
-	cluster := testSeedCluster("42")
-	before := certPEM(t, controller)
-
-	if _, err := controller.reconcile("", cluster); err == nil {
-		t.Fatal("reconcile() error = nil, want missing service IP error")
-	}
-	if got := certPEM(t, controller); string(got) != string(before) {
-		t.Error("certificate changed after a missing service IP")
-	}
-	if !hasEventReason(events.events, "SchedulerServiceIPMissing") {
-		t.Errorf("events = %+v, want SchedulerServiceIPMissing", events.events)
 	}
 }

@@ -17,9 +17,7 @@ func TestExtrasHelmOp(t *testing.T) {
 		SchedulerPublicIP:              "203.0.113.10",
 		SchedulerDomain:                "example.com",
 		SchedulerClusterID:             "c-m-test",
-		SchedulerServiceName:           "c1-control-scheduler-client",
-		SchedulerServiceIP:             "10.43.0.230",
-		SchedulerSelectorApp:           "c1-control",
+		SchedulerService:               "c1-control-scheduler",
 		SchedulerPort:                  SchedulerPort,
 	})
 
@@ -115,17 +113,11 @@ func TestExtrasHelmOp(t *testing.T) {
 	if got := valueAt(t, values, "scheduler", "clusterID"); got != "c-m-test" {
 		t.Errorf("scheduler.clusterID = %v", got)
 	}
-	if got := valueAt(t, values, "scheduler", "clientService", "name"); got != "c1-control-scheduler-client" {
-		t.Errorf("scheduler.clientService.name = %v", got)
+	if got := valueAt(t, values, "scheduler", "service"); got != "c1-control-scheduler" {
+		t.Errorf("scheduler.service = %v", got)
 	}
-	if got := valueAt(t, values, "scheduler", "clientService", "clusterIP"); got != "10.43.0.230" {
-		t.Errorf("scheduler.clientService.clusterIP = %v", got)
-	}
-	if got := valueAt(t, values, "scheduler", "clientService", "selector", "app"); got != "c1-control" {
-		t.Errorf("scheduler.clientService.selector.app = %v", got)
-	}
-	if got := valueAt(t, values, "scheduler", "clientService", "selector", "component"); got != "scheduler" {
-		t.Errorf("scheduler.clientService.selector.component = %v", got)
+	if got := valueAt(t, values, "scheduler", "port"); got != SchedulerPort {
+		t.Errorf("scheduler.port = %v", got)
 	}
 
 	if got := valueAt(t, values, "vpa", "enabled"); got != true {
