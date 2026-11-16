@@ -563,8 +563,8 @@ that predates those fields would affect REST only.
 Nydus runs only on the host, installed by `p2p-install.sh`; the operator no
 longer creates a nydus chart, DaemonSet, HelmOp, RuntimeClass, or VPA. The
 script installs pinned `v0.16.0` binaries (including `nydus-overlayfs`), writes
-`/etc/nydus/config.toml` (multiple/fusedev, `enable_referrer_detect`/
-`enable_index_detect`, no tarfs), the registry-backend
+`/etc/nydus/config.toml` (multiple/fusedev, `[experimental]`
+`enable_referrer_detect`/`enable_index_detect`, no tarfs), the registry-backend
 `nydusd-config.json`, and the global containerd drop-in. It starts the host unit
 before RKE2 and runs a daily updater for the binaries. Do not add
 `enable_oci_tar` (it is not a nydus field). Pilot must verify the drop-in merge

@@ -290,9 +290,6 @@ version = 1
 root = "/var/lib/containerd-nydus"
 address = "/run/containerd-nydus/containerd-nydus-grpc.sock"
 daemon_mode = "multiple"
-# Snapshotter-level image auto-detection options (not nydusd JSON options).
-enable_referrer_detect = true
-enable_index_detect = true
 
 [daemon]
   nydusd_config = "/etc/nydus/nydusd-config.json"
@@ -300,6 +297,12 @@ enable_index_detect = true
   nydusimage_path = "/usr/local/bin/nydus-image"
   fs_driver = "fusedev"
   recover_policy = "failover"
+
+# Experimental image auto-detection. These are nydus-snapshotter config.toml
+# options under [experimental], not nydusd JSON fields; tarfs stays disabled.
+[experimental]
+  enable_referrer_detect = true
+  enable_index_detect = true
 TOML
 
 write_file "${ROOT}${NYDUS_DIR}/nydusd-config.json" 0644 <<'JSON'

@@ -64,11 +64,11 @@ deployed, and workloads do not need `runtimeClass: nydus`.
 - The host unit starts before `rke2-server.service`/`rke2-agent.service`
   (`Before=`) and uses
   `containerd-nydus-grpc --config /etc/nydus/config.toml --nydusd /usr/local/bin/nydusd --nydusd-config /etc/nydus/nydusd-config.json`.
-- `/etc/nydus/config.toml` uses `daemon_mode = "multiple"`,
-  `fs_driver = "fusedev"`, and the snapshotter-level auto-detection options
+- `/etc/nydus/config.toml` uses `daemon_mode = "multiple"` and
+  `fs_driver = "fusedev"`. Under `[experimental]` it sets
   `enable_referrer_detect = true` and `enable_index_detect = true`; tarfs is
-  not enabled. These two flags are nydus-snapshotter options (top-level
-  `config.toml`), not nydusd JSON fields.
+  not enabled. These are nydus-snapshotter `config.toml` options (in the
+  `[experimental]` table), not nydusd JSON fields.
 - `/etc/nydus/nydusd-config.json` uses the `registry` backend with the
   object-form proxy at `http://127.0.0.1:4001` and `fallback: true`.
 
