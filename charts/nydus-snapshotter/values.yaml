@@ -1,0 +1,68 @@
+# snapshotterMode selects how containerd uses the nydus snapshotter:
+#   perRuntime (default) - workloads opt in with runtimeClass: nydus; the
+#                          node default snapshotter stays overlayfs.
+#   global               - every CRI workload on the node uses nydus.
+# Any other value fails the chart template.
+snapshotterMode: perRuntime
+
+image:
+  # Multi-arch containerd 2.x compatible image. The upstream 0.0.10 chart
+  # targets containerd 1.x and is not usable here.
+  repository: ghcr.io/containerd/nydus-snapshotter
+  tag: v0.16.0
+  pullPolicy: IfNotPresent
+
+# initContainer image. Its busybox provides nsenter for host unit changes.
+initImage: busybox:1.36
+
+# Node containerd socket (RKE2 path) used by the snapshotter content API.
+hostSocket: /run/k3s/containerd/containerd.sock
+
+containerd:
+  # Write the drop-in to the host. Set false when another mechanism owns the
+  # containerd config.
+  manage: true
+  # RKE2 containerd config directory on the host.
+  configDir: /var/lib/rancher/rke2/agent/etc/containerd
+  # RKE2 containerd state directory (content store) on the host.
+  stateDir: /var/lib/rancher/rke2/agent/containerd
+  # Directory imported by config-v3.toml.tmpl.
+  dropInDir: /var/lib/rancher/rke2/agent/etc/containerd/config-v3.toml.d
+  dropInFile: 90-nydus.toml
+
+  # The DaemonSet never restarts RKE2. After a drop-in/config change, restart
+  # rke2-agent (agents) or rke2-server (servers) manually to apply it. New VMs
+  # get the configuration before RKE2 starts from p2p-install.sh, so cold start
+  # needs no in-cluster restart.
+
+runtimeClass:
+  # RuntimeClass is only rendered in perRuntime mode: global mode uses the
+  # node default runtime, so handler "nydus" does not exist.
+  create: true
+  name: nydus
+
+snapshotter:
+  # Raw /etc/nydus/config.toml override. Empty renders the default below.
+  config: ""
+  root: /var/lib/containerd/io.containerd.snapshotter.v1.nydus
+  socketDir: /run/containerd-nydus
+  socket: containerd-nydus-grpc.sock
+
+nydusd:
+  # Raw /etc/nydus/nydusd-config.json override. Empty renders the default.
+  config: ""
+  cacheDir: /var/lib/nydus
+  # Local dfdaemon/Dragonfly proxy used for P2P blob fetches.
+  proxyURL: http://127.0.0.1:4001
+
+# Binaries shipped inside the snapshotter image.
+nydusArtifactsDir: /opt/nydus-artifacts/usr/local/bin
+
+priorityClassName: system-node-critical
+hostNetwork: true
+hostPid: true
+
+resources: {}
+nodeSelector: {}
+tolerations:
+  - operator: Exists

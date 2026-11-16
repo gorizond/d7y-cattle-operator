@@ -76,6 +76,14 @@ spec:
               value: {{ .Values.extras.ingress.traefikServersTransportEnabled | quote }}
             - name: NYDUS_ENABLED
               value: {{ .Values.nydus.enabled | quote }}
+            - name: NYDUS_CHART_REPO
+              value: {{ .Values.nydus.chart.repo | quote }}
+            - name: NYDUS_CHART_NAME
+              value: {{ .Values.nydus.chart.name | quote }}
+            - name: NYDUS_CHART_VERSION
+              value: {{ .Values.nydus.chart.version | quote }}
+            - name: NYDUS_SNAPSHOTTER_MODE
+              value: {{ .Values.nydus.snapshotterMode | quote }}
             - name: POD_NAMESPACE
               valueFrom:
                 fieldRef:

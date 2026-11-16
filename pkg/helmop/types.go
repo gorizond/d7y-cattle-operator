@@ -44,9 +44,15 @@ const (
 	KeyDBChartName    = "keydb"
 	KeyDBChartVersion = "0.48.0"
 
-	NydusChartRepo    = "https://dragonflyoss.github.io/helm-charts"
+	NydusChartRepo    = "https://gorizond.github.io/d7y-cattle-operator"
 	NydusChartName    = "nydus-snapshotter"
-	NydusChartVersion = "0.0.10"
+	NydusChartVersion = "0.1.0"
+
+	// NydusSnapshotterModePerRuntime keeps overlayfs as the node default and
+	// makes nydus opt-in through runtimeClass: nydus.
+	NydusSnapshotterModePerRuntime = "perRuntime"
+	// NydusSnapshotterModeGlobal makes nydus the node-wide CRI snapshotter.
+	NydusSnapshotterModeGlobal = "global"
 )
 
 // HelmOpGVR identifies Fleet HelmOps for the resource client.
@@ -63,12 +69,17 @@ type Chart struct {
 
 // Cluster carries the per-cluster inputs shared by the HelmOp builders.
 type Cluster struct {
-	Name               string
-	Namespace          string
-	MTLSSecretName     string
-	Chart              Chart
-	ExtrasChart        Chart
-	MirrorChart        Chart
+	Name           string
+	Namespace      string
+	MTLSSecretName string
+	Chart          Chart
+	ExtrasChart    Chart
+	MirrorChart    Chart
+	NydusChart     Chart
+
+	// NydusSnapshotterMode is perRuntime (default) or global.
+	NydusSnapshotterMode string
+
 	ManagerGRPCDomain  string
 	ManagerGRPCPort    int
 	ManagerAPIHost     string

@@ -50,6 +50,8 @@ type Options struct {
 	DragonflyChart              helmop.Chart
 	ExtrasChart                 helmop.Chart
 	MirrorChart                 helmop.Chart
+	NydusChart                  helmop.Chart
+	NydusSnapshotterMode        string
 	ExtrasIngressController     string
 	ExtrasIngressClassName      string
 	ExtrasIngressGRPCEnabled    bool
@@ -305,21 +307,23 @@ func (c *Controller) ensureMTLSSecret(cluster *provv1.Cluster) error {
 
 func (c *Controller) helmopCluster(cluster *provv1.Cluster) helmop.Cluster {
 	hc := helmop.Cluster{
-		Name:               cluster.Name,
-		Namespace:          cluster.Namespace,
-		MTLSSecretName:     c.opts.MTLSSecretName,
-		Chart:              c.opts.DragonflyChart,
-		ExtrasChart:        c.opts.ExtrasChart,
-		MirrorChart:        c.opts.MirrorChart,
-		ManagerGRPCDomain:  c.opts.ManagerGRPCDomain,
-		ManagerGRPCPort:    c.opts.ManagerGRPCPort,
-		ManagerAPIHost:     c.opts.ManagerAPIHost,
-		SchedulerClusterID: schedulerClusterID(cluster),
-		SchedulerReplicas:  helmop.ReplicasOrOne(AnnotationSchedulerReplicas, cluster.Annotations[AnnotationSchedulerReplicas]),
-		SeedClientReplicas: helmop.ReplicasOrOne(AnnotationSeedClientReplicas, cluster.Annotations[AnnotationSeedClientReplicas]),
-		Monitoring:         monitoringEnabled(cluster),
-		P2PDataTLS:         p2pDataTLSEnabled(cluster),
-		Labels:             apply.Labels(cluster.Namespace, cluster.Name),
+		Name:                 cluster.Name,
+		Namespace:            cluster.Namespace,
+		MTLSSecretName:       c.opts.MTLSSecretName,
+		Chart:                c.opts.DragonflyChart,
+		ExtrasChart:          c.opts.ExtrasChart,
+		MirrorChart:          c.opts.MirrorChart,
+		NydusChart:           c.opts.NydusChart,
+		NydusSnapshotterMode: c.opts.NydusSnapshotterMode,
+		ManagerGRPCDomain:    c.opts.ManagerGRPCDomain,
+		ManagerGRPCPort:      c.opts.ManagerGRPCPort,
+		ManagerAPIHost:       c.opts.ManagerAPIHost,
+		SchedulerClusterID:   schedulerClusterID(cluster),
+		SchedulerReplicas:    helmop.ReplicasOrOne(AnnotationSchedulerReplicas, cluster.Annotations[AnnotationSchedulerReplicas]),
+		SeedClientReplicas:   helmop.ReplicasOrOne(AnnotationSeedClientReplicas, cluster.Annotations[AnnotationSeedClientReplicas]),
+		Monitoring:           monitoringEnabled(cluster),
+		P2PDataTLS:           p2pDataTLSEnabled(cluster),
+		Labels:               apply.Labels(cluster.Namespace, cluster.Name),
 	}
 	// The certificate revision is derived from the live Secret so a rotation
 	// changes pod template annotations exactly once. Missing ca.crt errors are

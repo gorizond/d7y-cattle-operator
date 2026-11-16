@@ -1,0 +1,9 @@
+{{- if and .Values.runtimeClass.create (eq .Values.snapshotterMode "perRuntime") }}
+apiVersion: node.k8s.io/v1
+kind: RuntimeClass
+metadata:
+  name: {{ .Values.runtimeClass.name }}
+  labels:
+    {{- include "nydus-snapshotter.labels" . | nindent 4 }}
+handler: nydus
+{{- end }}

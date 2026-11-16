@@ -28,6 +28,10 @@ const (
 	DefaultMirrorChartRepo               = "https://gorizond.github.io/d7y-cattle-operator"
 	DefaultMirrorChartName               = "containerd-mirror"
 	DefaultMirrorChartVersion            = "0.1.0"
+	DefaultNydusChartRepo                = "https://gorizond.github.io/d7y-cattle-operator"
+	DefaultNydusChartName                = "nydus-snapshotter"
+	DefaultNydusChartVersion             = "0.1.0"
+	DefaultNydusSnapshotterMode          = "perRuntime"
 	DefaultExtrasIngressController       = "nginx"
 	DefaultExtrasIngressClassName        = ""
 	DefaultExtrasIngressGRPCEnabled      = true
@@ -61,6 +65,10 @@ type Config struct {
 	MirrorChartRepo             string
 	MirrorChartName             string
 	MirrorChartVersion          string
+	NydusChartRepo              string
+	NydusChartName              string
+	NydusChartVersion           string
+	NydusSnapshotterMode        string
 	ExtrasIngressController     string
 	ExtrasIngressClassName      string
 	ExtrasIngressGRPCEnabled    bool
@@ -123,6 +131,10 @@ func Load(args []string) (*Config, error) {
 	fs.StringVar(&cfg.MirrorChartRepo, "containerd-mirror-chart-repo", envOr("CONTAINERD_MIRROR_CHART_REPO", DefaultMirrorChartRepo), "Helm repository URL of the containerd-mirror chart")
 	fs.StringVar(&cfg.MirrorChartName, "containerd-mirror-chart-name", envOr("CONTAINERD_MIRROR_CHART_NAME", DefaultMirrorChartName), "containerd-mirror chart name")
 	fs.StringVar(&cfg.MirrorChartVersion, "containerd-mirror-chart-version", envOr("CONTAINERD_MIRROR_CHART_VERSION", DefaultMirrorChartVersion), "containerd-mirror chart version")
+	fs.StringVar(&cfg.NydusChartRepo, "nydus-chart-repo", envOr("NYDUS_CHART_REPO", DefaultNydusChartRepo), "Helm repository URL of the nydus-snapshotter chart")
+	fs.StringVar(&cfg.NydusChartName, "nydus-chart-name", envOr("NYDUS_CHART_NAME", DefaultNydusChartName), "nydus-snapshotter chart name")
+	fs.StringVar(&cfg.NydusChartVersion, "nydus-chart-version", envOr("NYDUS_CHART_VERSION", DefaultNydusChartVersion), "nydus-snapshotter chart version")
+	fs.StringVar(&cfg.NydusSnapshotterMode, "nydus-snapshotter-mode", envOr("NYDUS_SNAPSHOTTER_MODE", DefaultNydusSnapshotterMode), "nydus snapshotter mode: perRuntime or global")
 	fs.StringVar(&cfg.ExtrasIngressController, "extras-ingress-controller", envOr("EXTRAS_INGRESS_CONTROLLER", DefaultExtrasIngressController), "extras Ingress controller: nginx or traefik")
 	fs.StringVar(&cfg.ExtrasIngressClassName, "extras-ingress-class-name", envOr("EXTRAS_INGRESS_CLASS_NAME", DefaultExtrasIngressClassName), "extras Ingress class name (empty uses the cluster default)")
 	fs.BoolVar(&cfg.ExtrasIngressGRPCEnabled, "extras-ingress-grpc-enabled", defaultGRPCEnabled, "render the extras gRPC Ingress")
@@ -229,6 +241,24 @@ func (c *Config) Validate() error {
 	}
 	if !chartVersionPattern.MatchString(c.MirrorChartVersion) {
 		add("--containerd-mirror-chart-version: %q is not a valid chart version", c.MirrorChartVersion)
+	}
+	if c.NydusChartRepo == "" {
+		add("--nydus-chart-repo is required")
+	} else if err := validateURL(c.NydusChartRepo, "http", "https"); err != nil {
+		add("--nydus-chart-repo: %v", err)
+	}
+	if c.NydusChartName == "" {
+		add("--nydus-chart-name is required")
+	} else if msgs := validation.IsDNS1123Label(c.NydusChartName); len(msgs) > 0 {
+		add("--nydus-chart-name: %s", strings.Join(msgs, "; "))
+	}
+	if !chartVersionPattern.MatchString(c.NydusChartVersion) {
+		add("--nydus-chart-version: %q is not a valid chart version", c.NydusChartVersion)
+	}
+	switch c.NydusSnapshotterMode {
+	case "perRuntime", "global":
+	default:
+		add("--nydus-snapshotter-mode: must be perRuntime or global")
 	}
 	switch c.ExtrasIngressController {
 	case "nginx", "traefik":
