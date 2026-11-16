@@ -10,7 +10,6 @@ func TestExtrasHelmOp(t *testing.T) {
 		RESTEnabled:                    true,
 		TraefikServersTransportEnabled: true,
 		VPAEnabled:                     true,
-		NydusEnabled:                   true,
 		Manager:                        true,
 		Seed:                           true,
 		SchedulerPublicEnabled:         true,
@@ -125,7 +124,6 @@ func TestExtrasHelmOp(t *testing.T) {
 		"manager": {true, "Deployment", "c1-manager"},
 		"control": {true, "StatefulSet", "c1-control-scheduler"},
 		"data":    {true, "StatefulSet", "c1-data-seed-client"},
-		"nydus":   {true, "DaemonSet", "c1-nydus-snapshotter"},
 	} {
 		targetMap := nested(t, targets, name)
 		if targetMap["enabled"] != want.enabled || targetMap["kind"] != want.kind || targetMap["name"] != want.target {
@@ -138,7 +136,6 @@ func TestExtrasSeedOnly(t *testing.T) {
 	op := Extras(testCluster(), ExtrasOptions{
 		IngressEnabled: false,
 		VPAEnabled:     true,
-		NydusEnabled:   true,
 		Seed:           true,
 	})
 
@@ -155,27 +152,9 @@ func TestExtrasSeedOnly(t *testing.T) {
 	if got := valueAt(t, values, "vpa", "targets", "keydb", "enabled"); got != true {
 		t.Errorf("keydb VPA enabled = %v", got)
 	}
-	for _, component := range []string{"control", "data", "nydus"} {
+	for _, component := range []string{"control", "data"} {
 		if got := valueAt(t, values, "vpa", "targets", component, "enabled"); got != true {
 			t.Errorf("%s VPA enabled = %v", component, got)
-		}
-	}
-}
-
-func TestExtrasNydusVPADeferred(t *testing.T) {
-	op := Extras(testCluster(), ExtrasOptions{
-		IngressEnabled: false,
-		VPAEnabled:     true,
-		Seed:           true,
-	})
-
-	targets := nested(t, op.Spec.Helm.Values.Data, "vpa", "targets")
-	if got := valueAt(t, targets, "nydus", "enabled"); got != false {
-		t.Errorf("nydus VPA enabled = %v, want false when nydus is deferred", got)
-	}
-	for _, component := range []string{"control", "data"} {
-		if got := valueAt(t, targets, component, "enabled"); got != true {
-			t.Errorf("%s VPA enabled = %v, want true", component, got)
 		}
 	}
 }

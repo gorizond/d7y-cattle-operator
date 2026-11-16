@@ -43,16 +43,6 @@ const (
 	KeyDBChartRepo    = "https://enapter.github.io/charts/"
 	KeyDBChartName    = "keydb"
 	KeyDBChartVersion = "0.48.0"
-
-	NydusChartRepo    = "https://gorizond.github.io/d7y-cattle-operator"
-	NydusChartName    = "nydus-snapshotter"
-	NydusChartVersion = "0.1.0"
-
-	// NydusSnapshotterModePerRuntime keeps overlayfs as the node default and
-	// makes nydus opt-in through runtimeClass: nydus.
-	NydusSnapshotterModePerRuntime = "perRuntime"
-	// NydusSnapshotterModeGlobal makes nydus the node-wide CRI snapshotter.
-	NydusSnapshotterModeGlobal = "global"
 )
 
 // HelmOpGVR identifies Fleet HelmOps for the resource client.
@@ -75,10 +65,6 @@ type Cluster struct {
 	Chart          Chart
 	ExtrasChart    Chart
 	MirrorChart    Chart
-	NydusChart     Chart
-
-	// NydusSnapshotterMode is perRuntime (default) or global.
-	NydusSnapshotterMode string
 
 	ManagerGRPCDomain  string
 	ManagerGRPCPort    int
@@ -116,8 +102,9 @@ func ControlName(cluster string) string { return objectName(cluster, "control") 
 // DataName returns the data (seedClient/client) HelmOp and release name.
 func DataName(cluster string) string { return objectName(cluster, "data") }
 
-// NydusName returns the nydus-snapshotter HelmOp and release name.
-func NydusName(cluster string) string { return objectName(cluster, "nydus-snapshotter") }
+// LegacyNydusName returns the release name of the removed in-cluster nydus
+// HelmOp. It is only used to delete stale releases on upgrade.
+func LegacyNydusName(cluster string) string { return objectName(cluster, "nydus-snapshotter") }
 
 // ExtrasName returns the dragonfly-extras HelmOp and release name.
 func ExtrasName(cluster string) string { return objectName(cluster, "extras") }

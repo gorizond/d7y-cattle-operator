@@ -67,20 +67,4 @@ spec:
     updateMode: "Off"
 ---
 {{- end }}
-{{- if .Values.vpa.targets.nydus.enabled }}
-apiVersion: autoscaling.k8s.io/v1
-kind: VerticalPodAutoscaler
-metadata:
-  name: {{ .Release.Name }}-nydus
-  namespace: {{ .Values.vpa.namespace }}
-  labels:
-    {{- include "dragonfly-extras.labels" . | nindent 4 }}
-spec:
-  targetRef:
-    apiVersion: apps/v1
-    kind: {{ .Values.vpa.targets.nydus.kind }}
-    name: {{ default (printf "%s-nydus-snapshotter" .Values.vpa.clusterName) .Values.vpa.targets.nydus.name }}
-  updatePolicy:
-    updateMode: "Off"
-{{- end }}
 {{- end }}

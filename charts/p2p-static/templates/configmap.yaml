@@ -35,6 +35,11 @@ data:
             autoindex off;
         }
 
+        location /nydus/ {
+            try_files $uri =404;
+            autoindex off;
+        }
+
         location / {
             return 404;
         }

@@ -2,7 +2,6 @@ package cluster
 
 import (
 	"context"
-	"strings"
 	"testing"
 
 	provv1 "github.com/rancher/rancher/pkg/apis/provisioning.cattle.io/v1"
@@ -18,7 +17,6 @@ import (
 
 func TestReconcileSeedCreatesHelmOps(t *testing.T) {
 	controller, store, events := newTestController(t)
-	controller.opts.NydusEnabled = true
 	cluster := testSeedCluster("42")
 
 	if _, err := controller.reconcile("", cluster); err != nil {
@@ -28,7 +26,7 @@ func TestReconcileSeedCreatesHelmOps(t *testing.T) {
 		t.Errorf("events = %+v, want none", events.events)
 	}
 
-	for _, name := range []string{"c1-keydb", "c1-control", "c1-data", "c1-containerd-mirror", "c1-nydus-snapshotter"} {
+	for _, name := range []string{"c1-keydb", "c1-control", "c1-data", "c1-containerd-mirror"} {
 		if !store.has("fleet-default/" + name) {
 			t.Errorf("%s HelmOp was not created", name)
 		}
@@ -41,17 +39,6 @@ func TestReconcileSeedCreatesHelmOps(t *testing.T) {
 	data := store.object("fleet-default/c1-data")
 	if got := dependsOn(data); len(got) != 3 || got[0] != "c1-control" || got[1] != "c1-keydb" || got[2] != "c1-extras" {
 		t.Errorf("data dependsOn = %v", got)
-	}
-	nydus := store.object("fleet-default/c1-nydus-snapshotter")
-	if got := dependsOn(nydus); len(got) != 1 || got[0] != "c1-keydb" {
-		t.Errorf("nydus dependsOn = %v", got)
-	}
-	nydusValues := helmValues(t, nydus)
-	if got := valueAtPath(t, nydusValues, "snapshotterMode"); got != helmop.NydusSnapshotterModeGlobal {
-		t.Errorf("nydus snapshotterMode = %v, want global", got)
-	}
-	if got := valueAtPath(t, nydusValues, "containerd", "dropInFile"); got != helmop.NydusContainerdDropInFile {
-		t.Errorf("nydus containerd.dropInFile = %v", got)
 	}
 	mirror := store.object("fleet-default/c1-containerd-mirror")
 	if got := dependsOn(mirror); len(got) != 1 || got[0] != "c1-data" {
@@ -69,9 +56,34 @@ func TestReconcileSeedCreatesHelmOps(t *testing.T) {
 	}
 }
 
+func TestReconcileSeedDeletesLegacyNydusHelmOp(t *testing.T) {
+	controller, store, _ := newTestController(t)
+	cluster := testSeedCluster("42")
+	legacy := helmop.LegacyNydusName(cluster.Name)
+	store.objects["fleet-default/"+legacy] = &unstructured.Unstructured{Object: map[string]any{
+		"apiVersion": "fleet.cattle.io/v1alpha1",
+		"kind":       "HelmOp",
+		"metadata": map[string]any{
+			"name":      legacy,
+			"namespace": "fleet-default",
+		},
+	}}
+
+	if _, err := controller.reconcile("", cluster); err != nil {
+		t.Fatalf("reconcile() error = %v", err)
+	}
+	if store.has("fleet-default/" + legacy) {
+		t.Error("legacy in-cluster nydus HelmOp was not deleted")
+	}
+	for _, name := range []string{"c1-control", "c1-data", "c1-containerd-mirror"} {
+		if !store.has("fleet-default/" + name) {
+			t.Errorf("%s HelmOp was not created", name)
+		}
+	}
+}
+
 func TestReconcileSeedRemovalAndLabelRemoval(t *testing.T) {
 	controller, store, _ := newTestController(t)
-	controller.opts.NydusEnabled = true
 	cluster := testSeedCluster("42")
 	if _, err := controller.reconcile("", cluster); err != nil {
 		t.Fatalf("reconcile(seed) error = %v", err)
@@ -84,7 +96,7 @@ func TestReconcileSeedRemovalAndLabelRemoval(t *testing.T) {
 	if got := cluster.Annotations[AnnotationSchedulerClusterID]; got != "42" {
 		t.Errorf("scheduler cluster ID annotation = %q after seed removal, want 42", got)
 	}
-	for _, name := range []string{"c1-control", "c1-data", "c1-containerd-mirror", "c1-nydus-snapshotter"} {
+	for _, name := range []string{"c1-control", "c1-data", "c1-containerd-mirror"} {
 		if store.has("fleet-default/" + name) {
 			t.Errorf("%s was not deleted when the seed role was removed", name)
 		}
@@ -99,56 +111,6 @@ func TestReconcileSeedRemovalAndLabelRemoval(t *testing.T) {
 	}
 	if len(store.objects) != 0 {
 		t.Errorf("objects left after label removal: %v", store.names())
-	}
-}
-
-func TestReconcileSeedDefersNydus(t *testing.T) {
-	controller, store, events := newTestController(t)
-	clusterStore := controller.clusters.(*fakeClusterStore)
-	cluster := testSeedCluster("42")
-	clusterStore.set(cluster)
-
-	if _, err := controller.reconcile("", cluster); err != nil {
-		t.Fatalf("reconcile() error = %v", err)
-	}
-	if len(events.events) != 0 {
-		t.Errorf("events = %+v, want none", events.events)
-	}
-	for _, name := range []string{"c1-keydb", "c1-control", "c1-data", "c1-containerd-mirror"} {
-		if !store.has("fleet-default/" + name) {
-			t.Errorf("%s HelmOp was not created", name)
-		}
-	}
-	if store.has("fleet-default/c1-nydus-snapshotter") {
-		t.Error("nydus HelmOp was created while nydus is disabled")
-	}
-	if got := clusterStore.condition(string(conditionNydusReady)); got == nil || got.Status != corev1.ConditionFalse || got.Reason != "NydusDeferred" {
-		t.Errorf("NydusReady = %+v, want False/NydusDeferred", got)
-	}
-	if got := clusterStore.condition(string(conditionNydusReady)); got != nil && !strings.Contains(got.Message, "one-node pilot") {
-		t.Errorf("NydusReady message = %q, want the one-node pilot hint", got.Message)
-	}
-	values := helmValues(t, store.object("fleet-default/c1-extras"))
-	if got := valueAtPath(t, values, "vpa", "targets", "nydus", "enabled"); got != false {
-		t.Errorf("nydus VPA enabled = %v, want false", got)
-	}
-}
-
-func TestReconcileSeedDefersNydusDeletesExisting(t *testing.T) {
-	controller, store, _ := newTestController(t)
-	cluster := testSeedCluster("42")
-	if err := controller.applyHelmOp(cluster, helmop.Nydus(controller.helmopCluster(cluster))); err != nil {
-		t.Fatalf("apply existing nydus HelmOp: %v", err)
-	}
-	if !store.has("fleet-default/c1-nydus-snapshotter") {
-		t.Fatal("nydus HelmOp was not created for cleanup test")
-	}
-
-	if _, err := controller.reconcile("", cluster); err != nil {
-		t.Fatalf("reconcile() error = %v", err)
-	}
-	if store.has("fleet-default/c1-nydus-snapshotter") {
-		t.Error("existing nydus HelmOp was not deleted while nydus is disabled")
 	}
 }
 
@@ -182,8 +144,6 @@ func newTestController(t *testing.T) (*Controller, *fakeHelmOpStore, *fakeEventS
 			DragonflyChart:           helmop.Chart{Repo: "https://charts.example.com", Name: "dragonfly", Version: "1.10.1-patch.2"},
 			ExtrasChart:              helmop.Chart{Repo: "https://charts.example.com", Name: "dragonfly-extras", Version: "0.1.8"},
 			MirrorChart:              helmop.Chart{Repo: "https://charts.example.com", Name: "containerd-mirror", Version: "0.1.0"},
-			NydusChart:               helmop.Chart{Repo: "https://charts.example.com", Name: "nydus-snapshotter", Version: "0.1.0"},
-			NydusSnapshotterMode:     helmop.NydusSnapshotterModeGlobal,
 			ExtrasIngressController:  "nginx",
 			ExtrasIngressGRPCEnabled: true,
 			ExtrasIngressRESTEnabled: true,

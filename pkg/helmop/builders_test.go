@@ -1,7 +1,6 @@
 package helmop
 
 import (
-	"strings"
 	"testing"
 
 	fleetv1alpha1 "github.com/rancher/fleet/pkg/apis/fleet.cattle.io/v1alpha1"
@@ -55,74 +54,10 @@ func TestKeyDBHelmOp(t *testing.T) {
 	}
 }
 
-func TestNydusHelmOp(t *testing.T) {
-	c := testCluster()
-	op := Nydus(c)
-
-	if op.Name != "c1-nydus-snapshotter" {
-		t.Errorf("name = %q", op.Name)
-	}
-	if len(op.Spec.DependsOn) != 1 || op.Spec.DependsOn[0].Name != "c1-keydb" {
-		t.Errorf("dependsOn = %+v", op.Spec.DependsOn)
-	}
-	if op.Spec.Helm.Repo != c.NydusChart.Repo || op.Spec.Helm.Chart != c.NydusChart.Name || op.Spec.Helm.Version != c.NydusChart.Version {
-		t.Errorf("chart = %s/%s %s", op.Spec.Helm.Repo, op.Spec.Helm.Chart, op.Spec.Helm.Version)
-	}
-	if NydusChartRepo != "https://gorizond.github.io/d7y-cattle-operator" || NydusChartName != "nydus-snapshotter" || NydusChartVersion != "0.1.0" {
-		t.Errorf("nydus chart defaults = %s/%s %s", NydusChartRepo, NydusChartName, NydusChartVersion)
-	}
-	if NydusHostSocket != "/run/k3s/containerd/containerd.sock" {
-		t.Errorf("NydusHostSocket = %q, want the RKE2 containerd socket", NydusHostSocket)
-	}
-
-	values := op.Spec.Helm.Values.Data
-	for path, want := range map[string]any{
-		"snapshotterMode":       NydusSnapshotterModePerRuntime,
-		"hostSocket":            NydusHostSocket,
-		"priorityClassName":     "system-node-critical",
-		"containerd.manage":     true,
-		"containerd.configDir":  NydusContainerdConfigDir,
-		"containerd.stateDir":   NydusContainerdStateDir,
-		"containerd.dropInDir":  NydusContainerdDropInDir,
-		"containerd.dropInFile": NydusContainerdDropInFile,
-		"runtimeClass.create":   true,
-		"runtimeClass.name":     NydusRuntimeClassName,
-	} {
-		keys := strings.Split(path, ".")
-		if got := valueAt(t, values, keys...); got != want {
-			t.Errorf("%s = %v, want %v", path, got, want)
-		}
-	}
-	if containsKey(values, "enable_oci_tar") {
-		t.Error("values contain the non-existent enable_oci_tar key")
-	}
-}
-
-func TestNydusGlobalMode(t *testing.T) {
-	c := testCluster()
-	c.NydusSnapshotterMode = NydusSnapshotterModeGlobal
-
-	values := Nydus(c).Spec.Helm.Values.Data
-	if got := values["snapshotterMode"]; got != NydusSnapshotterModeGlobal {
-		t.Errorf("snapshotterMode = %v, want global", got)
-	}
-}
-
-func TestNydusModeDefaultsToPerRuntime(t *testing.T) {
-	c := testCluster()
-	c.NydusSnapshotterMode = ""
-
-	values := Nydus(c).Spec.Helm.Values.Data
-	if got := values["snapshotterMode"]; got != NydusSnapshotterModePerRuntime {
-		t.Errorf("snapshotterMode = %v, want %v", got, NydusSnapshotterModePerRuntime)
-	}
-}
-
 func TestBuildersUseConfiguredChartVersion(t *testing.T) {
 	c := testCluster()
 	c.Chart.Version = "9.9.9"
 	c.ExtrasChart.Version = "8.8.8"
-	c.NydusChart.Version = "7.7.7"
 
 	for name, op := range map[string]*fleetv1alpha1.HelmOp{
 		"manager": Manager(c),
@@ -135,9 +70,6 @@ func TestBuildersUseConfiguredChartVersion(t *testing.T) {
 	}
 	if got := Extras(c, ExtrasOptions{}).Spec.Helm.Version; got != "8.8.8" {
 		t.Errorf("extras chart version = %q, want 8.8.8", got)
-	}
-	if got := Nydus(c).Spec.Helm.Version; got != "7.7.7" {
-		t.Errorf("nydus chart version = %q, want 7.7.7", got)
 	}
 }
 
@@ -154,7 +86,6 @@ func TestHelmOpsHaveNoPersistence(t *testing.T) {
 		"manager": Manager(c),
 		"control": Control(c),
 		"data":    Data(c),
-		"nydus":   Nydus(c),
 		"extras":  Extras(c, ExtrasOptions{IngressEnabled: true, VPAEnabled: true, Manager: true, Seed: true}),
 	}
 	for name, op := range ops {

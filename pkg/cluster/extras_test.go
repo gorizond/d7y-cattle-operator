@@ -69,7 +69,6 @@ func TestReconcileManagerExtrasIngress(t *testing.T) {
 
 func TestReconcileSeedOnlyExtrasVPA(t *testing.T) {
 	controller, store, _ := newTestController(t)
-	controller.opts.NydusEnabled = true
 	cluster := testSeedCluster("42")
 
 	if _, err := controller.reconcile("", cluster); err != nil {
@@ -107,7 +106,7 @@ func TestReconcileSeedOnlyExtrasVPA(t *testing.T) {
 		t.Errorf("seed-only scheduler port = %v", got)
 	}
 	for component, want := range map[string]bool{
-		"keydb": true, "manager": false, "control": true, "data": true, "nydus": true,
+		"keydb": true, "manager": false, "control": true, "data": true,
 	} {
 		if got := valueAtPath(t, values, "vpa", "targets", component, "enabled"); got != want {
 			t.Errorf("%s VPA enabled = %v, want %v", component, got, want)
@@ -135,7 +134,7 @@ func TestReconcileLabelOnlyExtrasVPA(t *testing.T) {
 	if got := valueAtPath(t, values, "vpa", "targets", "keydb", "enabled"); got != true {
 		t.Errorf("keydb VPA enabled = %v", got)
 	}
-	for _, component := range []string{"manager", "control", "data", "nydus"} {
+	for _, component := range []string{"manager", "control", "data"} {
 		if got := valueAtPath(t, values, "vpa", "targets", component, "enabled"); got != false {
 			t.Errorf("%s VPA enabled = %v, want false", component, got)
 		}

@@ -97,7 +97,6 @@ func writeJSONResponse(w http.ResponseWriter, status int, value any) {
 
 func TestReconcileAutoRegistrationWritesAnnotation(t *testing.T) {
 	controller, store, _ := newTestController(t)
-	controller.opts.NydusEnabled = true
 	registrar := controller.registrar.(*fakeRegistrar)
 	registrar.schedulerID = 5
 	registrar.seedPeerID = 7
@@ -119,7 +118,7 @@ func TestReconcileAutoRegistrationWritesAnnotation(t *testing.T) {
 	if !store.has("fleet-default/c1-keydb") {
 		t.Error("KeyDB HelmOp was not created")
 	}
-	for _, name := range []string{"c1-control", "c1-data", "c1-nydus-snapshotter"} {
+	for _, name := range []string{"c1-control", "c1-data"} {
 		if !store.has("fleet-default/" + name) {
 			t.Errorf("%s HelmOp was not created after registration", name)
 		}
@@ -332,7 +331,7 @@ func TestReconcileRegistrationFailureKeepsManagerAndKeyDB(t *testing.T) {
 			t.Errorf("%s HelmOp was not created", name)
 		}
 	}
-	for _, name := range []string{"c1-control", "c1-data", "c1-nydus-snapshotter"} {
+	for _, name := range []string{"c1-control", "c1-data"} {
 		if store.has("fleet-default/" + name) {
 			t.Errorf("%s HelmOp was created despite registration failure", name)
 		}
@@ -370,7 +369,7 @@ func TestReconcileRegistrationRetryCondition(t *testing.T) {
 	if !store.has("fleet-default/c1-keydb") {
 		t.Error("KeyDB HelmOp was not created")
 	}
-	for _, name := range []string{"c1-control", "c1-data", "c1-nydus-snapshotter"} {
+	for _, name := range []string{"c1-control", "c1-data"} {
 		if store.has("fleet-default/" + name) {
 			t.Errorf("%s HelmOp was created despite registration failure", name)
 		}
