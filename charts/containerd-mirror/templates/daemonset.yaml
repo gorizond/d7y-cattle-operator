@@ -1,0 +1,54 @@
+apiVersion: apps/v1
+kind: DaemonSet
+metadata:
+  name: {{ .Release.Name }}
+  namespace: {{ .Values.namespace | default .Release.Namespace }}
+  labels:
+    app.kubernetes.io/name: containerd-mirror
+    app.kubernetes.io/instance: {{ .Release.Name }}
+spec:
+  selector:
+    matchLabels:
+      app.kubernetes.io/name: containerd-mirror
+      app.kubernetes.io/instance: {{ .Release.Name }}
+  template:
+    metadata:
+      labels:
+        app.kubernetes.io/name: containerd-mirror
+        app.kubernetes.io/instance: {{ .Release.Name }}
+    spec:
+      hostNetwork: true
+      {{- with .Values.tolerations }}
+      tolerations:
+        {{- toYaml . | nindent 8 }}
+      {{- end }}
+      containers:
+        - name: mirror
+          image: "{{ .Values.image.repository }}:{{ .Values.image.tag }}"
+          imagePullPolicy: {{ .Values.image.pullPolicy }}
+          command:
+            - sh
+            - -c
+          args:
+            - |
+              set -eu
+              mkdir -p /host-certs/_default /host-certs/docker.io /host-certs/index.docker.io
+              cp /config/_default /host-certs/_default/hosts.toml
+              cp /config/docker.io /host-certs/docker.io/hosts.toml
+              cp /config/index.docker.io /host-certs/index.docker.io/hosts.toml
+              rm -rf /host-certs/cr.yandex /host-certs/ghcr.io /host-certs/quay.io /host-certs/gcr.io /host-certs/mcr.microsoft.com /host-certs/registry.k8s.io /host-certs/registry.gitlab.com
+              exec sleep 2147483647
+          volumeMounts:
+            - name: config
+              mountPath: /config
+              readOnly: true
+            - name: certs
+              mountPath: /host-certs
+      volumes:
+        - name: config
+          configMap:
+            name: {{ .Release.Name }}-hosts
+        - name: certs
+          hostPath:
+            path: {{ .Values.hostPath | quote }}
+            type: DirectoryOrCreate

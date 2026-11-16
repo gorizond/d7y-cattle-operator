@@ -21,6 +21,9 @@ var envKeys = []string{
 	"EXTRAS_CHART_REPO",
 	"EXTRAS_CHART_NAME",
 	"EXTRAS_CHART_VERSION",
+	"CONTAINERD_MIRROR_CHART_REPO",
+	"CONTAINERD_MIRROR_CHART_NAME",
+	"CONTAINERD_MIRROR_CHART_VERSION",
 	"EXTRAS_INGRESS_CONTROLLER",
 	"EXTRAS_INGRESS_CLASS_NAME",
 	"EXTRAS_INGRESS_GRPC_ENABLED",
@@ -92,6 +95,15 @@ func TestLoadDefaults(t *testing.T) {
 	if cfg.ExtrasChartVersion != DefaultExtrasChartVersion {
 		t.Errorf("ExtrasChartVersion = %q, want %q", cfg.ExtrasChartVersion, DefaultExtrasChartVersion)
 	}
+	if cfg.MirrorChartRepo != DefaultMirrorChartRepo {
+		t.Errorf("MirrorChartRepo = %q, want %q", cfg.MirrorChartRepo, DefaultMirrorChartRepo)
+	}
+	if cfg.MirrorChartName != DefaultMirrorChartName {
+		t.Errorf("MirrorChartName = %q, want %q", cfg.MirrorChartName, DefaultMirrorChartName)
+	}
+	if cfg.MirrorChartVersion != DefaultMirrorChartVersion {
+		t.Errorf("MirrorChartVersion = %q, want %q", cfg.MirrorChartVersion, DefaultMirrorChartVersion)
+	}
 	if cfg.ExtrasIngressController != DefaultExtrasIngressController {
 		t.Errorf("ExtrasIngressController = %q, want %q", cfg.ExtrasIngressController, DefaultExtrasIngressController)
 	}
@@ -136,6 +148,9 @@ func TestForkChartDefaults(t *testing.T) {
 	}
 	if DefaultExtrasChartVersion != "0.1.8" {
 		t.Errorf("DefaultExtrasChartVersion = %q", DefaultExtrasChartVersion)
+	}
+	if DefaultMirrorChartVersion != "0.1.0" {
+		t.Errorf("DefaultMirrorChartVersion = %q", DefaultMirrorChartVersion)
 	}
 }
 
@@ -223,6 +238,9 @@ func TestLoadEnvOverride(t *testing.T) {
 	t.Setenv("EXTRAS_CHART_REPO", "https://extras.env.example.com")
 	t.Setenv("EXTRAS_CHART_NAME", "dragonfly-extras-env")
 	t.Setenv("EXTRAS_CHART_VERSION", "1.2.3")
+	t.Setenv("CONTAINERD_MIRROR_CHART_REPO", "https://mirror.env.example.com")
+	t.Setenv("CONTAINERD_MIRROR_CHART_NAME", "containerd-mirror-env")
+	t.Setenv("CONTAINERD_MIRROR_CHART_VERSION", "2.3.4")
 	t.Setenv("EXTRAS_INGRESS_CONTROLLER", "traefik")
 	t.Setenv("EXTRAS_INGRESS_CLASS_NAME", "traefik")
 	t.Setenv("EXTRAS_INGRESS_GRPC_ENABLED", "false")
@@ -284,6 +302,15 @@ func TestLoadEnvOverride(t *testing.T) {
 	}
 	if cfg.ExtrasChartVersion != "1.2.3" {
 		t.Errorf("ExtrasChartVersion = %q", cfg.ExtrasChartVersion)
+	}
+	if cfg.MirrorChartRepo != "https://mirror.env.example.com" {
+		t.Errorf("MirrorChartRepo = %q", cfg.MirrorChartRepo)
+	}
+	if cfg.MirrorChartName != "containerd-mirror-env" {
+		t.Errorf("MirrorChartName = %q", cfg.MirrorChartName)
+	}
+	if cfg.MirrorChartVersion != "2.3.4" {
+		t.Errorf("MirrorChartVersion = %q", cfg.MirrorChartVersion)
 	}
 	if cfg.ExtrasIngressController != "traefik" {
 		t.Errorf("ExtrasIngressController = %q", cfg.ExtrasIngressController)

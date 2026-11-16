@@ -49,6 +49,7 @@ type Options struct {
 	Resolver                    Resolver
 	DragonflyChart              helmop.Chart
 	ExtrasChart                 helmop.Chart
+	MirrorChart                 helmop.Chart
 	ExtrasIngressController     string
 	ExtrasIngressClassName      string
 	ExtrasIngressGRPCEnabled    bool
@@ -309,6 +310,7 @@ func (c *Controller) helmopCluster(cluster *provv1.Cluster) helmop.Cluster {
 		MTLSSecretName:     c.opts.MTLSSecretName,
 		Chart:              c.opts.DragonflyChart,
 		ExtrasChart:        c.opts.ExtrasChart,
+		MirrorChart:        c.opts.MirrorChart,
 		ManagerGRPCDomain:  c.opts.ManagerGRPCDomain,
 		ManagerGRPCPort:    c.opts.ManagerGRPCPort,
 		ManagerAPIHost:     c.opts.ManagerAPIHost,
