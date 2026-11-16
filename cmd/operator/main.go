@@ -115,6 +115,12 @@ func run() error {
 			Name:    cfg.MirrorChartName,
 			Version: cfg.MirrorChartVersion,
 		},
+		NydusChart: helmop.Chart{
+			Repo:    cfg.NydusChartRepo,
+			Name:    cfg.NydusChartName,
+			Version: cfg.NydusChartVersion,
+		},
+		NydusSnapshotterMode:     cfg.NydusSnapshotterMode,
 		ExtrasIngressController:  cfg.ExtrasIngressController,
 		ExtrasIngressClassName:   cfg.ExtrasIngressClassName,
 		ExtrasIngressGRPCEnabled: cfg.ExtrasIngressGRPCEnabled,

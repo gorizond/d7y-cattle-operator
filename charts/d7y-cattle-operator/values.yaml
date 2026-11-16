@@ -81,10 +81,17 @@ containerdMirror:
     name: containerd-mirror
     version: 0.1.0
 
-# nydus-snapshotter is deferred for the pilot: chart 0.0.10 targets containerd
-# 1.x and is incompatible with RKE2 containerd 2.2.
+# Custom nydus-snapshotter chart for RKE2 containerd 2.2. Creation is disabled
+# by default; enable it after a one-node pilot.
 nydus:
   enabled: false
+  chart:
+    repo: https://gorizond.github.io/d7y-cattle-operator
+    name: nydus-snapshotter
+    version: 0.1.0
+  # perRuntime keeps overlayfs as the node default (runtimeClass: nydus opt-in);
+  # global makes nydus the node-wide CRI snapshotter.
+  snapshotterMode: perRuntime
 
 webhook:
   # Admission webhook server and MutatingWebhookConfiguration.

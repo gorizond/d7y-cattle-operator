@@ -2,6 +2,7 @@ package cluster
 
 import (
 	"context"
+	"strings"
 	"testing"
 
 	provv1 "github.com/rancher/rancher/pkg/apis/provisioning.cattle.io/v1"
@@ -44,6 +45,13 @@ func TestReconcileSeedCreatesHelmOps(t *testing.T) {
 	nydus := store.object("fleet-default/c1-nydus-snapshotter")
 	if got := dependsOn(nydus); len(got) != 1 || got[0] != "c1-keydb" {
 		t.Errorf("nydus dependsOn = %v", got)
+	}
+	nydusValues := helmValues(t, nydus)
+	if got := valueAtPath(t, nydusValues, "snapshotterMode"); got != helmop.NydusSnapshotterModeGlobal {
+		t.Errorf("nydus snapshotterMode = %v, want global", got)
+	}
+	if got := valueAtPath(t, nydusValues, "containerd", "dropInFile"); got != helmop.NydusContainerdDropInFile {
+		t.Errorf("nydus containerd.dropInFile = %v", got)
 	}
 	mirror := store.object("fleet-default/c1-containerd-mirror")
 	if got := dependsOn(mirror); len(got) != 1 || got[0] != "c1-data" {
@@ -117,6 +125,9 @@ func TestReconcileSeedDefersNydus(t *testing.T) {
 	if got := clusterStore.condition(string(conditionNydusReady)); got == nil || got.Status != corev1.ConditionFalse || got.Reason != "NydusDeferred" {
 		t.Errorf("NydusReady = %+v, want False/NydusDeferred", got)
 	}
+	if got := clusterStore.condition(string(conditionNydusReady)); got != nil && !strings.Contains(got.Message, "one-node pilot") {
+		t.Errorf("NydusReady message = %q, want the one-node pilot hint", got.Message)
+	}
 	values := helmValues(t, store.object("fleet-default/c1-extras"))
 	if got := valueAtPath(t, values, "vpa", "targets", "nydus", "enabled"); got != false {
 		t.Errorf("nydus VPA enabled = %v, want false", got)
@@ -171,6 +182,8 @@ func newTestController(t *testing.T) (*Controller, *fakeHelmOpStore, *fakeEventS
 			DragonflyChart:           helmop.Chart{Repo: "https://charts.example.com", Name: "dragonfly", Version: "1.10.1-patch.2"},
 			ExtrasChart:              helmop.Chart{Repo: "https://charts.example.com", Name: "dragonfly-extras", Version: "0.1.8"},
 			MirrorChart:              helmop.Chart{Repo: "https://charts.example.com", Name: "containerd-mirror", Version: "0.1.0"},
+			NydusChart:               helmop.Chart{Repo: "https://charts.example.com", Name: "nydus-snapshotter", Version: "0.1.0"},
+			NydusSnapshotterMode:     helmop.NydusSnapshotterModeGlobal,
 			ExtrasIngressController:  "nginx",
 			ExtrasIngressGRPCEnabled: true,
 			ExtrasIngressRESTEnabled: true,

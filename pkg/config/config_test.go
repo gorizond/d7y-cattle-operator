@@ -24,6 +24,10 @@ var envKeys = []string{
 	"CONTAINERD_MIRROR_CHART_REPO",
 	"CONTAINERD_MIRROR_CHART_NAME",
 	"CONTAINERD_MIRROR_CHART_VERSION",
+	"NYDUS_CHART_REPO",
+	"NYDUS_CHART_NAME",
+	"NYDUS_CHART_VERSION",
+	"NYDUS_SNAPSHOTTER_MODE",
 	"EXTRAS_INGRESS_CONTROLLER",
 	"EXTRAS_INGRESS_CLASS_NAME",
 	"EXTRAS_INGRESS_GRPC_ENABLED",
@@ -103,6 +107,18 @@ func TestLoadDefaults(t *testing.T) {
 	}
 	if cfg.MirrorChartVersion != DefaultMirrorChartVersion {
 		t.Errorf("MirrorChartVersion = %q, want %q", cfg.MirrorChartVersion, DefaultMirrorChartVersion)
+	}
+	if cfg.NydusChartRepo != DefaultNydusChartRepo {
+		t.Errorf("NydusChartRepo = %q, want %q", cfg.NydusChartRepo, DefaultNydusChartRepo)
+	}
+	if cfg.NydusChartName != DefaultNydusChartName {
+		t.Errorf("NydusChartName = %q, want %q", cfg.NydusChartName, DefaultNydusChartName)
+	}
+	if cfg.NydusChartVersion != DefaultNydusChartVersion {
+		t.Errorf("NydusChartVersion = %q, want %q", cfg.NydusChartVersion, DefaultNydusChartVersion)
+	}
+	if cfg.NydusSnapshotterMode != DefaultNydusSnapshotterMode {
+		t.Errorf("NydusSnapshotterMode = %q, want %q", cfg.NydusSnapshotterMode, DefaultNydusSnapshotterMode)
 	}
 	if cfg.ExtrasIngressController != DefaultExtrasIngressController {
 		t.Errorf("ExtrasIngressController = %q, want %q", cfg.ExtrasIngressController, DefaultExtrasIngressController)
@@ -198,6 +214,10 @@ func TestLoadInvalidValues(t *testing.T) {
 		"invalid dragonfly chart repo":      "--dragonfly-chart-repo=not-a-url",
 		"invalid extras chart version":      "--extras-chart-version=latest",
 		"invalid extras chart repo":         "--extras-chart-repo=not-a-url",
+		"invalid nydus chart version":       "--nydus-chart-version=latest",
+		"invalid nydus chart repo":          "--nydus-chart-repo=not-a-url",
+		"invalid nydus chart name":          "--nydus-chart-name=Bad_Name",
+		"invalid nydus snapshotter mode":    "--nydus-snapshotter-mode=bogus",
 		"invalid extras ingress controller": "--extras-ingress-controller=haproxy",
 		"invalid extras ingress class":      "--extras-ingress-class-name=Bad_Name",
 		"invalid extras ingress TLS Secret": "--extras-ingress-tls-secret=Bad_Name",
@@ -241,6 +261,10 @@ func TestLoadEnvOverride(t *testing.T) {
 	t.Setenv("CONTAINERD_MIRROR_CHART_REPO", "https://mirror.env.example.com")
 	t.Setenv("CONTAINERD_MIRROR_CHART_NAME", "containerd-mirror-env")
 	t.Setenv("CONTAINERD_MIRROR_CHART_VERSION", "2.3.4")
+	t.Setenv("NYDUS_CHART_REPO", "https://nydus.env.example.com")
+	t.Setenv("NYDUS_CHART_NAME", "nydus-snapshotter-env")
+	t.Setenv("NYDUS_CHART_VERSION", "3.4.5")
+	t.Setenv("NYDUS_SNAPSHOTTER_MODE", "global")
 	t.Setenv("EXTRAS_INGRESS_CONTROLLER", "traefik")
 	t.Setenv("EXTRAS_INGRESS_CLASS_NAME", "traefik")
 	t.Setenv("EXTRAS_INGRESS_GRPC_ENABLED", "false")
@@ -312,6 +336,18 @@ func TestLoadEnvOverride(t *testing.T) {
 	if cfg.MirrorChartVersion != "2.3.4" {
 		t.Errorf("MirrorChartVersion = %q", cfg.MirrorChartVersion)
 	}
+	if cfg.NydusChartRepo != "https://nydus.env.example.com" {
+		t.Errorf("NydusChartRepo = %q", cfg.NydusChartRepo)
+	}
+	if cfg.NydusChartName != "nydus-snapshotter-env" {
+		t.Errorf("NydusChartName = %q", cfg.NydusChartName)
+	}
+	if cfg.NydusChartVersion != "3.4.5" {
+		t.Errorf("NydusChartVersion = %q", cfg.NydusChartVersion)
+	}
+	if cfg.NydusSnapshotterMode != "global" {
+		t.Errorf("NydusSnapshotterMode = %q", cfg.NydusSnapshotterMode)
+	}
 	if cfg.ExtrasIngressController != "traefik" {
 		t.Errorf("ExtrasIngressController = %q", cfg.ExtrasIngressController)
 	}
@@ -355,6 +391,8 @@ func TestLoadFlagOverridesEnv(t *testing.T) {
 		"--manager-grpc-domain=grpc.flag.example.com",
 		"--manager-grpc-port=9443",
 		"--nydus-enabled=true",
+		"--nydus-chart-version=9.9.9",
+		"--nydus-snapshotter-mode=global",
 	)
 	cfg, err := Load(args)
 	if err != nil {
@@ -368,6 +406,12 @@ func TestLoadFlagOverridesEnv(t *testing.T) {
 	}
 	if !cfg.NydusEnabled {
 		t.Error("NydusEnabled = false, want flag value true")
+	}
+	if cfg.NydusChartVersion != "9.9.9" {
+		t.Errorf("NydusChartVersion = %q, want flag value", cfg.NydusChartVersion)
+	}
+	if cfg.NydusSnapshotterMode != "global" {
+		t.Errorf("NydusSnapshotterMode = %q, want flag value", cfg.NydusSnapshotterMode)
 	}
 }
 

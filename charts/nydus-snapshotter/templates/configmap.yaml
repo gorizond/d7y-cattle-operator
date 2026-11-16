@@ -1,0 +1,60 @@
+apiVersion: v1
+kind: ConfigMap
+metadata:
+  name: {{ .Release.Name }}-nydus
+  namespace: {{ .Release.Namespace }}
+  labels:
+    {{- include "nydus-snapshotter.labels" . | nindent 4 }}
+data:
+  config.toml: |
+{{- if .Values.snapshotter.config }}
+{{ .Values.snapshotter.config | indent 4 }}
+{{- else }}
+    version = 1
+    root = {{ .Values.snapshotter.root | quote }}
+    address = {{ include "nydus-snapshotter.socketPath" . | quote }}
+    daemon_mode = "multiple"
+
+    [daemon]
+      nydusd_config = "/etc/nydus/nydusd-config.json"
+      nydusd_path = {{ printf "%s/nydusd" .Values.nydusArtifactsDir | quote }}
+      nydusimage_path = {{ printf "%s/nydus-image" .Values.nydusArtifactsDir | quote }}
+      fs_driver = "fusedev"
+      recover_policy = "failover"
+
+    [experimental.tarfs]
+      enable_tarfs = true
+{{- end }}
+  nydusd-config.json: |
+{{- if .Values.nydusd.config }}
+{{ .Values.nydusd.config | indent 4 }}
+{{- else }}
+    {
+      "device": {
+        "backend": {
+          "type": "registry",
+          "config": {
+            "proxy": {
+              "url": {{ .Values.nydusd.proxyURL | quote }},
+              "fallback": true,
+              "check_interval": 5,
+              "use_http": false
+            },
+            "timeout": 5,
+            "connect_timeout": 5,
+            "retry_limit": 2
+          }
+        },
+        "cache": {
+          "type": "blobcache",
+          "config": {
+            "work_dir": {{ printf "%s/" .Values.nydusd.cacheDir | quote }}
+          }
+        }
+      },
+      "mode": "direct",
+      "digest_validate": false,
+      "iostats_files": false,
+      "enable_xattr": true
+    }
+{{- end }}

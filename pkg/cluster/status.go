@@ -85,7 +85,7 @@ func (s *statusBuilder) managedDisabled(reason, message string) {
 
 func (s *statusBuilder) nydusDeferred() {
 	s.set(conditionNydusReady, false, "NydusDeferred",
-		"nydus-snapshotter is deferred: chart 0.0.10 targets containerd 1.x and is incompatible with RKE2 containerd 2.2")
+		"nydus is disabled; the custom containerd 2.2 chart is available, enable it after a one-node pilot")
 }
 
 func (s *statusBuilder) seedUnavailable(reason, message string) {
