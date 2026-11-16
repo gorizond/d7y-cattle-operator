@@ -110,6 +110,11 @@ func run() error {
 			Name:    cfg.ExtrasChartName,
 			Version: cfg.ExtrasChartVersion,
 		},
+		MirrorChart: helmop.Chart{
+			Repo:    cfg.MirrorChartRepo,
+			Name:    cfg.MirrorChartName,
+			Version: cfg.MirrorChartVersion,
+		},
 		ExtrasIngressController:  cfg.ExtrasIngressController,
 		ExtrasIngressClassName:   cfg.ExtrasIngressClassName,
 		ExtrasIngressGRPCEnabled: cfg.ExtrasIngressGRPCEnabled,

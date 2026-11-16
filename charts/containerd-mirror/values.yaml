@@ -1,0 +1,15 @@
+namespace: kube-system
+
+image:
+  repository: busybox
+  tag: "1.36"
+  pullPolicy: IfNotPresent
+
+# Local dfdaemon proxy port used by the _default mirror.
+port: 4001
+
+# RKE2 containerd hosts.toml directory.
+hostPath: /var/lib/rancher/rke2/agent/etc/containerd/certs.d
+
+tolerations:
+  - operator: Exists

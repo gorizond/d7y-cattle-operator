@@ -25,6 +25,9 @@ const (
 	DefaultExtrasChartRepo               = "https://gorizond.github.io/d7y-cattle-operator"
 	DefaultExtrasChartName               = "dragonfly-extras"
 	DefaultExtrasChartVersion            = "0.1.8"
+	DefaultMirrorChartRepo               = "https://gorizond.github.io/d7y-cattle-operator"
+	DefaultMirrorChartName               = "containerd-mirror"
+	DefaultMirrorChartVersion            = "0.1.0"
 	DefaultExtrasIngressController       = "nginx"
 	DefaultExtrasIngressClassName        = ""
 	DefaultExtrasIngressGRPCEnabled      = true
@@ -55,6 +58,9 @@ type Config struct {
 	ExtrasChartRepo             string
 	ExtrasChartName             string
 	ExtrasChartVersion          string
+	MirrorChartRepo             string
+	MirrorChartName             string
+	MirrorChartVersion          string
 	ExtrasIngressController     string
 	ExtrasIngressClassName      string
 	ExtrasIngressGRPCEnabled    bool
@@ -114,6 +120,9 @@ func Load(args []string) (*Config, error) {
 	fs.StringVar(&cfg.ExtrasChartRepo, "extras-chart-repo", envOr("EXTRAS_CHART_REPO", DefaultExtrasChartRepo), "Helm repository URL of the dragonfly-extras chart")
 	fs.StringVar(&cfg.ExtrasChartName, "extras-chart-name", envOr("EXTRAS_CHART_NAME", DefaultExtrasChartName), "dragonfly-extras chart name")
 	fs.StringVar(&cfg.ExtrasChartVersion, "extras-chart-version", envOr("EXTRAS_CHART_VERSION", DefaultExtrasChartVersion), "dragonfly-extras chart version")
+	fs.StringVar(&cfg.MirrorChartRepo, "containerd-mirror-chart-repo", envOr("CONTAINERD_MIRROR_CHART_REPO", DefaultMirrorChartRepo), "Helm repository URL of the containerd-mirror chart")
+	fs.StringVar(&cfg.MirrorChartName, "containerd-mirror-chart-name", envOr("CONTAINERD_MIRROR_CHART_NAME", DefaultMirrorChartName), "containerd-mirror chart name")
+	fs.StringVar(&cfg.MirrorChartVersion, "containerd-mirror-chart-version", envOr("CONTAINERD_MIRROR_CHART_VERSION", DefaultMirrorChartVersion), "containerd-mirror chart version")
 	fs.StringVar(&cfg.ExtrasIngressController, "extras-ingress-controller", envOr("EXTRAS_INGRESS_CONTROLLER", DefaultExtrasIngressController), "extras Ingress controller: nginx or traefik")
 	fs.StringVar(&cfg.ExtrasIngressClassName, "extras-ingress-class-name", envOr("EXTRAS_INGRESS_CLASS_NAME", DefaultExtrasIngressClassName), "extras Ingress class name (empty uses the cluster default)")
 	fs.BoolVar(&cfg.ExtrasIngressGRPCEnabled, "extras-ingress-grpc-enabled", defaultGRPCEnabled, "render the extras gRPC Ingress")
@@ -207,6 +216,19 @@ func (c *Config) Validate() error {
 	}
 	if !chartVersionPattern.MatchString(c.ExtrasChartVersion) {
 		add("--extras-chart-version: %q is not a valid chart version", c.ExtrasChartVersion)
+	}
+	if c.MirrorChartRepo == "" {
+		add("--containerd-mirror-chart-repo is required")
+	} else if err := validateURL(c.MirrorChartRepo, "http", "https"); err != nil {
+		add("--containerd-mirror-chart-repo: %v", err)
+	}
+	if c.MirrorChartName == "" {
+		add("--containerd-mirror-chart-name is required")
+	} else if msgs := validation.IsDNS1123Label(c.MirrorChartName); len(msgs) > 0 {
+		add("--containerd-mirror-chart-name: %s", strings.Join(msgs, "; "))
+	}
+	if !chartVersionPattern.MatchString(c.MirrorChartVersion) {
+		add("--containerd-mirror-chart-version: %q is not a valid chart version", c.MirrorChartVersion)
 	}
 	switch c.ExtrasIngressController {
 	case "nginx", "traefik":

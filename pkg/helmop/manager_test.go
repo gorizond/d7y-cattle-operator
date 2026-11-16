@@ -13,6 +13,7 @@ func testCluster() Cluster {
 		MTLSSecretName:     "dragonfly-p2p-mtls",
 		Chart:              Chart{Repo: "https://charts.example.com", Name: "dragonfly", Version: "1.10.1-patch.2"},
 		ExtrasChart:        Chart{Repo: "https://charts.example.com", Name: "dragonfly-extras", Version: "0.1.8"},
+		MirrorChart:        Chart{Repo: "https://charts.example.com", Name: "containerd-mirror", Version: "0.1.0"},
 		ManagerGRPCDomain:  "grpc.example.com",
 		ManagerGRPCPort:    ManagerGRPCEdgePort,
 		ManagerAPIHost:     "api.example.com",

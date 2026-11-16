@@ -9,8 +9,8 @@ import (
 	"github.com/gorizond/d7y-cattle-operator/pkg/helmop"
 )
 
-// ensureSeed reconciles the control and data releases, plus nydus when
-// NydusEnabled is true. Replica counts stay Fleet templates and the scheduler
+// ensureSeed reconciles the control, data, and strict containerd-mirror
+// releases, plus nydus when NydusEnabled is true. Replica counts stay Fleet templates and the scheduler
 // cluster ID is read from the Cluster annotation; allocation is handled by
 // MR-3. Without an ID the seed releases are not created, while manager and
 // KeyDB reconciliation continues.
@@ -26,7 +26,10 @@ func (c *Controller) ensureSeed(cluster *provv1.Cluster, hc helmop.Cluster) (con
 	}
 
 	controlErr = c.applyHelmOp(cluster, helmop.Control(hc))
-	dataErr = c.applyHelmOp(cluster, helmop.Data(hc))
+	dataErr = errors.Join(
+		c.applyHelmOp(cluster, helmop.Data(hc)),
+		c.applyHelmOp(cluster, helmop.Mirror(hc)),
+	)
 	if c.opts.NydusEnabled {
 		nydusErr = c.applyHelmOp(cluster, helmop.Nydus(hc))
 		return controlErr, dataErr, nydusErr
@@ -42,8 +45,9 @@ func (c *Controller) ensureSeed(cluster *provv1.Cluster, hc helmop.Cluster) (con
 func (c *Controller) deleteSeed(cluster *provv1.Cluster) error {
 	var errs []error
 	for _, name := range []string{
-		helmop.ControlName(cluster.Name),
+		helmop.MirrorName(cluster.Name),
 		helmop.DataName(cluster.Name),
+		helmop.ControlName(cluster.Name),
 		helmop.NydusName(cluster.Name),
 	} {
 		if err := c.deleteHelmOp(cluster, name); err != nil {

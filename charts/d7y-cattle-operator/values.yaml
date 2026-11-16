@@ -74,6 +74,13 @@ extras:
     tlsSecret: ""
     traefikServersTransportEnabled: true
 
+# Strict node-local containerd registry mirror for seed/data clusters.
+containerdMirror:
+  chart:
+    repo: https://gorizond.github.io/d7y-cattle-operator
+    name: containerd-mirror
+    version: 0.1.0
+
 # nydus-snapshotter is deferred for the pilot: chart 0.0.10 targets containerd
 # 1.x and is incompatible with RKE2 containerd 2.2.
 nydus:

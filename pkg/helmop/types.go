@@ -13,8 +13,13 @@ const (
 	APIVersion = "fleet.cattle.io/v1alpha1"
 	Kind       = "HelmOp"
 
-	// TargetNamespace is where Fleet installs the charts on downstream clusters.
+	// TargetNamespace is where Fleet installs most charts on downstream clusters.
 	TargetNamespace = "dragonfly-system"
+
+	// MirrorTargetNamespace is where the node-local containerd mirror runs.
+	MirrorTargetNamespace = "kube-system"
+	MirrorPort            = 4001
+	MirrorCertsDir        = "/var/lib/rancher/rke2/agent/etc/containerd/certs.d"
 
 	ManagerGRPCPort = 65003
 	// ManagerGRPCEdgePort is the public gRPC port used by schedulers to reach
@@ -63,6 +68,7 @@ type Cluster struct {
 	MTLSSecretName     string
 	Chart              Chart
 	ExtrasChart        Chart
+	MirrorChart        Chart
 	ManagerGRPCDomain  string
 	ManagerGRPCPort    int
 	ManagerAPIHost     string
@@ -105,6 +111,9 @@ func NydusName(cluster string) string { return objectName(cluster, "nydus-snapsh
 // ExtrasName returns the dragonfly-extras HelmOp and release name.
 func ExtrasName(cluster string) string { return objectName(cluster, "extras") }
 
+// MirrorName returns the containerd-mirror HelmOp and release name.
+func MirrorName(cluster string) string { return objectName(cluster, "containerd-mirror") }
+
 // ManagerFullname returns the chart fullnameOverride that makes the Dragonfly
 // chart create the <cluster>-manager Service.
 func ManagerFullname(cluster string) string {
@@ -140,6 +149,10 @@ func objectName(cluster, suffix string) string {
 }
 
 func newHelmOp(name string, c Cluster, chart Chart, component string, values map[string]any, dependsOn []string) *fleetv1alpha1.HelmOp {
+	return newHelmOpInNamespace(name, TargetNamespace, c, chart, component, values, dependsOn)
+}
+
+func newHelmOpInNamespace(name, targetNamespace string, c Cluster, chart Chart, component string, values map[string]any, dependsOn []string) *fleetv1alpha1.HelmOp {
 	labels := make(map[string]string, len(c.Labels)+1)
 	for key, value := range c.Labels {
 		labels[key] = value
@@ -154,7 +167,7 @@ func newHelmOp(name string, c Cluster, chart Chart, component string, values map
 			Labels:    labels,
 		},
 	}
-	op.Spec.TargetNamespace = TargetNamespace
+	op.Spec.TargetNamespace = targetNamespace
 	op.Spec.Helm = &fleetv1alpha1.HelmOptions{
 		Repo:        chart.Repo,
 		Chart:       chart.Name,

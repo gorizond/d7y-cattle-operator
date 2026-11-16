@@ -27,7 +27,7 @@ func TestReconcileSeedCreatesHelmOps(t *testing.T) {
 		t.Errorf("events = %+v, want none", events.events)
 	}
 
-	for _, name := range []string{"c1-keydb", "c1-control", "c1-data", "c1-nydus-snapshotter"} {
+	for _, name := range []string{"c1-keydb", "c1-control", "c1-data", "c1-containerd-mirror", "c1-nydus-snapshotter"} {
 		if !store.has("fleet-default/" + name) {
 			t.Errorf("%s HelmOp was not created", name)
 		}
@@ -44,6 +44,10 @@ func TestReconcileSeedCreatesHelmOps(t *testing.T) {
 	nydus := store.object("fleet-default/c1-nydus-snapshotter")
 	if got := dependsOn(nydus); len(got) != 1 || got[0] != "c1-keydb" {
 		t.Errorf("nydus dependsOn = %v", got)
+	}
+	mirror := store.object("fleet-default/c1-containerd-mirror")
+	if got := dependsOn(mirror); len(got) != 1 || got[0] != "c1-data" {
+		t.Errorf("mirror dependsOn = %v", got)
 	}
 
 	values := helmValues(t, data)
@@ -72,7 +76,7 @@ func TestReconcileSeedRemovalAndLabelRemoval(t *testing.T) {
 	if got := cluster.Annotations[AnnotationSchedulerClusterID]; got != "42" {
 		t.Errorf("scheduler cluster ID annotation = %q after seed removal, want 42", got)
 	}
-	for _, name := range []string{"c1-control", "c1-data", "c1-nydus-snapshotter"} {
+	for _, name := range []string{"c1-control", "c1-data", "c1-containerd-mirror", "c1-nydus-snapshotter"} {
 		if store.has("fleet-default/" + name) {
 			t.Errorf("%s was not deleted when the seed role was removed", name)
 		}
@@ -102,7 +106,7 @@ func TestReconcileSeedDefersNydus(t *testing.T) {
 	if len(events.events) != 0 {
 		t.Errorf("events = %+v, want none", events.events)
 	}
-	for _, name := range []string{"c1-keydb", "c1-control", "c1-data"} {
+	for _, name := range []string{"c1-keydb", "c1-control", "c1-data", "c1-containerd-mirror"} {
 		if !store.has("fleet-default/" + name) {
 			t.Errorf("%s HelmOp was not created", name)
 		}
@@ -166,6 +170,7 @@ func newTestController(t *testing.T) (*Controller, *fakeHelmOpStore, *fakeEventS
 			Resolver:                 &fakeResolver{ips: []string{"203.0.113.10"}},
 			DragonflyChart:           helmop.Chart{Repo: "https://charts.example.com", Name: "dragonfly", Version: "1.10.1-patch.2"},
 			ExtrasChart:              helmop.Chart{Repo: "https://charts.example.com", Name: "dragonfly-extras", Version: "0.1.8"},
+			MirrorChart:              helmop.Chart{Repo: "https://charts.example.com", Name: "containerd-mirror", Version: "0.1.0"},
 			ExtrasIngressController:  "nginx",
 			ExtrasIngressGRPCEnabled: true,
 			ExtrasIngressRESTEnabled: true,
