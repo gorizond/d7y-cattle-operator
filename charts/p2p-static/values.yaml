@@ -25,9 +25,15 @@ ingress:
           pathType: Prefix
   tls: []
 
-# The /bin directory is populated externally (GitOps, an init job, or a
-# pre-populated existingClaim). The chart never ships binaries and creates no
-# PVC by default.
+# Host dfdaemon bootstrap is installed by p2p-install.sh. A host-only systemd
+# timer (30s) disables it while the in-cluster client pod on the node is
+# running, and re-enables it if the pod disappears. No chart value is needed
+# and no in-cluster switch DaemonSet is rendered.
+#
+# The /bin and /nydus directories are populated externally (GitOps, an init
+# job, or a pre-populated existingClaim). /nydus/<version>/ is preferred by the
+# host updater; /bin/ is the legacy fallback. The chart never ships binaries
+# and creates no PVC by default.
 static:
   existingClaim: ""
   sizeLimit: ""

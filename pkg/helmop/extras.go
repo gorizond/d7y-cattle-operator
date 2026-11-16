@@ -24,7 +24,6 @@ type ExtrasOptions struct {
 	// its REST Ingress annotation.
 	TraefikServersTransportEnabled bool
 	VPAEnabled                     bool
-	NydusEnabled                   bool
 	Manager                        bool
 	Seed                           bool
 	// SchedulerPublicEnabled renders the Traefik TCP passthrough front for the
@@ -100,7 +99,6 @@ func Extras(c Cluster, opts ExtrasOptions) *fleetv1alpha1.HelmOp {
 				"manager": vpaTarget(opts.Manager, "Deployment", ManagerName(c.Name)),
 				"control": vpaTarget(opts.Seed, "StatefulSet", SchedulerServiceName(c.Name)),
 				"data":    vpaTarget(opts.Seed, "StatefulSet", DataName(c.Name)+"-seed-client"),
-				"nydus":   vpaTarget(opts.Seed && opts.NydusEnabled, "DaemonSet", NydusName(c.Name)),
 			},
 		},
 	}

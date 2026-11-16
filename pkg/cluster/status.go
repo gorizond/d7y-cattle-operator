@@ -13,7 +13,6 @@ const (
 	conditionKeyDBReady         condition.Cond = "d7y.io/KeyDBReady"
 	conditionControlReady       condition.Cond = "d7y.io/ControlReady"
 	conditionDataReady          condition.Cond = "d7y.io/DataReady"
-	conditionNydusReady         condition.Cond = "d7y.io/NydusReady"
 	conditionRegistered         condition.Cond = "d7y.io/Registered"
 	conditionRegistrationFailed condition.Cond = "d7y.io/RegistrationFailed"
 	conditionRetrying           condition.Cond = "d7y.io/Retrying"
@@ -83,22 +82,16 @@ func (s *statusBuilder) managedDisabled(reason, message string) {
 	s.seedDisabled()
 }
 
-func (s *statusBuilder) nydusDeferred() {
-	s.set(conditionNydusReady, false, "NydusDeferred",
-		"nydus is disabled; the custom containerd 2.2 chart is available, enable it after a one-node pilot")
-}
-
 func (s *statusBuilder) seedUnavailable(reason, message string) {
 	s.set(conditionControlReady, false, reason, message)
 	s.set(conditionDataReady, false, reason, message)
-	s.set(conditionNydusReady, false, reason, message)
 }
 
 func hasManagedStatus(cluster *provv1.Cluster) bool {
 	for _, cond := range cluster.Status.Conditions {
 		switch condition.Cond(cond.Type) {
 		case conditionRolesResolved, conditionKeyDBReady, conditionControlReady,
-			conditionDataReady, conditionNydusReady, conditionRegistered,
+			conditionDataReady, conditionRegistered,
 			conditionRegistrationFailed, conditionRetrying, conditionIDMismatch:
 			return true
 		}

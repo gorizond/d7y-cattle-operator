@@ -16,7 +16,6 @@ import (
 
 func TestReconcileSetsRoleConditions(t *testing.T) {
 	controller, _, _ := newTestController(t)
-	controller.opts.NydusEnabled = true
 	clusterStore := controller.clusters.(*fakeClusterStore)
 	clusterStore.set(testSeedCluster("42"))
 
@@ -27,7 +26,7 @@ func TestReconcileSetsRoleConditions(t *testing.T) {
 	for _, name := range []string{
 		string(conditionRolesResolved), string(conditionKeyDBReady),
 		string(conditionControlReady), string(conditionDataReady),
-		string(conditionNydusReady), string(conditionRegistered),
+		string(conditionRegistered),
 	} {
 		if got := clusterStore.condition(name); got == nil || got.Status != corev1.ConditionTrue {
 			t.Errorf("%s condition = %+v, want True", name, got)
@@ -68,7 +67,7 @@ func TestReconcileLabelOnlyClusterConditions(t *testing.T) {
 		t.Errorf("KeyDBReady = %+v, want True", got)
 	}
 	for _, name := range []string{
-		string(conditionControlReady), string(conditionDataReady), string(conditionNydusReady),
+		string(conditionControlReady), string(conditionDataReady),
 	} {
 		if got := clusterStore.condition(name); got == nil || got.Status != corev1.ConditionFalse {
 			t.Errorf("%s = %+v, want False", name, got)
@@ -111,7 +110,7 @@ func TestSeedDisabledClearsSeedConditions(t *testing.T) {
 	}
 
 	for _, name := range []string{
-		string(conditionControlReady), string(conditionDataReady), string(conditionNydusReady),
+		string(conditionControlReady), string(conditionDataReady),
 	} {
 		if got := clusterStore.condition(name); got == nil || got.Status != corev1.ConditionFalse || got.Reason != "SeedDisabled" {
 			t.Errorf("%s = %+v, want False/SeedDisabled", name, got)
@@ -160,7 +159,7 @@ func TestRegistrationFailureSetsSeedConditions(t *testing.T) {
 		t.Errorf("KeyDBReady = %+v, want True", got)
 	}
 	for _, name := range []string{
-		string(conditionControlReady), string(conditionDataReady), string(conditionNydusReady),
+		string(conditionControlReady), string(conditionDataReady),
 	} {
 		if got := clusterStore.condition(name); got == nil || got.Status != corev1.ConditionFalse || got.Reason != "RegistrationFailed" {
 			t.Errorf("%s = %+v, want False/RegistrationFailed", name, got)
@@ -225,7 +224,7 @@ func TestStatusUpdateErrorIsReturned(t *testing.T) {
 func TestOperatorConditionTypesAreNamespaced(t *testing.T) {
 	for _, cond := range []condition.Cond{
 		conditionRolesResolved, conditionKeyDBReady, conditionControlReady,
-		conditionDataReady, conditionNydusReady, conditionRegistered,
+		conditionDataReady, conditionRegistered,
 		conditionRegistrationFailed, conditionRetrying, conditionIDMismatch,
 	} {
 		if !strings.HasPrefix(string(cond), "d7y.io/") {

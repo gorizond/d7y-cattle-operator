@@ -10,19 +10,19 @@ import (
 )
 
 // ensureSeed reconciles the control, data, and strict containerd-mirror
-// releases, plus nydus when NydusEnabled is true. Replica counts stay Fleet templates and the scheduler
-// cluster ID is read from the Cluster annotation; allocation is handled by
-// MR-3. Without an ID the seed releases are not created, while manager and
-// KeyDB reconciliation continues.
+// releases. Replica counts stay Fleet templates and the scheduler cluster ID is
+// read from the Cluster annotation; allocation is handled by MR-3. Without an
+// ID the seed releases are not created, while manager and KeyDB reconciliation
+// continues.
 //
 // Each error is returned separately so the controller can report a precise
-// ControlReady/DataReady/NydusReady condition. Nydus is deferred by default and
-// any nydus error is intentionally not returned unless NydusEnabled is true.
-func (c *Controller) ensureSeed(cluster *provv1.Cluster, hc helmop.Cluster) (controlErr, dataErr, nydusErr error) {
+// ControlReady/DataReady condition. The nydus snapshotter is installed on the
+// node by p2p-install.sh and is not part of the seed releases.
+func (c *Controller) ensureSeed(cluster *provv1.Cluster, hc helmop.Cluster) (controlErr, dataErr error) {
 	if hc.SchedulerClusterID == 0 {
 		c.event(cluster, corev1.EventTypeWarning, "SchedulerClusterIDMissing",
 			"seed role is enabled but annotation "+AnnotationSchedulerClusterID+" is missing or not a positive integer")
-		return nil, nil, nil
+		return nil, nil
 	}
 
 	controlErr = c.applyHelmOp(cluster, helmop.Control(hc))
@@ -30,14 +30,12 @@ func (c *Controller) ensureSeed(cluster *provv1.Cluster, hc helmop.Cluster) (con
 		c.applyHelmOp(cluster, helmop.Data(hc)),
 		c.applyHelmOp(cluster, helmop.Mirror(hc)),
 	)
-	if c.opts.NydusEnabled {
-		nydusErr = c.applyHelmOp(cluster, helmop.Nydus(hc))
-		return controlErr, dataErr, nydusErr
+	// Nydus is host-only now. Delete the release left by older operator
+	// versions so the in-cluster DaemonSet does not compete with the host unit.
+	if err := c.deleteHelmOp(cluster, helmop.LegacyNydusName(cluster.Name)); err != nil {
+		c.event(cluster, corev1.EventTypeWarning, "LegacyNydusCleanupFailed", err.Error())
 	}
-	if err := c.deleteHelmOp(cluster, helmop.NydusName(cluster.Name)); err != nil {
-		c.event(cluster, corev1.EventTypeWarning, "NydusCleanupFailed", err.Error())
-	}
-	return controlErr, dataErr, nil
+	return controlErr, dataErr
 }
 
 // deleteSeed removes all seed releases. The scheduler-cluster-id annotation is
@@ -48,7 +46,7 @@ func (c *Controller) deleteSeed(cluster *provv1.Cluster) error {
 		helmop.MirrorName(cluster.Name),
 		helmop.DataName(cluster.Name),
 		helmop.ControlName(cluster.Name),
-		helmop.NydusName(cluster.Name),
+		helmop.LegacyNydusName(cluster.Name),
 	} {
 		if err := c.deleteHelmOp(cluster, name); err != nil {
 			errs = append(errs, err)

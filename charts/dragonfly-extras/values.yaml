@@ -63,7 +63,6 @@ scheduler:
 #   manager Deployment    <cluster>-manager
 #   control StatefulSet   <cluster>-control-scheduler
 #   data    StatefulSet   <cluster>-data-seed-client
-#   nydus   DaemonSet     <cluster>-nydus-snapshotter
 vpa:
   enabled: false
   namespace: dragonfly-system
@@ -84,8 +83,4 @@ vpa:
     data:
       enabled: false
       kind: StatefulSet
-      name: ""
-    nydus:
-      enabled: false
-      kind: DaemonSet
       name: ""

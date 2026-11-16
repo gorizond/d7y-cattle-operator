@@ -31,8 +31,9 @@ Live envtest/pilot verification remains deferred.
   adds TLS flags to the manager/scheduler `grpc_health_probe` commands, and
   keeps the scheduler headless Service upstream-shaped.
 - Deploys the seed role (scheduler/control, seedClient+client/data) when
-  `p2p.dragonfly.io/seed: "true"` and a scheduler cluster ID is present. The
-  nydus-snapshotter release is deferred by default (`nydus.enabled=false`).
+  `p2p.dragonfly.io/seed: "true"` and a scheduler cluster ID is present. Nydus
+  is host-only: `p2p-install.sh` installs and supervises it on the node; the
+  operator creates no nydus DaemonSet or HelmOp.
 - Manages the manager Ingresses, the public scheduler TCP front, and optional
   VPAs through the separate `<cluster>-extras` HelmOp and the
   `dragonfly-extras` chart. The operator has no Ingress, IngressRouteTCP, or
@@ -45,8 +46,8 @@ Live envtest/pilot verification remains deferred.
   Missing records are recreated and relinked on every reconcile.
 - Publishes role/registration state as Cluster conditions
   (`d7y.io/RolesResolved`, `d7y.io/KeyDBReady`, `d7y.io/ControlReady`,
-  `d7y.io/DataReady`, `d7y.io/NydusReady`, `d7y.io/Registered`) and updates
-  them only when they change.
+  `d7y.io/DataReady`, `d7y.io/Registered`) and updates them only when they
+  change.
 - Runs until it receives `SIGINT`/`SIGTERM`.
 
 ## Follow-ups
@@ -113,14 +114,13 @@ not used until the p2p-static and registration MRs.
 | `extras.ingress.restEnabled` | `EXTRAS_INGRESS_REST_ENABLED` | Render the REST Ingress when the manager role is active; default `true` |
 | `extras.ingress.tlsSecret` | `EXTRAS_INGRESS_TLS_SECRET` | Ingress TLS Secret; empty disables the TLS block |
 | `extras.ingress.traefikServersTransportEnabled` | `EXTRAS_TRAEFIK_SERVERS_TRANSPORT_ENABLED` | Render the REST Traefik `ServersTransport`; default `true` |
-| `nydus.enabled` | `NYDUS_ENABLED` | Deploy the nydus-snapshotter HelmOp; default `false` (deferred) |
 
 Defaults: `mtlsSecretName=dragonfly-p2p-mtls`, `dragonfly.chart.name=dragonfly`,
 `dragonfly.chart.repo=https://gorizond.github.io/dragonflyoss-helm-charts`,
 `dragonfly.chart.version=1.10.1-patch.2`, `extras.chart.name=dragonfly-extras`,
 `extras.chart.version=0.1.8`, `extras.ingress.controller=nginx`,
 `extras.ingress.grpcEnabled=true`, `extras.ingress.restEnabled=true`,
-`manager.grpcPort=443`, `nydus.enabled=false`, `webhook.port=9443`,
+`manager.grpcPort=443`, `webhook.port=9443`,
 `leaderElect=false`. The public scheduler IP(s) are resolved from DNS at
 reconcile time; there is no scheduler IP value. `scheduler.domain` has no
 default and is required. `scheduler.clusterID` is only a fallback for an
@@ -135,8 +135,8 @@ annotations add the Dragonfly releases:
 |---|---|
 | label only | `<cluster>-keydb`, `<cluster>-extras` (KeyDB VPA only) |
 | `manager: "true"` | KeyDB, `<cluster>-manager`, `<cluster>-extras` (Ingress + VPAs) |
-| `seed: "true"` + scheduler ID | KeyDB, `<cluster>-control`, `<cluster>-data`, `<cluster>-extras` (VPAs); adds `<cluster>-nydus-snapshotter` only when `nydus.enabled=true` |
-| manager + seed | manager, control, data, extras; nydus only when `nydus.enabled=true` |
+| `seed: "true"` + scheduler ID | KeyDB, `<cluster>-control`, `<cluster>-data`, `<cluster>-extras` (VPAs) |
+| manager + seed | manager, control, data, extras |
 | `seed: "true"` without scheduler ID | KeyDB + extras (KeyDB VPA); `SchedulerClusterIDMissing` event, no seed releases |
 
 ### Pilot data resource sizing
@@ -161,9 +161,9 @@ hostNetwork ports 4100-4106 force the three replicas onto distinct nodes at
 runtime.
 
 The operator requires Rancher 2.15+ with Fleet 0.16+ (the `HelmOp` CRD).
-The KeyDB chart (`enapter/keydb` `0.48.0`) and nydus-snapshotter chart
-(`0.0.10`) are pinned in the operator; KeyDB is external and is not published
-from this module. The KeyDB HelmOp runs two active masters (`nodes: 2`,
+The KeyDB chart (`enapter/keydb` `0.48.0`) is pinned in the operator; KeyDB is
+external and is not published from this module. Nydus binaries are installed by
+`p2p-install.sh`, not by an in-cluster chart. The KeyDB HelmOp runs two active masters (`nodes: 2`,
 `multiMaster: "yes"`, `activeReplicas: "yes"`) with `persistentVolume.enabled:
 false`, so it uses emptyDir and creates no PVC. The chart exposes the service as
 `<cluster>-keydb:6379`.
@@ -179,16 +179,14 @@ only when the value, reason, or message changes:
 | `d7y.io/KeyDBReady` | The `<cluster>-keydb` HelmOp was applied. |
 | `d7y.io/ControlReady` | The seed scheduler HelmOp was applied (`seed: "true"`). |
 | `d7y.io/DataReady` | The seedClient/client HelmOp was applied (`seed: "true"`). |
-| `d7y.io/NydusReady` | The nydus-snapshotter HelmOp was applied (`seed: "true"` and `nydus.enabled=true`). |
 | `d7y.io/Registered` | Scheduler and seed-peer records were ensured and linked in the manager. |
 | `d7y.io/RegistrationFailed` | Registration failed permanently; `d7y.io/Retrying` marks transient failures. |
 | `d7y.io/IdMismatch` | The user-provided `scheduler-cluster-id` differs from the manager server ID; the annotation is preserved. |
 
-A label-only Cluster reports `d7y.io/ControlReady=False`, `d7y.io/DataReady=False`, and
-`d7y.io/NydusReady=False` with reason `SeedDisabled`; a seed Cluster whose mTLS Secret
-is missing reports `MTLSSecretUnavailable`. When nydus is disabled, a healthy seed
-Cluster reports `d7y.io/NydusReady=False` with reason `NydusDeferred`. Conditions
-never contain Secret values or certificate material.
+A label-only Cluster reports `d7y.io/ControlReady=False` and
+`d7y.io/DataReady=False` with reason `SeedDisabled`; a seed Cluster whose mTLS
+Secret is missing reports `MTLSSecretUnavailable`. Conditions never contain
+Secret values or certificate material.
 
 ### Dragonfly chart version
 
@@ -267,15 +265,23 @@ yet:
 - It preflights the manager gRPC endpoint and the public scheduler host
   (DNS/TCP, short timeout).
 - If scheduler/DNS/manager preflight fails, or dfdaemon/nydus download/startup
-  fails, it writes an overlayfs-only direct-registry containerd template and
-  exits success. It does not write/enable the `127.0.0.1:4001` nydus mirror or
-  the dfdaemon/nydus bootstrap services in that path.
+  fails, it removes the nydus containerd drop-in (containerd 2.x) or writes an
+  overlayfs-only direct-registry template (1.x) and exits success. It does not
+  enable the `127.0.0.1:4001` nydus proxy or the bootstrap services in that
+  path.
 - Existing certificate/config files are preserved, but no P2P services are
   enabled. A later successful run (or an existing seed cluster) installs the
   full public-P2P configuration.
-- Nydus remains deferred: the script starts `containerd-nydus-grpc` with CLI
-  flags and does not set `enable_oci_tar` (absent in nydus-snapshotter 0.9.0 /
-  chart 0.0.10).
+- Nydus is installed on the host from pinned `v0.16.0` assets
+  (`containerd-nydus-grpc`, `nydusd`, `nydus-image`, `nydus-overlayfs`) and is
+  the global CRI snapshotter. `enable_oci_tar` is not set (it is not a nydus
+  field). A daily host timer runs `nydus-updater` to refresh the assets and
+  restart the host unit only when something changed.
+- Host `dfdaemon-bootstrap` is the cold-start P2P client. A boot helper starts
+  it before RKE2 even if the switch disabled it at the previous shutdown; a
+  30s host timer detects the node's in-cluster `client` pod via `crictl` and
+  disables the host bootstrap while the pod is running. If the pod disappears,
+  the timer re-enables the host bootstrap. The switch never touches nydus.
 
 Certificate rotation is controlled by a pod template annotation:
 `p2p.dragonfly.io/cert-revision` is the SHA-256 of `tls.crt`. It is added to
@@ -312,9 +318,9 @@ DaemonSets may run on the same node, seedClient ports are shifted to
 `4100–4106` so they do not collide with client `4000–4006`.
 
 All releases target `dragonfly-system` and depend on each other through
-`spec.dependsOn`: control depends on KeyDB, data depends on control, KeyDB, and extras (which owns the public scheduler TCP front),
-manager depends on KeyDB, nydus (when enabled) depends on KeyDB, and extras
-depends on manager when Ingress is enabled. The mTLS Secret is copied into the
+`spec.dependsOn`: control depends on KeyDB, data depends on control, KeyDB, and
+extras (which owns the public scheduler TCP front), manager depends on KeyDB,
+and extras depends on manager when Ingress is enabled. The mTLS Secret is copied into the
 Cluster namespace and delivered downstream through Fleet
 `spec.downstreamResources`.
 
@@ -387,9 +393,8 @@ HelmOp:
 - `vpa.enabled` is set from API discovery for `autoscaling.k8s.io/v1`; the
   chart additionally checks `Capabilities.APIVersions.Has`. Target names are
   `<cluster>-keydb`, `<cluster>-manager`, `<cluster>-control-scheduler`,
-  `<cluster>-data-seed-client`, and `<cluster>-nydus-snapshotter`; each target
-  is enabled only for its active role, and `nydus` additionally requires
-  `nydus.enabled=true`.
+  and `<cluster>-data-seed-client`; each target is enabled only for its active
+  role. Nydus is host-only and has no VPA target.
 - The chart creates no PVC. The operator creates and replicates the mTLS
   Secret; the chart no longer renders a CA-only Secret. The operator RBAC
   remains limited to Clusters, HelmOps, Secrets, and Events.
@@ -401,7 +406,7 @@ The operator only acts on Clusters labeled `p2p-dragonfly-io: "true"`.
 | Annotation | Value | Effect |
 |---|---|---|
 | `p2p.dragonfly.io/manager` | `"true"` | Manager role: manager and its database, KeyDB as external Redis |
-| `p2p.dragonfly.io/seed` | `"true"` | Seed role: scheduler, seed client/client, nydus-snapshotter |
+| `p2p.dragonfly.io/seed` | `"true"` | Seed role: scheduler, seed client/client (nydus runs on the host) |
 | `p2p.dragonfly.io/scheduler-cluster-id` | integer | Scheduler cluster ID; required by the seed role until MR-3 auto-allocates it |
 | `p2p.dragonfly.io/scheduler-replicas` | integer | Scheduler replicas (default `1`) |
 | `p2p.dragonfly.io/seedclient-replicas` | integer | Seed client replicas (default `1`) |
@@ -456,16 +461,18 @@ writes the server-assigned ID to `scheduler-cluster-id` plus the durable
 loss; if the marker is absent or different, the ID is user-owned and is never
 overwritten (`d7y.io/IdMismatch` on server mismatch). This decision survives operator
 restarts. Registration failures set `d7y.io/RegistrationFailed` or `d7y.io/Retrying` and block
-control/data (and nydus when enabled) without blocking manager/KeyDB.
+control/data without blocking manager/KeyDB.
 
 ## Bootstrap static chart
 
-`charts/p2p-static` serves `/p2p-install.sh` and `/bin/` through Nginx. The
-bootstrap payload is a base64url **env-file** (no JSON, no `jq`, no python on the
-node). Containerd keeps **overlayfs as the global snapshotter**. Nydus is
-deferred for the pilot, so do **not** set `machineGlobalConfig.snapshotter:
-nydus` and do not rely on `runtimeClass: nydus`. See `charts/p2p-static/README.md`
-for values, payload keys, containerd templates, and pilot risks.
+`charts/p2p-static` serves `/p2p-install.sh` and the static asset volume through
+Nginx. The bootstrap payload is a base64url **env-file** (no JSON, no `jq`, no
+python on the node). The script installs the host-only nydus snapshotter
+(`v0.16.0`, including `nydus-overlayfs`), writes the global nydus containerd
+drop-in `config-v3.toml.d/90-nydus.toml`, starts it before RKE2, and installs a
+daily host updater. There is no in-cluster nydus DaemonSet or HelmOp. See
+`charts/p2p-static/README.md` for values, payload keys, drop-ins, and pilot
+risks.
 
 ## Admission webhook
 
@@ -551,25 +558,26 @@ which are long-standing CRD fields. The REST `ServersTransport` continues to
 use the verified `serverstransports.traefik.io` schema; a Traefik downgrade
 that predates those fields would affect REST only.
 
-## Known pilot risk: nydus-snapshotter deferred
+## Known pilot risk: host-only nydus
 
-The nydus-snapshotter HelmOp is deferred for the pilot and is not rendered or
-applied by default (`nydus.enabled=false`, `NYDUS_ENABLED=false`). Chart 0.0.10
-targets containerd 1.x and is incompatible with RKE2 containerd 2.2; there is
-no containerd-2.x-compatible snapshotter chart path yet. Do not add
-`enable_oci_tar` (absent in nydus-snapshotter v0.9.0) and do not add
-`snapshotter.config.daemon` (chart 0.0.10 has no such value). When the role is
-enabled for a compatible pilot, chart 0.0.10 still ignores `hostSocket`,
-`initContainer.command`/`privileged`, and `runtimeClass`, so the socket and
-runtime-class gap needs a chart patch or fork first. Ordinary-OCI Zran is not
-claimed.
+Nydus runs only on the host, installed by `p2p-install.sh`; the operator no
+longer creates a nydus chart, DaemonSet, HelmOp, RuntimeClass, or VPA. The
+script installs pinned `v0.16.0` binaries (including `nydus-overlayfs`), writes
+`/etc/nydus/config.toml` (multiple/fusedev, `enable_referrer_detect`/
+`enable_index_detect`, no tarfs), the registry-backend
+`nydusd-config.json`, and the global containerd drop-in. It starts the host unit
+before RKE2 and runs a daily updater for the binaries. Do not add
+`enable_oci_tar` (it is not a nydus field). Pilot must verify the drop-in merge
+with `containerd config dump`, the v0.16.0 unit flags, and the host restart
+procedure. Tarfs is intentionally disabled; enabling it requires kernel >= 6.4
+and a matching nydusd. Ordinary-OCI Zran is not claimed.
 
 ## MR roadmap
 
 | MR | Scope | Status |
 |---|---|---|
 | MR-1 | Scaffold, PKI, mTLS Secret, chart/CI skeleton | merged |
-| MR-2 | KeyDB, manager, control, data, nydus, extras HelmOps | merged |
+| MR-2 | KeyDB, manager, control, data, extras HelmOps | merged |
 | MR-3 | Scheduler ID allocation, manager REST client, registration | merged |
 | MR-4a | `p2p-static` chart and bootstrap payload | merged |
 | MR-4b | CREATE-only admission webhook and userData injection | merged |
