@@ -32,12 +32,13 @@ spec:
           args:
             - |
               set -eu
+              # Steady state writes only the supported hosts files. Remove
+              # legacy registry dirs with the one-time cleanup migration.
               mkdir -p /host-certs/_default /host-certs/docker.io /host-certs/index.docker.io
               cp /config/_default /host-certs/_default/hosts.toml
               cp /config/docker.io /host-certs/docker.io/hosts.toml
               cp /config/index.docker.io /host-certs/index.docker.io/hosts.toml
-              rm -rf /host-certs/cr.yandex /host-certs/ghcr.io /host-certs/quay.io /host-certs/gcr.io /host-certs/mcr.microsoft.com /host-certs/registry.k8s.io /host-certs/registry.gitlab.com
-              exec sleep 2147483647
+              exec sleep infinity
           volumeMounts:
             - name: config
               mountPath: /config
