@@ -47,6 +47,26 @@ grep -q 'host: "proxy.example.com"' "$tmp/proxy.yaml" || fail "proxy Ingress hos
 grep -q 'path: /proxy' "$tmp/proxy.yaml" || fail "proxy Ingress path is missing"
 grep -q 'secretName: poligon-harbor-tls' "$tmp/proxy.yaml" || fail "proxy Ingress TLS Secret is missing"
 grep -q 'base_path: "/proxy"' "$tmp/proxy.yaml" || fail "proxy config base_path is missing"
+helm template registry-proxy "$chart" --namespace dragonfly-system \
+  --set ingress.enabled=true --set ingress.host=proxy.example.com \
+  --show-only templates/configmap.yaml | grep -q 'base_path: ""' || \
+  fail "proxy default empty base_path is missing"
+helm template registry-proxy "$chart" --namespace dragonfly-system \
+  --set ingress.enabled=true --set ingress.host=proxy.example.com \
+  --show-only templates/ingress.yaml | grep -q 'path: /$' || \
+  fail "proxy default root Ingress path is missing"
+if grep -q 'kind: Certificate' "$tmp/proxy.yaml"; then
+  fail "proxy Certificate is rendered by default"
+fi
+helm template registry-proxy "$chart" --namespace dragonfly-system \
+  --set ingress.enabled=true --set ingress.host=proxy.example.com \
+  --set ingress.tlsSecret=poligon-proxy-tls --set certificate.enabled=true \
+  --show-only templates/certificate.yaml >"$tmp/certificate.yaml"
+grep -q 'kind: Certificate' "$tmp/certificate.yaml" || fail "proxy Certificate is missing"
+grep -q 'secretName: "poligon-proxy-tls"' "$tmp/certificate.yaml" || fail "Certificate secretName is missing"
+grep -q -- '- "proxy.example.com"' "$tmp/certificate.yaml" || fail "Certificate dnsNames is missing"
+grep -q 'name: "letsencrypt-prod"' "$tmp/certificate.yaml" || fail "Certificate issuer name is missing"
+grep -q 'kind: "ClusterIssuer"' "$tmp/certificate.yaml" || fail "Certificate issuer kind is missing"
 grep -q 'address: "http://c1-registry-proxy.dragonfly-system.svc:8080/api/convert"' "$tmp/proxy.yaml" || \
   fail "proxy config webhook address is missing"
 grep -q 'ip: "10.43.0.10"' "$tmp/proxy.yaml" || fail "proxy hostAliases IP is missing"

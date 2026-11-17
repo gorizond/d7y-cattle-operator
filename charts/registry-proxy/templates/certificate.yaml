@@ -1,0 +1,17 @@
+{{- if .Values.certificate.enabled }}
+apiVersion: cert-manager.io/v1
+kind: Certificate
+metadata:
+  name: {{ .Release.Name }}
+  namespace: {{ .Release.Namespace }}
+  labels:
+    {{- include "registry-proxy.labels" . | nindent 4 }}
+spec:
+  secretName: {{ required "ingress.tlsSecret is required when certificate.enabled" .Values.ingress.tlsSecret | quote }}
+  dnsNames:
+    - {{ required "ingress.host is required when certificate.enabled" .Values.ingress.host | quote }}
+  issuerRef:
+    name: {{ .Values.certificate.issuerRef.name | quote }}
+    kind: {{ .Values.certificate.issuerRef.kind | quote }}
+    group: {{ .Values.certificate.issuerRef.group | quote }}
+{{- end }}

@@ -17,8 +17,8 @@ func TestConverterVerifiesAndMovesIndex(t *testing.T) {
 		SchemaVersion: 2,
 		MediaType:     ociIndexType,
 		Manifests: []indexDescriptor{
-			{MediaType: ociManifestType, Digest: "sha256:oci", Platform: &indexPlatform{OS: "linux", Architecture: "amd64"}},
-			{MediaType: ociManifestType, Digest: "sha256:nydus", ArtifactType: nydusArtifactType, Platform: &indexPlatform{OS: "linux", Architecture: "amd64"}},
+			{MediaType: ociManifestType, Digest: "sha256:oci", Size: 1234, Platform: &indexPlatform{OS: "linux", Architecture: "amd64"}},
+			{MediaType: ociManifestType, Digest: "sha256:nydus", Size: 5678, ArtifactType: nydusArtifactType, Platform: &indexPlatform{OS: "linux", Architecture: "amd64"}},
 		},
 	}
 	indexBody, _ := json.Marshal(index)
@@ -51,6 +51,10 @@ func TestConverterVerifiesAndMovesIndex(t *testing.T) {
 	}
 	if movedIndex.Manifests[0].MediaType != ociManifestType || movedIndex.Manifests[1].ArtifactType != nydusArtifactType {
 		t.Errorf("index order/artifact = %+v", movedIndex.Manifests)
+	}
+	if movedIndex.Manifests[0].Size != 1234 || movedIndex.Manifests[1].Size != 5678 {
+		t.Errorf("index descriptor sizes = %d/%d, want 1234/5678",
+			movedIndex.Manifests[0].Size, movedIndex.Manifests[1].Size)
 	}
 }
 
