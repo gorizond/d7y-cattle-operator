@@ -7,7 +7,7 @@ serviceAccount:
 image:
   # Same image as the operator: it contains /registry-proxy.
   repository: ghcr.io/gorizond/d7y-cattle-operator
-  tag: v0.1.28
+  tag: v0.1.30
   pullPolicy: IfNotPresent
 
 command:
@@ -31,7 +31,8 @@ registry:
 
 proxy:
   publicURL: ""
-  basePath: /proxy
+  # Optional path prefix (for example /proxy); empty serves the domain root.
+  basePath: ""
   # Extra /etc/hosts entries for the proxy pod, for example a same-cluster
   # Harbor reachable only through the Traefik ClusterIP.
   hostAliases: []
@@ -66,6 +67,15 @@ ingress:
   path: /
   tlsSecret: ""
   annotations: {}
+
+# Optional cert-manager Certificate for the proxy Ingress. The referenced
+# issuer is expected to use an HTTP01 solver.
+certificate:
+  enabled: false
+  issuerRef:
+    name: letsencrypt-prod
+    kind: ClusterIssuer
+    group: cert-manager.io
 
 resources:
   requests:

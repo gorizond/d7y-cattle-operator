@@ -89,7 +89,7 @@ func TestRegistryProxyHelmOp(t *testing.T) {
 	if op.Name != "c1-registry-proxy" || op.Spec.TargetNamespace != TargetNamespace {
 		t.Errorf("name/target namespace = %s/%s", op.Name, op.Spec.TargetNamespace)
 	}
-	if op.Spec.Helm.Chart != "registry-proxy" || op.Spec.Helm.Version != "0.1.7" {
+	if op.Spec.Helm.Chart != "registry-proxy" || op.Spec.Helm.Version != "0.1.9" {
 		t.Errorf("chart = %s %s", op.Spec.Helm.Chart, op.Spec.Helm.Version)
 	}
 	if len(op.Spec.DependsOn) != 1 || op.Spec.DependsOn[0].Name != "c1-harbor" {
@@ -154,5 +154,24 @@ func TestRegistryProxyExternalHarborHasNoHarborDependency(t *testing.T) {
 	}
 	if got := valueAt(t, op.Spec.Helm.Values.Data, "webhook", "address"); got != "" {
 		t.Errorf("webhook.address = %v, want the chart default for an external Harbor", got)
+	}
+}
+
+func TestRegistryProxyEmptyBasePathUsesRoot(t *testing.T) {
+	c := testCluster()
+	c.HarborManaged = true
+	c.ProxyPublicURL = "https://proxy.example.com"
+	c.ProxyBasePath = ""
+	c.ProxyTLSSecret = "poligon-proxy-tls"
+	op := RegistryProxy(c)
+	values := op.Spec.Helm.Values.Data
+	if got := valueAt(t, values, "ingress", "path"); got != "/" {
+		t.Errorf("ingress.path = %v, want /", got)
+	}
+	if got := valueAt(t, values, "proxy", "basePath"); got != "" {
+		t.Errorf("proxy.basePath = %v, want empty", got)
+	}
+	if got := valueAt(t, values, "ingress", "tlsSecret"); got != "poligon-proxy-tls" {
+		t.Errorf("ingress.tlsSecret = %v", got)
 	}
 }

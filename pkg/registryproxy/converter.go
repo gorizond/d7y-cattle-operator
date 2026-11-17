@@ -54,6 +54,7 @@ type indexDocument struct {
 type indexDescriptor struct {
 	MediaType    string            `json:"mediaType"`
 	Digest       string            `json:"digest"`
+	Size         int64             `json:"size"`
 	ArtifactType string            `json:"artifactType,omitempty"`
 	Platform     *indexPlatform    `json:"platform,omitempty"`
 	Annotations  map[string]string `json:"annotations,omitempty"`

@@ -211,3 +211,22 @@ func TestReconcileRegistryProxyIngressAndWebhook(t *testing.T) {
 		t.Fatalf("proxy.hostAliases = %v", valueAtPath(t, values, "proxy", "hostAliases"))
 	}
 }
+
+func TestProxyPublicURL(t *testing.T) {
+	cases := []struct {
+		domain string
+		base   string
+		want   string
+	}{
+		{"", "", ""},
+		{"proxy.example.com", "", "https://proxy.example.com"},
+		{"proxy.example.com", "/proxy", "https://proxy.example.com/proxy"},
+		{"proxy.example.com", "proxy", "https://proxy.example.com/proxy"},
+		{"proxy.example.com", "/proxy/", "https://proxy.example.com/proxy"},
+	}
+	for _, tc := range cases {
+		if got := proxyPublicURL(tc.domain, tc.base); got != tc.want {
+			t.Errorf("proxyPublicURL(%q, %q) = %q, want %q", tc.domain, tc.base, got, tc.want)
+		}
+	}
+}

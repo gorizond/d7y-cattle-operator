@@ -36,10 +36,10 @@ const (
 	DefaultHarborChartVersion            = "1.19.4"
 	DefaultRegistryProxyChartRepo        = "https://gorizond.github.io/d7y-cattle-operator"
 	DefaultRegistryProxyChartName        = "registry-proxy"
-	DefaultRegistryProxyChartVersion     = "0.1.7"
+	DefaultRegistryProxyChartVersion     = "0.1.9"
 	DefaultProxyHarborAdminSecret        = "harbor-admin"
 	DefaultProxyRegistries               = "docker.io"
-	DefaultProxyBasePath                 = "/proxy"
+	DefaultProxyBasePath                 = ""
 	DefaultExtrasIngressController       = "nginx"
 	DefaultExtrasIngressClassName        = ""
 	DefaultExtrasIngressGRPCEnabled      = true
@@ -154,7 +154,7 @@ func Load(args []string) (*Config, error) {
 	fs.StringVar(&cfg.ProxyHarborURL, "proxy-harbor-url", envOr("PROXY_HARBOR_URL", ""), "existing/external Harbor base URL for the proxy")
 	fs.StringVar(&cfg.ProxyHarborAdminSecret, "proxy-harbor-admin-secret", envOr("PROXY_HARBOR_ADMIN_SECRET", DefaultProxyHarborAdminSecret), "name of the Harbor admin Secret in the operator namespace")
 	fs.StringVar(&cfg.ProxyRegistries, "proxy-registries", envOr("PROXY_REGISTRIES", DefaultProxyRegistries), "comma-separated upstream registry allowlist")
-	fs.StringVar(&cfg.ProxyBasePath, "proxy-base-path", envOr("PROXY_BASE_PATH", DefaultProxyBasePath), "public proxy base path (default /proxy; empty disables the path prefix)")
+	fs.StringVar(&cfg.ProxyBasePath, "proxy-base-path", envOr("PROXY_BASE_PATH", DefaultProxyBasePath), "public proxy base path (empty disables the path prefix; e.g. /proxy)")
 	fs.StringVar(&cfg.ProxyTLSSecret, "proxy-tls-secret", envOr("PROXY_TLS_SECRET", ""), "TLS Secret name for the proxy ingress (empty uses the ingress controller default)")
 	fs.StringVar(&proxyHostAliases, "proxy-host-aliases", proxyHostAliases, "JSON list of {ip, hostnames} entries added to the registry proxy pod /etc/hosts")
 	fs.StringVar(&cfg.ExtrasIngressController, "extras-ingress-controller", envOr("EXTRAS_INGRESS_CONTROLLER", DefaultExtrasIngressController), "extras Ingress controller: nginx or traefik")
