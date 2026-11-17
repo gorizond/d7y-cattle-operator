@@ -6,6 +6,7 @@ import (
 	provv1 "github.com/rancher/rancher/pkg/apis/provisioning.cattle.io/v1"
 	corev1 "k8s.io/api/core/v1"
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
+	"k8s.io/apimachinery/pkg/apis/meta/v1/unstructured"
 )
 
 func TestReconcileHarborAndProxy(t *testing.T) {
@@ -38,8 +39,24 @@ func TestReconcileHarborAndProxy(t *testing.T) {
 	if got := clusterStore.condition(string(conditionHarborReady)); got == nil || got.Status != corev1.ConditionTrue {
 		t.Errorf("HarborReady = %+v", got)
 	}
-	if got := clusterStore.condition(string(conditionRegistryProxyReady)); got == nil || got.Status != corev1.ConditionTrue {
-		t.Errorf("RegistryProxyReady = %+v", got)
+	if got := clusterStore.condition(string(conditionRegistryProxyReady)); got == nil || got.Status != corev1.ConditionFalse || got.Reason != "Progressing" {
+		t.Errorf("RegistryProxyReady before HelmOp status = %+v, want False/Progressing", got)
+	}
+
+	proxyOp := store.object("fleet-default/c1-registry-proxy")
+	if proxyOp == nil {
+		t.Fatal("registry proxy HelmOp is missing")
+	}
+	if err := unstructured.SetNestedSlice(proxyOp.Object, []any{
+		map[string]any{"type": "Ready", "status": "True", "message": "Ready"},
+	}, "status", "conditions"); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := controller.reconcile("", cluster); err != nil {
+		t.Fatalf("reconcile(ready HelmOp) error = %v", err)
+	}
+	if got := clusterStore.condition(string(conditionRegistryProxyReady)); got == nil || got.Status != corev1.ConditionTrue || got.Reason != "Ready" {
+		t.Errorf("RegistryProxyReady after HelmOp Ready = %+v, want True/Ready", got)
 	}
 }
 

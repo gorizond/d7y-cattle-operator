@@ -21,6 +21,7 @@ import (
 	corev1 "k8s.io/api/core/v1"
 	apierrors "k8s.io/apimachinery/pkg/api/errors"
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
+	"k8s.io/apimachinery/pkg/apis/meta/v1/unstructured"
 
 	"github.com/gorizond/d7y-cattle-operator/pkg/apply"
 	"github.com/gorizond/d7y-cattle-operator/pkg/helmop"
@@ -150,7 +151,16 @@ func (c *Controller) reconcile(key string, cluster *provv1.Cluster) (result *pro
 		errs = append(errs, harborErr)
 	}
 	proxyErr := c.ensureRegistryProxy(cluster, hc, roles, harborErr)
-	setRegistryProxyCondition(status, roles, proxyErr)
+	proxyReady := false
+	proxyMessage := ""
+	if proxyErr == nil && roles.Proxy {
+		var stateErr error
+		proxyReady, proxyMessage, stateErr = c.registryProxyHelmOpReady(cluster)
+		if stateErr != nil {
+			proxyErr = stateErr
+		}
+	}
+	setRegistryProxyCondition(status, roles, proxyErr, proxyReady, proxyMessage)
 	if proxyErr != nil {
 		errs = append(errs, proxyErr)
 	}
@@ -299,7 +309,40 @@ func setHarborCondition(status *statusBuilder, roles Roles, err error) {
 	}
 }
 
-func setRegistryProxyCondition(status *statusBuilder, roles Roles, err error) {
+func (c *Controller) registryProxyHelmOpReady(cluster *provv1.Cluster) (bool, string, error) {
+	obj := &unstructured.Unstructured{}
+	err := c.helmops.Get(c.ctx, cluster.Namespace, helmop.RegistryProxyName(cluster.Name), obj, metav1.GetOptions{})
+	if apierrors.IsNotFound(err) {
+		return false, "registry proxy HelmOp is not created yet", nil
+	}
+	if err != nil {
+		return false, "", fmt.Errorf("get registry proxy HelmOp: %w", err)
+	}
+	conditions, found, err := unstructured.NestedSlice(obj.Object, "status", "conditions")
+	if err != nil || !found {
+		return false, "registry proxy HelmOp Ready condition is missing", nil
+	}
+	for _, raw := range conditions {
+		condition, ok := raw.(map[string]any)
+		if !ok {
+			continue
+		}
+		if condition["type"] != "Ready" {
+			continue
+		}
+		if condition["status"] == "True" {
+			return true, "", nil
+		}
+		message, _ := condition["message"].(string)
+		if message == "" {
+			message = "registry proxy HelmOp is not Ready"
+		}
+		return false, message, nil
+	}
+	return false, "registry proxy HelmOp Ready condition is missing", nil
+}
+
+func setRegistryProxyCondition(status *statusBuilder, roles Roles, err error, ready bool, message string) {
 	if !roles.Proxy {
 		status.set(conditionRegistryProxyReady, false, "Disabled", "registry proxy is not enabled")
 		return
@@ -308,7 +351,14 @@ func setRegistryProxyCondition(status *statusBuilder, roles Roles, err error) {
 		status.set(conditionRegistryProxyReady, false, "ApplyFailed", err.Error())
 		return
 	}
-	status.set(conditionRegistryProxyReady, true, "Ready", "registry proxy HelmOp applied")
+	if !ready {
+		if message == "" {
+			message = "registry proxy HelmOp is not Ready"
+		}
+		status.set(conditionRegistryProxyReady, false, "Progressing", message)
+		return
+	}
+	status.set(conditionRegistryProxyReady, true, "Ready", "registry proxy HelmOp Ready")
 }
 
 func proxyPublicURL(domain, basePath string) string {

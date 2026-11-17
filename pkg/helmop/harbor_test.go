@@ -88,7 +88,7 @@ func TestRegistryProxyHelmOp(t *testing.T) {
 	if op.Name != "c1-registry-proxy" || op.Spec.TargetNamespace != TargetNamespace {
 		t.Errorf("name/target namespace = %s/%s", op.Name, op.Spec.TargetNamespace)
 	}
-	if op.Spec.Helm.Chart != "registry-proxy" || op.Spec.Helm.Version != "0.1.1" {
+	if op.Spec.Helm.Chart != "registry-proxy" || op.Spec.Helm.Version != "0.1.2" {
 		t.Errorf("chart = %s %s", op.Spec.Helm.Chart, op.Spec.Helm.Version)
 	}
 	if len(op.Spec.DependsOn) != 1 || op.Spec.DependsOn[0].Name != "c1-harbor" {

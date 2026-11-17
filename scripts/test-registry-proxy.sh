@@ -30,6 +30,8 @@ grep -q '/registry-proxy' "$tmp/proxy.yaml" || fail "proxy command does not use 
 grep -q 'containerPort: 8080' "$tmp/proxy.yaml" || fail "proxy service port is missing"
 grep -q 'runAsUser: 65532' "$tmp/proxy.yaml" || fail "proxy is not UID 65532"
 grep -q 'readOnlyRootFilesystem: true' "$tmp/proxy.yaml" || fail "proxy rootfs is not read-only"
+grep -q 'startupProbe:' "$tmp/proxy.yaml" || fail "proxy startupProbe is missing"
+grep -q 'failureThreshold: 30' "$tmp/proxy.yaml" || fail "proxy startup failureThreshold is missing"
 grep -q 'secretName: harbor-admin' "$tmp/proxy.yaml" || fail "proxy admin Secret mount is missing"
 grep -q 'secretName: registry-proxy-webhook' "$tmp/proxy.yaml" || fail "proxy webhook Secret mount is missing"
 grep -q 'name: harbor-robot' "$tmp/proxy.yaml" || fail "proxy robot Secret mount is missing"

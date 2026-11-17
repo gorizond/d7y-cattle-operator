@@ -55,7 +55,7 @@ const (
 
 	RegistryProxyChartRepo    = "https://gorizond.github.io/d7y-cattle-operator"
 	RegistryProxyChartName    = "registry-proxy"
-	RegistryProxyChartVersion = "0.1.1"
+	RegistryProxyChartVersion = "0.1.2"
 )
 
 // HelmOpGVR identifies Fleet HelmOps for the resource client.
