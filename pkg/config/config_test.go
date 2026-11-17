@@ -36,8 +36,6 @@ var envKeys = []string{
 	"PROXY_BASE_PATH",
 	"PROXY_TLS_SECRET",
 	"PROXY_HOST_ALIASES",
-	"RESOLVER_UPSTREAM",
-	"RESOLVER_LISTEN",
 	"EXTRAS_INGRESS_CONTROLLER",
 	"EXTRAS_INGRESS_CLASS_NAME",
 	"EXTRAS_INGRESS_GRPC_ENABLED",
@@ -135,12 +133,6 @@ func TestLoadDefaults(t *testing.T) {
 	}
 	if cfg.ProxyTLSSecret != "" {
 		t.Errorf("ProxyTLSSecret = %q, want empty", cfg.ProxyTLSSecret)
-	}
-	if cfg.ResolverUpstream != "" {
-		t.Errorf("ResolverUpstream = %q, want empty", cfg.ResolverUpstream)
-	}
-	if cfg.ResolverListen != DefaultResolverListen {
-		t.Errorf("ResolverListen = %q, want %q", cfg.ResolverListen, DefaultResolverListen)
 	}
 	if cfg.ExtrasIngressController != DefaultExtrasIngressController {
 		t.Errorf("ExtrasIngressController = %q, want %q", cfg.ExtrasIngressController, DefaultExtrasIngressController)
@@ -248,9 +240,6 @@ func TestLoadInvalidValues(t *testing.T) {
 		"invalid proxy TLS secret":          "--proxy-tls-secret=Bad_Secret",
 		"invalid proxy host alias IP":       `--proxy-host-aliases=[{"ip":"not-an-ip","hostnames":["harbor.example.com"]}]`,
 		"invalid proxy host alias hosts":    `--proxy-host-aliases=[{"ip":"10.0.0.1","hostnames":[]}]`,
-		"invalid resolver upstream":         "--resolver-upstream=http://proxy.example.test",
-		"resolver upstream credentials":     "--resolver-upstream=https://user:pass@proxy.example.test",
-		"invalid resolver listen":           "--resolver-listen=0.0.0.0:3999",
 		"malformed proxy host aliases":      `--proxy-host-aliases=not-json`,
 		"invalid extras ingress controller": "--extras-ingress-controller=haproxy",
 		"invalid extras ingress class":      "--extras-ingress-class-name=Bad_Name",
@@ -405,8 +394,6 @@ func TestLoadHarborProxyEnv(t *testing.T) {
 	t.Setenv("PROXY_REGISTRIES", "docker.io,ghcr.io")
 	t.Setenv("PROXY_BASE_PATH", "/proxy")
 	t.Setenv("PROXY_TLS_SECRET", "poligon-harbor-tls")
-	t.Setenv("RESOLVER_UPSTREAM", "https://proxy.env.example.test")
-	t.Setenv("RESOLVER_LISTEN", "127.0.0.1:4000")
 	t.Setenv("HARBOR_CHART_VERSION", "1.19.4")
 	t.Setenv("REGISTRY_PROXY_CHART_VERSION", "0.1.11")
 	cfg, err := Load(requiredArgs())
@@ -421,24 +408,6 @@ func TestLoadHarborProxyEnv(t *testing.T) {
 	}
 	if cfg.ProxyBasePath != "/proxy" || cfg.ProxyTLSSecret != "poligon-harbor-tls" {
 		t.Errorf("proxy path/TLS = %q/%q", cfg.ProxyBasePath, cfg.ProxyTLSSecret)
-	}
-	if cfg.ResolverUpstream != "https://proxy.env.example.test" || cfg.ResolverListen != "127.0.0.1:4000" {
-		t.Errorf("resolver env = %q/%q", cfg.ResolverUpstream, cfg.ResolverListen)
-	}
-}
-
-func TestLoadResolverFlags(t *testing.T) {
-	clearEnv(t)
-	args := append(requiredArgs(),
-		"--resolver-upstream=https://proxy.flag.example.test",
-		"--resolver-listen=127.0.0.1:4100",
-	)
-	cfg, err := Load(args)
-	if err != nil {
-		t.Fatalf("Load() error = %v", err)
-	}
-	if cfg.ResolverUpstream != "https://proxy.flag.example.test" || cfg.ResolverListen != "127.0.0.1:4100" {
-		t.Errorf("resolver flags = %q/%q", cfg.ResolverUpstream, cfg.ResolverListen)
 	}
 }
 

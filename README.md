@@ -117,8 +117,6 @@ not used until the p2p-static and registration MRs.
 | `extras.ingress.restEnabled` | `EXTRAS_INGRESS_REST_ENABLED` | Render the REST Ingress when the manager role is active; default `true` |
 | `extras.ingress.tlsSecret` | `EXTRAS_INGRESS_TLS_SECRET` | Ingress TLS Secret; empty disables the TLS block |
 | `extras.ingress.traefikServersTransportEnabled` | `EXTRAS_TRAEFIK_SERVERS_TRANSPORT_ENABLED` | Render the REST Traefik `ServersTransport`; default `true` |
-| `resolver.upstream` | `RESOLVER_UPSTREAM` | Upstream registry proxy URL for the host resolver; empty disables resolver install |
-| `resolver.listen` | `RESOLVER_LISTEN` | Resolver loopback listen address; default `127.0.0.1:3999` |
 
 Defaults: `mtlsSecretName=dragonfly-p2p-mtls`, `dragonfly.chart.name=dragonfly`,
 `dragonfly.chart.repo=https://gorizond.github.io/dragonflyoss-helm-charts`,
@@ -126,7 +124,7 @@ Defaults: `mtlsSecretName=dragonfly-p2p-mtls`, `dragonfly.chart.name=dragonfly`,
 `extras.chart.version=0.1.8`, `extras.ingress.controller=nginx`,
 `extras.ingress.grpcEnabled=true`, `extras.ingress.restEnabled=true`,
 `manager.grpcPort=443`, `webhook.port=9443`,
-`resolver.listen=127.0.0.1:3999`, `leaderElect=false`. The public scheduler IP(s) are resolved from DNS at
+`leaderElect=false`. The public scheduler IP(s) are resolved from DNS at
 reconcile time; there is no scheduler IP value. `scheduler.domain` has no
 default and is required. `scheduler.clusterID` is only a fallback for an
 unpopulated `status.clusterName`.
@@ -280,11 +278,13 @@ yet:
 - Existing certificate/config files are preserved, but no P2P services are
   enabled. A later successful run (or an existing seed cluster) installs the
   full public-P2P configuration.
-- Nydus is installed on the host from pinned `v0.16.0` assets
-  (`containerd-nydus-grpc`, `nydusd`, `nydus-image`, `nydus-overlayfs`) and is
-  the global CRI snapshotter. `enable_oci_tar` is not set (it is not a nydus
-  field). A daily host timer runs `nydus-updater` to refresh the assets and
-  restart the host unit only when something changed.
+- Nydus is installed on the host: the patched `containerd-nydus-grpc`
+  snapshotter release `v0.16.0-p2p.1` plus static-store `v0.16.0` `nydusd`,
+  `nydus-image`, and `nydus-overlayfs` assets. It is the global CRI
+  snapshotter. `enable_oci_tar` is not set (it is not a nydus field). A daily
+  host timer runs `nydus-updater` to refresh the static assets and restart the
+  host unit only when something changed; the patched snapshotter is updated by
+  rerunning `p2p-install.sh`.
 - Host `dfdaemon-bootstrap` is the cold-start P2P client. A boot helper starts
   it before RKE2 even if the switch disabled it at the previous shutdown; a
   30s host timer detects the node's in-cluster `client` pod via `crictl` and
@@ -476,62 +476,29 @@ Conditions: `d7y.io/HarborReady`, `d7y.io/RegistryProxyReady`, and
 `d7y.io/HarborDomainMissing`. Missing/invalid domain keeps Harbor/proxy
 HelmOps absent and records the event/condition.
 
-## nydus-resolver (host HTTPS MITM proxy)
+## Host nydus snapshotter
 
-`cmd/nydus-resolver` is a static amd64 host binary, not a container or
-DaemonSet. The release workflow attaches `nydus-resolver-linux-amd64` and its
-`.sha256` to the `v*` GitHub Release. `p2p-install.sh` downloads that asset,
-writes `/etc/nydus-resolver/config.yaml`, installs `nydus-resolver.service`,
-and makes `nydus-snapshotter-bootstrap.service` depend on it
-(`After=nydus-resolver.service`, `Wants=nydus-resolver.service`).
-When the resolver payload is absent, the bootstrap falls back to the direct
-registry so RKE2 can still start.
+`p2p-install.sh` installs the patched host snapshotter from
+`gorizond/nydus-snapshotter` release `v0.16.0-p2p.1` (asset
+`nydus-snapshotter-linux-amd64` plus its `.sha256`) to
+`/usr/local/bin/containerd-nydus-grpc`; the existing
+`nydus-snapshotter-bootstrap.service` runs it. The patched build reads
+containerd's `certs.d/<host>/hosts.toml` (RKE2 path
+`/var/lib/rancher/rke2/agent/etc/containerd/certs.d`, then
+`/etc/containerd/certs.d`), so a `docker.io` pull resolves through the same
+mirror and headers that containerd used for the pull. Without a certs.d
+override it keeps the previous `docker.io` -> `registry-1.docker.io` behavior.
 
-The resolver config is entirely external and non-secret:
+The installer defaults are `NYDUS_SNAPSHOTTER_REPO=gorizond/nydus-snapshotter`,
+`NYDUS_SNAPSHOTTER_VERSION=v0.16.0-p2p.1`, and
+`NYDUS_SNAPSHOTTER_ASSET=nydus-snapshotter-linux-amd64`; override them for
+another fork release. The other nydus daemon assets (`nydusd`, `nydus-image`,
+`nydus-overlayfs`) stay pinned in the static store at `NYDUS_VERSION`
+(`v0.16.0`). A missing release asset falls back to the direct registry so RKE2
+can still start. There is no MITM proxy or local CA on the node.
 
-```yaml
-listen: 127.0.0.1:3999
-upstream: https://proxy.example.test
-ca_key: /var/lib/nydus-resolver/ca.key
-ca_bundle: /var/lib/nydus-resolver/ca-bundle.pem
-system_ca_file: /etc/ssl/certs/ca-certificates.crt
-```
-
-`upstream` is required when the resolver is enabled and has no built-in
-default; an empty `resolver.upstream` value disables the host resolver and the
-bootstrap falls back to the direct registry. There is no registry map:
-the resolver forwards `CONNECT host:443` plus `/v2/...` as
-`<upstream>/<connect-host>/<original-path>`. The registry proxy normalizes
-Docker aliases (`registry-1.docker.io`, `index.docker.io` -> `docker.io`) and
-owns the registry allowlist and `/<registry>/...` routing. The resolver rejects
-malformed hosts/SNI mismatches; the registry proxy returns 403 for registries
-not in its allowlist.
-
-The resolver generates `/var/lib/nydus-resolver/ca.key` (0600) and
-`ca-bundle.pem` (local CA followed by the system roots). The config template
-is `charts/p2p-static/files/nydus-resolver-config.yaml.tmpl`. The snapshotter
-unit uses `HTTPS_PROXY=http://127.0.0.1:3999`,
-`NO_PROXY=127.0.0.1,localhost,::1,...`, and
-`SSL_CERT_FILE=/var/lib/nydus-resolver/ca-bundle.pem`, so other TLS in the
-snapshotter keeps working.
-
-The installer defaults to `RESOLVER_VERSION=v0.1.33`,
-`RESOLVER_ASSET=nydus-resolver-linux-amd64`, and
-`GH_REPO=gorizond/d7y-cattle-operator`; override them for another release.
-The pinned URL is
-`https://github.com/<GH_REPO>/releases/download/<RESOLVER_VERSION>/nydus-resolver-linux-amd64`;
-`latest` uses `/releases/latest/download/`. A missing release asset logs a
-clear fallback to the direct registry instead of installing nothing.
-
-Build the same asset locally with:
-
-```bash
-make nydus-resolver   # dist/nydus-resolver-linux-amd64; CGO off, trimpath, stripped
-```
-
-Multi-arch assets are future work in `p2p-install.sh`; this change is
-amd64-only. See `charts/p2p-static/README.md` for payload fields, unit
-ordering, and known limits.
+The registry proxy still canonicalizes Docker aliases (`registry-1.docker.io`,
+`index.docker.io` -> `docker.io`) before its allowlist and Harbor mapping.
 
 ## Cluster annotations
 
@@ -605,10 +572,11 @@ control/data without blocking manager/KeyDB.
 
 `charts/p2p-static` serves `/p2p-install.sh` and the static asset volume through
 Nginx. The bootstrap payload is a base64url **env-file** (no JSON, no `jq`, no
-python on the node). The script installs the host-only nydus snapshotter
-(`v0.16.0`, including `nydus-overlayfs`), writes the global nydus containerd
-drop-in `config-v3.toml.d/90-nydus.toml`, starts it before RKE2, and installs a
-daily host updater. There is no in-cluster nydus DaemonSet or HelmOp. See
+python on the node). The script installs the host-only patched nydus
+snapshotter (`v0.16.0-p2p.1`) plus the static `v0.16.0` daemon assets
+(including `nydus-overlayfs`), writes the global nydus containerd drop-in
+`config-v3.toml.d/90-nydus.toml`, starts it before RKE2, and installs a daily
+host updater. There is no in-cluster nydus DaemonSet or HelmOp. See
 `charts/p2p-static/README.md` for values, payload keys, drop-ins, and pilot
 risks.
 
@@ -717,13 +685,14 @@ that predates those fields would affect REST only.
 
 Nydus runs only on the host, installed by `p2p-install.sh`; the operator no
 longer creates a nydus chart, DaemonSet, HelmOp, RuntimeClass, or VPA. The
-script installs pinned `v0.16.0` binaries (including `nydus-overlayfs`), writes
-`/etc/nydus/config.toml` (multiple/fusedev, `[experimental]`
-`enable_referrer_detect`/`enable_index_detect`, no tarfs), the registry-backend
-`nydusd-config.json`, and the global containerd drop-in. It starts the host unit
-before RKE2 and runs a daily updater for the binaries. Do not add
+script installs the patched `v0.16.0-p2p.1` snapshotter plus static `v0.16.0`
+daemon assets (including `nydus-overlayfs`), writes `/etc/nydus/config.toml`
+(multiple/fusedev, `[experimental]` `enable_referrer_detect`/
+`enable_index_detect`, no tarfs), the registry-backend `nydusd-config.json`,
+and the global containerd drop-in. It starts the host unit before RKE2 and runs
+a daily updater for the static binaries. Do not add
 `enable_oci_tar` (it is not a nydus field). Pilot must verify the drop-in merge
-with `containerd config dump`, the v0.16.0 unit flags, and the host restart
+with `containerd config dump`, the v0.16.0-p2p.1 unit flags, and the host restart
 procedure. Tarfs is intentionally disabled; enabling it requires kernel >= 6.4
 and a matching nydusd. Ordinary-OCI Zran is not claimed.
 
@@ -757,7 +726,6 @@ make docker-build   # container image
 make docker-test    # go test ./... inside Docker
 make lint           # go vet ./... inside Docker
 make helm-lint      # helm lint every chart under charts/
-make nydus-resolver # build the HTTPS MITM resolver binary
 make helm-template  # render the operator, extras, p2p-static, and proxy charts
 ```
 
@@ -774,8 +742,6 @@ Pushing a `v*` tag runs `.github/workflows/release.yml`:
 
 - builds and pushes the operator image tagged with the Git tag
   (`v<chart version>`);
-- builds the static `nydus-resolver-linux-amd64`, verifies `--help`/missing
-  config behavior, and attaches it plus `.sha256` to the `v*` GitHub Release;
 - lints every chart under `charts/` and publishes it with `chart-releaser` to
   the `gh-pages` branch.
 

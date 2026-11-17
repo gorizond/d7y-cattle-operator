@@ -158,8 +158,6 @@ func run() error {
 		ManagerGRPCDomain: cfg.ManagerGRPCDomain,
 		StaticURL:         cfg.NginxStaticURL,
 		SmartProxyURL:     proxyPublicURL(cfg.ProxyDomain, cfg.ProxyBasePath),
-		ResolverUpstream:  cfg.ResolverUpstream,
-		ResolverListen:    cfg.ResolverListen,
 		SchedulerDomain:   cfg.P2PDomain,
 		ClusterIDFallback: cfg.ClusterIDFallback,
 	}

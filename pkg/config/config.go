@@ -40,7 +40,6 @@ const (
 	DefaultProxyHarborAdminSecret        = "harbor-admin"
 	DefaultProxyRegistries               = "docker.io"
 	DefaultProxyBasePath                 = ""
-	DefaultResolverListen                = "127.0.0.1:3999"
 	DefaultExtrasIngressController       = "nginx"
 	DefaultExtrasIngressClassName        = ""
 	DefaultExtrasIngressGRPCEnabled      = true
@@ -87,8 +86,6 @@ type Config struct {
 	ProxyBasePath               string
 	ProxyTLSSecret              string
 	ProxyHostAliases            []helmop.HostAlias
-	ResolverUpstream            string
-	ResolverListen              string
 	ExtrasIngressController     string
 	ExtrasIngressClassName      string
 	ExtrasIngressGRPCEnabled    bool
@@ -160,8 +157,6 @@ func Load(args []string) (*Config, error) {
 	fs.StringVar(&cfg.ProxyBasePath, "proxy-base-path", envOr("PROXY_BASE_PATH", DefaultProxyBasePath), "public proxy base path (empty disables the path prefix; e.g. /proxy)")
 	fs.StringVar(&cfg.ProxyTLSSecret, "proxy-tls-secret", envOr("PROXY_TLS_SECRET", ""), "TLS Secret name for the proxy ingress (empty uses the ingress controller default)")
 	fs.StringVar(&proxyHostAliases, "proxy-host-aliases", proxyHostAliases, "JSON list of {ip, hostnames} entries added to the registry proxy pod /etc/hosts")
-	fs.StringVar(&cfg.ResolverUpstream, "resolver-upstream", envOr("RESOLVER_UPSTREAM", ""), "nydus-resolver upstream registry proxy URL (empty disables host resolver install)")
-	fs.StringVar(&cfg.ResolverListen, "resolver-listen", envOr("RESOLVER_LISTEN", DefaultResolverListen), "nydus-resolver loopback listen address")
 	fs.StringVar(&cfg.ExtrasIngressController, "extras-ingress-controller", envOr("EXTRAS_INGRESS_CONTROLLER", DefaultExtrasIngressController), "extras Ingress controller: nginx or traefik")
 	fs.StringVar(&cfg.ExtrasIngressClassName, "extras-ingress-class-name", envOr("EXTRAS_INGRESS_CLASS_NAME", DefaultExtrasIngressClassName), "extras Ingress class name (empty uses the cluster default)")
 	fs.BoolVar(&cfg.ExtrasIngressGRPCEnabled, "extras-ingress-grpc-enabled", defaultGRPCEnabled, "render the extras gRPC Ingress")
@@ -338,19 +333,6 @@ func (c *Config) Validate() error {
 			}
 		}
 	}
-	if c.ResolverUpstream != "" {
-		if err := validateURL(c.ResolverUpstream, "https"); err != nil {
-			add("--resolver-upstream: %v", err)
-		} else if parsed, err := url.Parse(c.ResolverUpstream); err != nil || parsed.User != nil ||
-			parsed.RawQuery != "" || parsed.Fragment != "" {
-			add("--resolver-upstream must not contain credentials, query, or fragment")
-		}
-	}
-	if c.ResolverListen == "" {
-		add("--resolver-listen is required")
-	} else if err := validateResolverListen(c.ResolverListen); err != nil {
-		add("--resolver-listen: %v", err)
-	}
 	for _, registry := range strings.Split(c.ProxyRegistries, ",") {
 		registry = strings.TrimSpace(registry)
 		if registry == "" {
@@ -395,22 +377,6 @@ func (c *Config) Validate() error {
 
 	if len(errs) > 0 {
 		return errors.New(strings.Join(errs, "; "))
-	}
-	return nil
-}
-
-func validateResolverListen(raw string) error {
-	host, port, err := net.SplitHostPort(raw)
-	if err != nil {
-		return errors.New("must be an IP loopback address and port")
-	}
-	ip := net.ParseIP(host)
-	if ip == nil || !ip.IsLoopback() {
-		return errors.New("must bind to a loopback address")
-	}
-	number, err := strconv.Atoi(port)
-	if err != nil || number < 1 || number > 65535 {
-		return errors.New("port must be between 1 and 65535")
 	}
 	return nil
 }
