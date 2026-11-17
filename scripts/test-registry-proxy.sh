@@ -46,6 +46,13 @@ grep -q 'kind: Ingress' "$tmp/proxy.yaml" || fail "proxy Ingress is missing"
 grep -q 'host: "proxy.example.com"' "$tmp/proxy.yaml" || fail "proxy Ingress host is missing"
 grep -q 'path: /proxy' "$tmp/proxy.yaml" || fail "proxy Ingress path is missing"
 grep -q 'secretName: poligon-harbor-tls' "$tmp/proxy.yaml" || fail "proxy Ingress TLS Secret is missing"
+grep -q 'traefik.ingress.kubernetes.io/router.priority: "1000"' "$tmp/proxy.yaml" || \
+  fail "proxy Ingress router priority is missing"
+helm template registry-proxy "$chart" --namespace dragonfly-system \
+  --set ingress.enabled=true --set ingress.host=proxy.example.com \
+  --set ingress.priority=2500 --show-only templates/ingress.yaml | \
+  grep -q 'traefik.ingress.kubernetes.io/router.priority: "2500"' || \
+  fail "proxy Ingress router priority is not configurable"
 grep -q 'base_path: "/proxy"' "$tmp/proxy.yaml" || fail "proxy config base_path is missing"
 grep -q 'address: "http://c1-registry-proxy.dragonfly-system.svc:8080/api/convert"' "$tmp/proxy.yaml" || \
   fail "proxy config webhook address is missing"

@@ -6,10 +6,9 @@ metadata:
   namespace: {{ .Release.Namespace }}
   labels:
     {{- include "registry-proxy.labels" . | nindent 4 }}
-  {{- with .Values.ingress.annotations }}
+  {{- $annotations := merge (dict) (.Values.ingress.annotations | default dict) (dict "traefik.ingress.kubernetes.io/router.priority" (toString .Values.ingress.priority)) }}
   annotations:
-    {{- toYaml . | nindent 4 }}
-  {{- end }}
+    {{- toYaml $annotations | nindent 4 }}
 spec:
   ingressClassName: {{ .Values.ingress.className }}
   rules:
