@@ -457,6 +457,8 @@ Scaling (future): multiple proxy replicas need a shared KeyDB/Redis-backed
 Manager for job state and deduplication. The current KeyDB is multi-master but
 has no PVC/HA, so state durability is a separate decision; v1 stays in-memory.
 
+The proxy resolves the upstream registry from `?ns=<registry>` first, then
+from the path prefix `/<registry>/v2/...`, then from `X-Dragonfly-Registry`.
 The `containerd-mirror` chart sends allowlisted registries to the external
 `<proxy>/<registry>` through `X-Dragonfly-Registry`; `SMART_PROXY_URL` in the
 bootstrap payload is optional and fail-open. Target clusters do not need an

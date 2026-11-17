@@ -82,6 +82,32 @@ func TestServerOCIRead(t *testing.T) {
 	}
 }
 
+func TestServerQueryNSRegistry(t *testing.T) {
+	backend := &fakeBackend{
+		manifest: Manifest{Digest: "sha256:manifest", MediaType: "application/vnd.oci.image.manifest.v1+json", Body: []byte("manifest")},
+	}
+	server := testServer(backend)
+
+	for _, path := range []string{
+		"/v2/library/nginx/manifests/1.27?ns=docker.io",
+		"/v2/library/nginx/manifests/1.27?ns=https://docker.io",
+	} {
+		req := httptest.NewRequest(http.MethodGet, path, nil)
+		rec := httptest.NewRecorder()
+		server.Handler().ServeHTTP(rec, req)
+		if rec.Code != http.StatusOK || rec.Body.String() != "manifest" {
+			t.Errorf("%s response = %d %q", path, rec.Code, rec.Body.String())
+		}
+	}
+
+	req := httptest.NewRequest(http.MethodGet, "/v2/library/nginx/manifests/1.27?ns=ghcr.io", nil)
+	rec := httptest.NewRecorder()
+	server.Handler().ServeHTTP(rec, req)
+	if rec.Code != http.StatusForbidden {
+		t.Errorf("non-allowlisted ?ns response = %d, want 403", rec.Code)
+	}
+}
+
 func TestServerRegistryAllowlistAndPushRejected(t *testing.T) {
 	server := testServer(&fakeBackend{})
 	req := httptest.NewRequest(http.MethodGet, "/ghcr.io/v2/library/nginx/manifests/1.27", nil)
