@@ -96,19 +96,20 @@ func (s *Server) Handler() http.Handler {
 
 func (s *Server) serve(w http.ResponseWriter, r *http.Request) {
 	s.requests.Add(1)
+	requestPath := stripBasePath(r.URL.Path, s.Config.BasePath())
 	switch {
-	case r.URL.Path == "/healthz":
+	case requestPath == "/healthz":
 		w.WriteHeader(http.StatusOK)
 		_, _ = w.Write([]byte("ok\n"))
 		return
-	case r.URL.Path == "/readyz":
+	case requestPath == "/readyz":
 		w.WriteHeader(http.StatusOK)
 		_, _ = w.Write([]byte("ok\n"))
 		return
-	case r.URL.Path == "/metrics":
+	case requestPath == "/metrics":
 		s.metrics(w)
 		return
-	case r.URL.Path == "/api/convert":
+	case requestPath == "/api/convert":
 		if s.Convert == nil {
 			http.NotFound(w, r)
 			return
@@ -117,7 +118,7 @@ func (s *Server) serve(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	registry, rest, ok := s.route(r)
+	registry, rest, ok := s.route(requestPath, r)
 	if !ok {
 		http.NotFound(w, r)
 		return
@@ -162,15 +163,28 @@ func (s *Server) serve(w http.ResponseWriter, r *http.Request) {
 	}
 }
 
-func (s *Server) route(r *http.Request) (string, string, bool) {
-	rest, ok := ociRest(r.URL.Path)
+func stripBasePath(path, base string) string {
+	if base == "" || base == "/" {
+		return path
+	}
+	if path == base {
+		return "/"
+	}
+	if strings.HasPrefix(path, base+"/") {
+		return strings.TrimPrefix(path, base)
+	}
+	return path
+}
+
+func (s *Server) route(requestPath string, r *http.Request) (string, string, bool) {
+	rest, ok := ociRest(requestPath)
 	if !ok {
 		return "", "", false
 	}
 	if registry := queryRegistry(r); registry != "" {
 		return registry, rest, true
 	}
-	trimmed := strings.Trim(r.URL.Path, "/")
+	trimmed := strings.Trim(requestPath, "/")
 	parts := strings.SplitN(trimmed, "/", 2)
 	if len(parts) == 2 && (parts[1] == "v2" || strings.HasPrefix(parts[1], "v2/")) {
 		return parts[0], rest, true

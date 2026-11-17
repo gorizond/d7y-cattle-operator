@@ -82,6 +82,10 @@ spec:
               value: {{ .Values.proxy.harborAdminSecret | quote }}
             - name: PROXY_REGISTRIES
               value: {{ if kindIs "slice" .Values.proxy.registries }}{{ join "," .Values.proxy.registries | quote }}{{ else }}{{ .Values.proxy.registries | quote }}{{ end }}
+            - name: PROXY_BASE_PATH
+              value: {{ .Values.proxy.basePath | quote }}
+            - name: PROXY_TLS_SECRET
+              value: {{ .Values.proxy.tlsSecret | quote }}
             - name: EXTRAS_INGRESS_CONTROLLER
               value: {{ .Values.extras.ingress.controller | quote }}
             - name: EXTRAS_INGRESS_CLASS_NAME

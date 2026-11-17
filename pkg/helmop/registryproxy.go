@@ -19,13 +19,18 @@ func RegistryProxy(c Cluster) *fleetv1alpha1.HelmOp {
 	if parsed, err := url.Parse(c.ProxyPublicURL); err == nil {
 		ingressHost = parsed.Hostname()
 	}
+	ingressPath := c.ProxyBasePath
+	if ingressPath == "" {
+		ingressPath = "/"
+	}
 	values := map[string]any{
 		"command": []any{"/registry-proxy"},
 		"ingress": map[string]any{
 			"enabled":   ingressHost != "",
 			"className": "traefik",
 			"host":      ingressHost,
-			"tlsSecret": "",
+			"path":      ingressPath,
+			"tlsSecret": c.ProxyTLSSecret,
 		},
 		"harbor": map[string]any{
 			"url":         harborURL,
@@ -36,7 +41,10 @@ func RegistryProxy(c Cluster) *fleetv1alpha1.HelmOp {
 		"registry": map[string]any{
 			"allowlist": c.ProxyRegistries,
 		},
-		"proxy": map[string]any{"publicURL": c.ProxyPublicURL},
+		"proxy": map[string]any{
+			"publicURL": c.ProxyPublicURL,
+			"basePath":  c.ProxyBasePath,
+		},
 		"webhook": map[string]any{
 			"secretName": c.ProxyWebhookSecretName,
 		},

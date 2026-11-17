@@ -33,6 +33,8 @@ var envKeys = []string{
 	"PROXY_HARBOR_URL",
 	"PROXY_HARBOR_ADMIN_SECRET",
 	"PROXY_REGISTRIES",
+	"PROXY_BASE_PATH",
+	"PROXY_TLS_SECRET",
 	"EXTRAS_INGRESS_CONTROLLER",
 	"EXTRAS_INGRESS_CLASS_NAME",
 	"EXTRAS_INGRESS_GRPC_ENABLED",
@@ -124,6 +126,12 @@ func TestLoadDefaults(t *testing.T) {
 	}
 	if cfg.ProxyRegistries != DefaultProxyRegistries {
 		t.Errorf("ProxyRegistries = %q, want %q", cfg.ProxyRegistries, DefaultProxyRegistries)
+	}
+	if cfg.ProxyBasePath != DefaultProxyBasePath {
+		t.Errorf("ProxyBasePath = %q, want %q", cfg.ProxyBasePath, DefaultProxyBasePath)
+	}
+	if cfg.ProxyTLSSecret != "" {
+		t.Errorf("ProxyTLSSecret = %q, want empty", cfg.ProxyTLSSecret)
 	}
 	if cfg.ExtrasIngressController != DefaultExtrasIngressController {
 		t.Errorf("ExtrasIngressController = %q, want %q", cfg.ExtrasIngressController, DefaultExtrasIngressController)
@@ -227,6 +235,8 @@ func TestLoadInvalidValues(t *testing.T) {
 		"invalid proxy harbor URL":          "--proxy-harbor-url=http://harbor.example.com",
 		"invalid proxy admin secret":        "--proxy-harbor-admin-secret=Bad_Secret",
 		"empty proxy registry":              "--proxy-registries=docker.io,",
+		"invalid proxy base path":           "--proxy-base-path=proxy",
+		"invalid proxy TLS secret":          "--proxy-tls-secret=Bad_Secret",
 		"invalid extras ingress controller": "--extras-ingress-controller=haproxy",
 		"invalid extras ingress class":      "--extras-ingress-class-name=Bad_Name",
 		"invalid extras ingress TLS Secret": "--extras-ingress-tls-secret=Bad_Name",
@@ -378,8 +388,10 @@ func TestLoadHarborProxyEnv(t *testing.T) {
 	t.Setenv("PROXY_HARBOR_URL", "https://harbor.env.example.com")
 	t.Setenv("PROXY_HARBOR_ADMIN_SECRET", "env-harbor-admin")
 	t.Setenv("PROXY_REGISTRIES", "docker.io,ghcr.io")
+	t.Setenv("PROXY_BASE_PATH", "/proxy")
+	t.Setenv("PROXY_TLS_SECRET", "poligon-harbor-tls")
 	t.Setenv("HARBOR_CHART_VERSION", "1.19.4")
-	t.Setenv("REGISTRY_PROXY_CHART_VERSION", "0.1.0")
+	t.Setenv("REGISTRY_PROXY_CHART_VERSION", "0.1.1")
 	cfg, err := Load(requiredArgs())
 	if err != nil {
 		t.Fatalf("Load() error = %v", err)
@@ -390,17 +402,22 @@ func TestLoadHarborProxyEnv(t *testing.T) {
 	if cfg.ProxyHarborAdminSecret != "env-harbor-admin" || cfg.ProxyRegistries != "docker.io,ghcr.io" {
 		t.Errorf("proxy secret/registries = %q/%q", cfg.ProxyHarborAdminSecret, cfg.ProxyRegistries)
 	}
+	if cfg.ProxyBasePath != "/proxy" || cfg.ProxyTLSSecret != "poligon-harbor-tls" {
+		t.Errorf("proxy path/TLS = %q/%q", cfg.ProxyBasePath, cfg.ProxyTLSSecret)
+	}
 }
 
 func TestLoadHarborProxyConfig(t *testing.T) {
 	clearEnv(t)
 	args := append(requiredArgs(),
 		"--harbor-chart-version=1.19.4",
-		"--registry-proxy-chart-version=0.1.0",
+		"--registry-proxy-chart-version=0.1.1",
 		"--proxy-domain=proxy.example.com",
 		"--proxy-harbor-url=https://harbor.example.com",
 		"--proxy-harbor-admin-secret=harbor-admin",
 		"--proxy-registries=docker.io,ghcr.io",
+		"--proxy-base-path=/proxy",
+		"--proxy-tls-secret=poligon-harbor-tls",
 	)
 	cfg, err := Load(args)
 	if err != nil {
@@ -412,8 +429,11 @@ func TestLoadHarborProxyConfig(t *testing.T) {
 	if cfg.ProxyHarborAdminSecret != "harbor-admin" || cfg.ProxyRegistries != "docker.io,ghcr.io" {
 		t.Errorf("proxy secret/registries = %q/%q", cfg.ProxyHarborAdminSecret, cfg.ProxyRegistries)
 	}
-	if cfg.HarborChartVersion != "1.19.4" || cfg.RegistryProxyChartVersion != "0.1.0" {
+	if cfg.HarborChartVersion != "1.19.4" || cfg.RegistryProxyChartVersion != "0.1.1" {
 		t.Errorf("chart versions = %q/%q", cfg.HarborChartVersion, cfg.RegistryProxyChartVersion)
+	}
+	if cfg.ProxyBasePath != "/proxy" || cfg.ProxyTLSSecret != "poligon-harbor-tls" {
+		t.Errorf("proxy path/TLS = %q/%q", cfg.ProxyBasePath, cfg.ProxyTLSSecret)
 	}
 }
 

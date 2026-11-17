@@ -7,7 +7,7 @@ serviceAccount:
 image:
   # Same image as the operator: it contains /registry-proxy.
   repository: ghcr.io/gorizond/d7y-cattle-operator
-  tag: v0.1.20
+  tag: v0.1.22
   pullPolicy: IfNotPresent
 
 command:
@@ -31,6 +31,7 @@ registry:
 
 proxy:
   publicURL: ""
+  basePath: /proxy
 
 webhook:
   secretName: registry-proxy-webhook
@@ -53,6 +54,7 @@ ingress:
   enabled: false
   className: traefik
   host: ""
+  path: /
   tlsSecret: ""
   annotations: {}
 

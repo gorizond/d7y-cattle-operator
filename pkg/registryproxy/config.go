@@ -28,6 +28,7 @@ type Config struct {
 	} `yaml:"registry"`
 	Proxy struct {
 		PublicURL string `yaml:"public_url"`
+		BasePath  string `yaml:"base_path"`
 	} `yaml:"proxy"`
 	Webhook struct {
 		SecretName string `yaml:"secret_name"`
@@ -73,6 +74,9 @@ func applyEnv(cfg *Config) {
 	}
 	if value := os.Getenv("PROXY_PUBLIC_URL"); value != "" {
 		cfg.Proxy.PublicURL = value
+	}
+	if value := os.Getenv("PROXY_BASE_PATH"); value != "" {
+		cfg.Proxy.BasePath = value
 	}
 	if value := os.Getenv("WEBHOOK_SECRET_NAME"); value != "" {
 		cfg.Webhook.SecretName = value
@@ -130,6 +134,12 @@ func (c *Config) Validate() error {
 			return fmt.Errorf("registry.allowlist contains invalid registry %q", registry)
 		}
 	}
+	if c.Proxy.BasePath != "" {
+		if !strings.HasPrefix(c.Proxy.BasePath, "/") || strings.ContainsAny(c.Proxy.BasePath, "?#") ||
+			strings.Contains(c.Proxy.BasePath, "..") || strings.HasSuffix(c.Proxy.BasePath, "/") {
+			return fmt.Errorf("proxy.base_path must start with /, have no query, no trailing slash")
+		}
+	}
 	if c.Proxy.PublicURL == "" {
 		return fmt.Errorf("proxy.public_url is required")
 	}
@@ -177,6 +187,11 @@ func (c *Config) ProjectName(registry string) string {
 // dockerio). Dots are rejected by Harbor project naming in the pilot.
 func ProjectName(registry string) string {
 	return strings.NewReplacer(".", "", ":", "", "/", "").Replace(strings.ToLower(strings.TrimSpace(registry)))
+}
+
+// BasePath returns the normalized public path prefix.
+func (c *Config) BasePath() string {
+	return strings.TrimRight(c.Proxy.BasePath, "/")
 }
 
 // RegistryURL returns the configured Harbor base URL without a trailing slash.

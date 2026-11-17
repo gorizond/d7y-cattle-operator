@@ -76,7 +76,9 @@ func TestRegistryProxyHelmOp(t *testing.T) {
 	c.HarborDomain = "harbor.example.com"
 	c.HarborManaged = true
 	c.ProxyEnabled = true
-	c.ProxyPublicURL = "https://proxy.example.com"
+	c.ProxyPublicURL = "https://proxy.example.com/proxy"
+	c.ProxyBasePath = "/proxy"
+	c.ProxyTLSSecret = "poligon-harbor-tls"
 	c.HarborAdminSecret = "c1-harbor-admin"
 	c.ProxyWebhookSecretName = "c1-registry-proxy-webhook"
 	c.ProxyRobotSecretName = "c1-registry-proxy-robot"
@@ -86,7 +88,7 @@ func TestRegistryProxyHelmOp(t *testing.T) {
 	if op.Name != "c1-registry-proxy" || op.Spec.TargetNamespace != TargetNamespace {
 		t.Errorf("name/target namespace = %s/%s", op.Name, op.Spec.TargetNamespace)
 	}
-	if op.Spec.Helm.Chart != "registry-proxy" || op.Spec.Helm.Version != "0.1.0" {
+	if op.Spec.Helm.Chart != "registry-proxy" || op.Spec.Helm.Version != "0.1.1" {
 		t.Errorf("chart = %s %s", op.Spec.Helm.Chart, op.Spec.Helm.Version)
 	}
 	if len(op.Spec.DependsOn) != 1 || op.Spec.DependsOn[0].Name != "c1-harbor" {
@@ -107,8 +109,14 @@ func TestRegistryProxyHelmOp(t *testing.T) {
 	if got := valueAt(t, values, "mirror", "project"); got != "mirror" {
 		t.Errorf("mirror.project = %v", got)
 	}
-	if got := valueAt(t, values, "proxy", "publicURL"); got != "https://proxy.example.com" {
+	if got := valueAt(t, values, "proxy", "publicURL"); got != "https://proxy.example.com/proxy" {
 		t.Errorf("proxy.publicURL = %v", got)
+	}
+	if got := valueAt(t, values, "ingress", "path"); got != "/proxy" {
+		t.Errorf("ingress.path = %v", got)
+	}
+	if got := valueAt(t, values, "ingress", "tlsSecret"); got != "poligon-harbor-tls" {
+		t.Errorf("ingress.tlsSecret = %v", got)
 	}
 	if got := valueAt(t, values, "conversion", "nydusImage"); got != "/usr/local/bin/nydus-image" {
 		t.Errorf("conversion.nydusImage = %v", got)

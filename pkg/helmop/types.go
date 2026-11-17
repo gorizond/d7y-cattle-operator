@@ -55,7 +55,7 @@ const (
 
 	RegistryProxyChartRepo    = "https://gorizond.github.io/d7y-cattle-operator"
 	RegistryProxyChartName    = "registry-proxy"
-	RegistryProxyChartVersion = "0.1.0"
+	RegistryProxyChartVersion = "0.1.1"
 )
 
 // HelmOpGVR identifies Fleet HelmOps for the resource client.
@@ -95,6 +95,8 @@ type Cluster struct {
 	// ProxyEnabled is the independent p2p.dragonfly.io/proxy role.
 	ProxyEnabled           bool
 	ProxyPublicURL         string
+	ProxyBasePath          string
+	ProxyTLSSecret         string
 	ProxyRegistries        []string
 	ProxyWebhookSecretName string
 	ProxyRobotSecretName   string

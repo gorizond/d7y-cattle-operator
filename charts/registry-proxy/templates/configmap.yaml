@@ -20,6 +20,7 @@ data:
 {{- end }}
     proxy:
       public_url: {{ .Values.proxy.publicURL | quote }}
+      base_path: {{ .Values.proxy.basePath | quote }}
     webhook:
       secret_name: {{ .Values.webhook.secretName | quote }}
     conversion:
