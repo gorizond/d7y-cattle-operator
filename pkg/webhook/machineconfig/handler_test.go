@@ -73,6 +73,25 @@ func TestCreateInjectsSmartProxyURL(t *testing.T) {
 	}
 }
 
+func TestCreateInjectsNydusMirrorURL(t *testing.T) {
+	handler, _, _ := newTestHandler()
+	handler.NydusMirrorURL = "https://proxy.example.com/docker.io"
+	req := testRequest(admissionv1.Create, "c1-pool1", "Amazonec2Config", testUserData, nil, nil)
+	resp := &wranglerwebhook.Response{AdmissionResponse: admissionv1.AdmissionResponse{Allowed: true}}
+
+	if err := handler.Admit(resp, req); err != nil {
+		t.Fatalf("Admit() error = %v", err)
+	}
+	cfg := extractCFG(t, patchedUserData(t, resp))
+	raw, err := base64.URLEncoding.DecodeString(cfg)
+	if err != nil {
+		t.Fatalf("decode cfg: %v", err)
+	}
+	if !strings.Contains(string(raw), "NYDUS_MIRROR_URL=https://proxy.example.com/docker.io") {
+		t.Errorf("payload env = %q", raw)
+	}
+}
+
 func TestUpdateNeverPatches(t *testing.T) {
 	handler, _, _ := newTestHandler()
 	req := testRequest(admissionv1.Update, "c1-pool1", "Amazonec2Config", testUserData, nil, nil)

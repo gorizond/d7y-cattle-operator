@@ -36,6 +36,7 @@ CA_CRT_B64=<standard base64 of ca.crt>
 CLIENT_CRT_B64=<standard base64 of tls.crt>
 CLIENT_KEY_B64=<standard base64 of tls.key>
 SMART_PROXY_URL=https://proxy.example.test   # optional; fail-open
+NYDUS_MIRROR_URL=https://proxy.example.test/docker.io   # optional; no fallback proxy
 ```
 
 `SMART_PROXY_URL` is optional. When present it is validated as an
@@ -43,6 +44,13 @@ http(s) URL and kept for the in-cluster mirror bootstrap; new VMs never make
 the proxy mandatory (the script stays fail-open). The mirror chart points
 allowlisted registries at the external proxy domain, not at a per-node proxy. The in-cluster
 `containerd-mirror` DaemonSet applies the proxy `hosts.toml` after RKE2.
+
+`NYDUS_MIRROR_URL` is optional and must be the HTTPS base URL of the registry
+proxy mirror path, including the registry segment (for example
+`https://proxy.example.test/docker.io`; include `proxy.basePath` when the proxy
+uses one). Empty keeps the legacy dfdaemon proxy block in `/etc/nydus/nydusd-config.json`.
+When set, the installer writes the nydusd mirror layout described below and
+generates a backend without `proxy.url`/`use_http`.
 
 The script decodes the outer URL-safe base64, parses `KEY=VALUE` lines with
 `read`/`case` (no `eval`), and decodes the certificate fields with `base64 -d`.
@@ -76,13 +84,51 @@ deployed, and workloads do not need `runtimeClass: nydus`.
   `enable_referrer_detect = true` and `enable_index_detect = true`; tarfs is
   not enabled. These are nydus-snapshotter `config.toml` options (in the
   `[experimental]` table), not nydusd JSON fields.
-- `/etc/nydus/nydusd-config.json` uses the `registry` backend with the
-  object-form proxy at `http://127.0.0.1:4001` and `fallback: true`. The
-  `blobcache` device cache stays enabled, and `fs_prefetch` is on
-  (`threads_count: 8`, `merging_size: 1 MiB`, `prefetch_all: true`).
+- `/etc/nydus/nydusd-config.json` uses the `registry` backend. Without
+  `NYDUS_MIRROR_URL` it keeps the object-form dfdaemon proxy at
+  `http://127.0.0.1:4001` with `fallback: true` and `use_http: false`. With
+  `NYDUS_MIRROR_URL` set, that proxy block is omitted and nydusd fetches blobs
+  directly from the mirror host selected by the snapshotter. The `blobcache`
+  device cache stays enabled, and `fs_prefetch` is on (`threads_count: 8`,
+  `merging_size: 1 MiB`, `prefetch_all: true`).
   `rafs.prefetch`/`rafs.readahead` are intentionally not emitted: the pinned
   nydusd schema does not document those keys, and unknown fields can prevent
   nydusd from starting.
+
+### Nydus mirror config
+
+When `NYDUS_MIRROR_URL` is set, the installer writes:
+
+```text
+/etc/nydus/mirrors/docker.io/hosts.toml
+/etc/nydus/mirrors/index.docker.io/hosts.toml
+/etc/nydus/mirrors/_default/hosts.toml
+```
+
+Each file contains only the public mirror URL (the URL includes the registry
+path, for example `/docker.io`) and no credentials:
+
+```toml
+server = "https://proxy.example.test/docker.io"
+
+[host."https://proxy.example.test/docker.io"]
+```
+
+The `server` line documents the default server; the `[host."<url>"]` entry is
+the containerd-compatible mirror table that nydus-snapshotter reads. It also
+adds this to `/etc/nydus/config.toml`:
+
+```toml
+[remote.mirrors_config]
+dir = "/etc/nydus/mirrors"
+```
+
+The snapshotter selects the first matching mirror and rewrites nydusd's backend
+host before each mount. The fork release preserves the mirror URL path, so
+`https://<proxy>/docker.io` becomes the blob source
+`https://<proxy>/docker.io/v2/...`; this is why the installer no longer routes
+nydus blobs through dfdaemon in this mode. Dragonfly and the containerd mirror
+are not changed.
 
 If manager/scheduler preflight fails, or dfdaemon/nydus download or startup
 fails, the script writes an overlayfs-only direct-registry configuration and
@@ -128,7 +174,7 @@ RKE2. The in-cluster `client` DaemonSet is the steady state on each node.
 
 ## Host nydus assets and updater
 
-`p2p-install.sh` installs the patched `v0.16.0-p2p.1` snapshotter from
+`p2p-install.sh` installs the patched `v0.16.0-p2p.2` snapshotter from
 `gorizond/nydus-snapshotter` to `/usr/local/bin/containerd-nydus-grpc`. The
 release asset is `nydus-snapshotter-linux-amd64` plus its `.sha256`; the script
 downloads it with `curl -fL`, verifies the checksum, installs it atomically
@@ -140,7 +186,9 @@ path `/var/lib/rancher/rke2/agent/etc/containerd/certs.d`, then
 `/etc/containerd/certs.d`), so a `docker.io` CRI ref resolves through the same
 Dragonfly/Harbor mirror and `X-Dragonfly-Registry` header that containerd used
 for the pull. Without a certs.d override it keeps the previous `docker.io` ->
-`registry-1.docker.io` behavior. No MITM proxy or local CA is installed.
+`registry-1.docker.io` behavior. No MITM proxy or local CA is installed. Index
+detection (`enable_index_detect`) is unchanged; the mirror is selected by the
+snapshotter before nydusd starts, not by a local proxy.
 
 The other daemon binaries (`nydusd`, `nydus-image`, `nydus-overlayfs`) stay
 pinned in the static store at `NYDUS_VERSION` (`v0.16.0`). The updater prefers
@@ -171,7 +219,8 @@ The test uses temporary roots, `SKIP_DOWNLOAD=1`, and a fake `curl`/release
 asset for the snapshotter download path; it asserts the env payload decode,
 certificate files/modes, `dfget.yaml`, `dynconfig.yaml`, scheduler ID,
 `/etc/nydus/config.toml` (multiple/fusedev, no tarfs, certs.d behavior), the
-registry-backend `nydusd-config.json`, the global nydus drop-in (containerd
+registry-backend `nydusd-config.json`, the optional nydus mirror layout and
+proxy-free backend, the global nydus drop-in (containerd
 2.x) and global template (containerd 1.x), the host snapshotter unit and
 release URL/checksum, the updater script/units, the fail-open direct-registry
 path, and absence of certificate values in logs. `scripts/test-p2p-static.sh` runs `bash -n`, `shellcheck` when
@@ -186,6 +235,10 @@ available, the self-test, and a `helm template` render check.
   signatures. The patched snapshotter release is checksum-verified.
 - The patched `containerd-nydus-grpc` certs.d behavior and the host-unit start
   order need pilot verification.
+- The `v0.16.0-p2p.2` release must preserve the mirror URL path in
+  `splitMirrorURL`; verify that nydusd fetches
+  `<mirror>/docker.io/v2/...` and that a non-matching registry still falls back
+  to its origin host.
 - nydus tarfs is intentionally disabled; enabling it later requires a kernel
   with tarfs support (>= 6.4) and a matching nydusd.
 - The updater restarts the host snapshotter after a static binary change; the

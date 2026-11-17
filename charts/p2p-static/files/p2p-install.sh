@@ -26,9 +26,15 @@ nydus-overlayfs"
 # same mirror that containerd used for the pull. Installed to the existing
 # /usr/local/bin/containerd-nydus-grpc path and run by the same unit.
 NYDUS_SNAPSHOTTER_REPO="${NYDUS_SNAPSHOTTER_REPO:-gorizond/nydus-snapshotter}"
-NYDUS_SNAPSHOTTER_VERSION="${NYDUS_SNAPSHOTTER_VERSION:-v0.16.0-p2p.1}"
+NYDUS_SNAPSHOTTER_VERSION="${NYDUS_SNAPSHOTTER_VERSION:-v0.16.0-p2p.2}"
 NYDUS_SNAPSHOTTER_ASSET="${NYDUS_SNAPSHOTTER_ASSET:-nydus-snapshotter-linux-amd64}"
 NYDUS_SNAPSHOTTER_BINARY="containerd-nydus-grpc"
+# Optional HTTPS registry-proxy mirror path for nydus blobs, for example
+# https://proxy.example.test/docker.io. Empty keeps the dfdaemon proxy block in
+# the generated nydusd backend; setting it makes nydusd fetch blobs directly
+# from the mirror path and removes that proxy block.
+NYDUS_MIRROR_DIR="/etc/nydus/mirrors"
+NYDUS_MIRROR_URL="${NYDUS_MIRROR_URL:-}"
 SCHEDULER_PORT=443
 PREFLIGHT_TIMEOUT="${P2P_PREFLIGHT_TIMEOUT:-3}"
 BIN_DIR="${ROOT}/usr/local/bin"
@@ -170,7 +176,7 @@ while IFS= read -r line || [ -n "$line" ]; do
   value="${line#*=}"
   value="${value%$'\r'}"
   case "$key" in
-    MANAGER_GRPC|STATIC_URL|SMART_PROXY_URL|SCHEDULER_HOST|SCHEDULER_CLUSTER_ID|NYDUS_VERSION|CA_CRT_B64|CLIENT_CRT_B64|CLIENT_KEY_B64)
+    MANAGER_GRPC|STATIC_URL|SMART_PROXY_URL|NYDUS_MIRROR_URL|SCHEDULER_HOST|SCHEDULER_CLUSTER_ID|NYDUS_VERSION|CA_CRT_B64|CLIENT_CRT_B64|CLIENT_KEY_B64)
       printf -v "$key" '%s' "$value"
       ;;
   esac
@@ -231,6 +237,23 @@ if [ -n "${SMART_PROXY_URL:-}" ]; then
     *" "*|*$'\t'*) die "smart_proxy_url contains whitespace" ;;
   esac
   SMART_PROXY_URL="${SMART_PROXY_URL%/}"
+fi
+
+if [ -n "${NYDUS_MIRROR_URL:-}" ]; then
+  case "$NYDUS_MIRROR_URL" in
+    http://*|https://*) ;;
+    *) die "nydus_mirror_url must use http:// or https://" ;;
+  esac
+  case "$NYDUS_MIRROR_URL" in
+    *" "*|*$'\t'*|*$'\n'*|*$'\r'*|*'"'*|*'\'*|*"?"*|*"#"*|*"@"*)
+      die "nydus_mirror_url contains an unsupported character" ;;
+  esac
+  # The registry proxy serves blobs under <mirror>/v2/..., so the mirror URL
+  # must include the registry path (for example /docker.io), not only a host.
+  if [[ ! "$NYDUS_MIRROR_URL" =~ ^https?://[^/]+/ ]]; then
+    die "nydus_mirror_url must include the registry mirror path (for example /docker.io)"
+  fi
+  NYDUS_MIRROR_URL="${NYDUS_MIRROR_URL%/}"
 fi
 
 case "$SCHEDULER_HOST" in
@@ -347,6 +370,23 @@ write_file "${ROOT}${CERT_DIR}/ca.crt" 0644 < "$TMP/ca.crt"
 write_file "${ROOT}${CERT_DIR}/tls.crt" 0644 < "$TMP/tls.crt"
 write_file "${ROOT}${CERT_DIR}/tls.key" 0600 < "$TMP/tls.key"
 
+# nydusd mirror layout: the snapshotter rewrites the registry host to the first
+# matching hosts.toml entry. The same proxy path is used for docker.io and its
+# index.docker.io alias; _default covers any other registry host. These files
+# contain only the public mirror URL, never credentials.
+if [ -n "${NYDUS_MIRROR_URL:-}" ]; then
+  for mirror_host in docker.io index.docker.io _default; do
+    mirror_dir="${ROOT}${NYDUS_MIRROR_DIR}/${mirror_host}"
+    mkdir -p "$mirror_dir"
+    {
+      printf 'server = "%s"\n' "$NYDUS_MIRROR_URL"
+      # nydus-snapshotter reads the containerd-compatible host table, so the
+      # mirror also needs an explicit [host] entry with the same URL.
+      printf '\n[host."%s"]\n' "$NYDUS_MIRROR_URL"
+    } | write_file "${mirror_dir}/hosts.toml" 0644
+  done
+fi
+
 # P2P data upload is intentionally plaintext here; only the scheduler control
 # connection keeps TLS. The operator's p2p-data-tls annotation does not apply
 # to this pre-cluster bootstrap config.
@@ -368,7 +408,8 @@ scheduler:
   addr: "$SCHEDULER_HOST:$SCHEDULER_PORT"
 EOF
 
-write_file "${ROOT}${NYDUS_DIR}/config.toml" 0644 <<'TOML'
+{
+  cat <<'TOML'
 version = 1
 root = "/var/lib/containerd-nydus"
 address = "/run/containerd-nydus/containerd-nydus-grpc.sock"
@@ -377,7 +418,7 @@ daemon_mode = "multiple"
 # The patched snapshotter reads containerd's certs.d directly
 # (/var/lib/rancher/rke2/agent/etc/containerd/certs.d, then
 # /etc/containerd/certs.d), so it honors the same hosts.toml mirrors and
-# headers that containerd used for the pull. No resolver or CA is installed.
+# headers that containerd used for the pull. No local MITM proxy or CA is installed.
 [daemon]
   nydusd_config = "/etc/nydus/nydusd-config.json"
   nydusd_path = "/usr/local/bin/nydusd"
@@ -391,11 +432,58 @@ daemon_mode = "multiple"
   enable_referrer_detect = true
   enable_index_detect = true
 TOML
+  if [ -n "${NYDUS_MIRROR_URL:-}" ]; then
+    cat <<TOML
+
+# Mirror host selection for nydusd. The snapshotter rewrites the backend host
+# to the first matching mirror before each mount; the files are written under
+# ${NYDUS_MIRROR_DIR}. Without a mirror entry nydusd keeps the origin registry.
+[remote.mirrors_config]
+  dir = "$NYDUS_MIRROR_DIR"
+TOML
+  fi
+} | write_file "${ROOT}${NYDUS_DIR}/config.toml" 0644
 
 # fs_prefetch is the documented nydusd prefetch/readahead control. Avoid
 # rafs.prefetch/rafs.readahead here: the pinned nydusd schema does not document
 # those keys, and unknown fields can make nydusd fail to start.
-write_file "${ROOT}${NYDUS_DIR}/nydusd-config.json" 0644 <<'JSON'
+#
+# With a mirror configured, nydusd resolves the nydus blobs directly through
+# the snapshotter-selected HTTPS mirror host and must not go through the
+# dfdaemon proxy. Without a mirror, keep the explicit dfdaemon proxy fallback.
+if [ -n "${NYDUS_MIRROR_URL:-}" ]; then
+  write_file "${ROOT}${NYDUS_DIR}/nydusd-config.json" 0644 <<'JSON'
+{
+  "device": {
+    "backend": {
+      "type": "registry",
+      "config": {
+        "timeout": 5,
+        "connect_timeout": 5,
+        "retry_limit": 2
+      }
+    },
+    "cache": {
+      "type": "blobcache",
+      "config": {
+        "work_dir": "/var/lib/nydus/cache/"
+      }
+    }
+  },
+  "mode": "direct",
+  "digest_validate": false,
+  "iostats_files": false,
+  "enable_xattr": true,
+  "fs_prefetch": {
+    "enable": true,
+    "threads_count": 8,
+    "merging_size": 1048576,
+    "prefetch_all": true
+  }
+}
+JSON
+else
+  write_file "${ROOT}${NYDUS_DIR}/nydusd-config.json" 0644 <<'JSON'
 {
   "device": {
     "backend": {
@@ -431,6 +519,7 @@ write_file "${ROOT}${NYDUS_DIR}/nydusd-config.json" 0644 <<'JSON'
   }
 }
 JSON
+fi
 
 CONTAINERD_MAJOR="${CONTAINERD_MAJOR:-$(detect_containerd_major)}"
 mkdir -p "$RKE2_CONTAINERD_DIR"
@@ -807,6 +896,11 @@ log "certificates written to ${CERT_DIR}"
 log "dfget.yaml written with scheduler cluster ID ${SCHEDULER_CLUSTER_ID}"
 log "dynconfig written with scheduler ${SCHEDULER_HOST}:${SCHEDULER_PORT}"
 log "nydus ${NYDUS_VERSION} configuration written to ${NYDUS_DIR}"
+if [ -n "${NYDUS_MIRROR_URL:-}" ]; then
+  log "nydus mirror ${NYDUS_MIRROR_URL} configured; dfdaemon proxy block disabled for nydus blobs"
+else
+  log "nydus mirror disabled; keeping the dfdaemon proxy fallback for nydus blobs"
+fi
 log "nydus-snapshotter ${NYDUS_SNAPSHOTTER_VERSION} installed from ${NYDUS_SNAPSHOTTER_REPO}"
 log "containerd nydus configuration written to ${CONTAINERD_CONFIG_PATH}"
 log "host bootstrap services, nydus updater, and dfdaemon switch installed in ${SERVICE_DIR}"

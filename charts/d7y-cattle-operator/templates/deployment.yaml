@@ -36,6 +36,8 @@ spec:
               value: {{ .Values.manager.apiURL | quote }}
             - name: NGINX_STATIC_URL
               value: {{ .Values.nginx.staticURL | quote }}
+            - name: NYDUS_MIRROR_URL
+              value: {{ .Values.nydus.mirrorURL | quote }}
             - name: P2P_DOMAIN
               value: {{ .Values.scheduler.domain | quote }}
             - name: P2P_CLUSTER_ID

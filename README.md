@@ -106,6 +106,7 @@ not used until the p2p-static and registration MRs.
 | `scheduler.domain` | `P2P_DOMAIN` | Base domain for `d7y-scheduler.<fleet-cluster-id>.<domain>`; required |
 | `scheduler.clusterID` | `P2P_CLUSTER_ID` | Optional fallback when provisioning Cluster `status.clusterName` is empty |
 | `nginx.staticURL` | `NGINX_STATIC_URL` | Base URL of the static asset server (`http` or `https`) |
+| `nydus.mirrorURL` | `NYDUS_MIRROR_URL` | Optional HTTPS mirror path for nydus blobs, including the registry segment (for example `https://proxy.example.test/docker.io`); empty keeps the dfdaemon proxy fallback |
 | `managerApiCredentialsSecret` | `MANAGER_API_CREDENTIALS_SECRET` | Secret with `username` and `password` keys for the manager API |
 | `dragonfly.chart.repo` | `DRAGONFLY_CHART_REPO` | Helm repository URL of the Dragonfly chart; defaults to the gorizond fork |
 | `extras.chart.repo` | `EXTRAS_CHART_REPO` | Helm repository URL of the dragonfly-extras chart |
@@ -123,7 +124,7 @@ Defaults: `mtlsSecretName=dragonfly-p2p-mtls`, `dragonfly.chart.name=dragonfly`,
 `dragonfly.chart.version=1.10.1-patch.2`, `extras.chart.name=dragonfly-extras`,
 `extras.chart.version=0.1.8`, `extras.ingress.controller=nginx`,
 `extras.ingress.grpcEnabled=true`, `extras.ingress.restEnabled=true`,
-`manager.grpcPort=443`, `webhook.port=9443`,
+`manager.grpcPort=443`, `webhook.port=9443`, `nydus.mirrorURL=""`,
 `leaderElect=false`. The public scheduler IP(s) are resolved from DNS at
 reconcile time; there is no scheduler IP value. `scheduler.domain` has no
 default and is required. `scheduler.clusterID` is only a fallback for an
@@ -279,7 +280,7 @@ yet:
   enabled. A later successful run (or an existing seed cluster) installs the
   full public-P2P configuration.
 - Nydus is installed on the host: the patched `containerd-nydus-grpc`
-  snapshotter release `v0.16.0-p2p.1` plus static-store `v0.16.0` `nydusd`,
+  snapshotter release `v0.16.0-p2p.2` plus static-store `v0.16.0` `nydusd`,
   `nydus-image`, and `nydus-overlayfs` assets. It is the global CRI
   snapshotter. `enable_oci_tar` is not set (it is not a nydus field). A daily
   host timer runs `nydus-updater` to refresh the static assets and restart the
@@ -479,7 +480,7 @@ HelmOps absent and records the event/condition.
 ## Host nydus snapshotter
 
 `p2p-install.sh` installs the patched host snapshotter from
-`gorizond/nydus-snapshotter` release `v0.16.0-p2p.1` (asset
+`gorizond/nydus-snapshotter` release `v0.16.0-p2p.2` (asset
 `nydus-snapshotter-linux-amd64` plus its `.sha256`) to
 `/usr/local/bin/containerd-nydus-grpc`; the existing
 `nydus-snapshotter-bootstrap.service` runs it. The patched build reads
@@ -490,12 +491,26 @@ mirror and headers that containerd used for the pull. Without a certs.d
 override it keeps the previous `docker.io` -> `registry-1.docker.io` behavior.
 
 The installer defaults are `NYDUS_SNAPSHOTTER_REPO=gorizond/nydus-snapshotter`,
-`NYDUS_SNAPSHOTTER_VERSION=v0.16.0-p2p.1`, and
+`NYDUS_SNAPSHOTTER_VERSION=v0.16.0-p2p.2`, and
 `NYDUS_SNAPSHOTTER_ASSET=nydus-snapshotter-linux-amd64`; override them for
 another fork release. The other nydus daemon assets (`nydusd`, `nydus-image`,
 `nydus-overlayfs`) stay pinned in the static store at `NYDUS_VERSION`
 (`v0.16.0`). A missing release asset falls back to the direct registry so RKE2
 can still start. There is no MITM proxy or local CA on the node.
+
+Set `nydus.mirrorURL` (`NYDUS_MIRROR_URL`) to the registry proxy mirror path,
+for example `https://proxy.example.test/docker.io`, to make nydusd fetch nydus
+blobs directly from that HTTPS path instead of the dfdaemon proxy. The
+bootstrap writes `server = "<mirror>"` plus the containerd-compatible
+`[host."<mirror>"]` entry under
+`/etc/nydus/mirrors/{docker.io,index.docker.io,_default}/hosts.toml` and adds
+`[remote.mirrors_config] dir = "/etc/nydus/mirrors"` to
+`/etc/nydus/config.toml`; the generated `nydusd-config.json` then omits the
+`proxy.url`/`use_http` block. The value must include the registry segment
+(the proxy serves blobs at `<mirror>/v2/...`) and is supplied per deployment;
+no domain is hardcoded. Leaving it empty preserves the existing dfdaemon proxy
+fallback and the direct-registry behavior. Dragonfly and the containerd mirror
+are unchanged.
 
 The registry proxy still canonicalizes Docker aliases (`registry-1.docker.io`,
 `index.docker.io` -> `docker.io`) before its allowlist and Harbor mapping.
@@ -573,7 +588,7 @@ control/data without blocking manager/KeyDB.
 `charts/p2p-static` serves `/p2p-install.sh` and the static asset volume through
 Nginx. The bootstrap payload is a base64url **env-file** (no JSON, no `jq`, no
 python on the node). The script installs the host-only patched nydus
-snapshotter (`v0.16.0-p2p.1`) plus the static `v0.16.0` daemon assets
+snapshotter (`v0.16.0-p2p.2`) plus the static `v0.16.0` daemon assets
 (including `nydus-overlayfs`), writes the global nydus containerd drop-in
 `config-v3.toml.d/90-nydus.toml`, starts it before RKE2, and installs a daily
 host updater. There is no in-cluster nydus DaemonSet or HelmOp. See
@@ -685,14 +700,14 @@ that predates those fields would affect REST only.
 
 Nydus runs only on the host, installed by `p2p-install.sh`; the operator no
 longer creates a nydus chart, DaemonSet, HelmOp, RuntimeClass, or VPA. The
-script installs the patched `v0.16.0-p2p.1` snapshotter plus static `v0.16.0`
+script installs the patched `v0.16.0-p2p.2` snapshotter plus static `v0.16.0`
 daemon assets (including `nydus-overlayfs`), writes `/etc/nydus/config.toml`
 (multiple/fusedev, `[experimental]` `enable_referrer_detect`/
 `enable_index_detect`, no tarfs), the registry-backend `nydusd-config.json`,
 and the global containerd drop-in. It starts the host unit before RKE2 and runs
 a daily updater for the static binaries. Do not add
 `enable_oci_tar` (it is not a nydus field). Pilot must verify the drop-in merge
-with `containerd config dump`, the v0.16.0-p2p.1 unit flags, and the host restart
+with `containerd config dump`, the v0.16.0-p2p.2 unit flags, and the host restart
 procedure. Tarfs is intentionally disabled; enabling it requires kernel >= 6.4
 and a matching nydusd. Ordinary-OCI Zran is not claimed.
 

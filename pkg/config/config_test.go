@@ -12,6 +12,7 @@ var envKeys = []string{
 	"P2P_DOMAIN",
 	"P2P_CLUSTER_ID",
 	"NGINX_STATIC_URL",
+	"NYDUS_MIRROR_URL",
 	"MTLS_SECRET_NAME",
 	"MANAGER_API_CREDENTIALS_SECRET",
 	"DRAGONFLY_CHART_REPO",
@@ -218,6 +219,8 @@ func TestLoadInvalidValues(t *testing.T) {
 		"manager API without https":         "--manager-api-url=http://manager-api.example.com",
 		"manager API with invalid URL":      "--manager-api-url=not-a-url",
 		"nginx static with unsupported URL": "--nginx-static-url=ftp://static.example.com",
+		"nydus mirror without path":         "--nydus-mirror-url=https://proxy.example.com",
+		"nydus mirror with query":           "--nydus-mirror-url=https://proxy.example.com/docker.io?x=1",
 		"gRPC domain with scheme":           "--manager-grpc-domain=https://manager-grpc.example.com",
 		"gRPC domain with port":             "--manager-grpc-domain=manager-grpc.example.com:443",
 		"invalid Secret name":               "--mtls-secret-name=Bad_Name",
@@ -272,6 +275,7 @@ func TestLoadEnvOverride(t *testing.T) {
 	t.Setenv("P2P_DOMAIN", "env.example.com")
 	t.Setenv("P2P_CLUSTER_ID", "c-m-env")
 	t.Setenv("NGINX_STATIC_URL", "http://static.env.example.com")
+	t.Setenv("NYDUS_MIRROR_URL", "https://proxy.env.example.com/docker.io")
 	t.Setenv("MTLS_SECRET_NAME", "env-mtls")
 	t.Setenv("MANAGER_API_CREDENTIALS_SECRET", "env-credentials")
 	t.Setenv("DRAGONFLY_CHART_REPO", "https://charts.env.example.com")
@@ -317,6 +321,9 @@ func TestLoadEnvOverride(t *testing.T) {
 	}
 	if cfg.NginxStaticURL != "http://static.env.example.com" {
 		t.Errorf("NginxStaticURL = %q", cfg.NginxStaticURL)
+	}
+	if cfg.NydusMirrorURL != "https://proxy.env.example.com/docker.io" {
+		t.Errorf("NydusMirrorURL = %q", cfg.NydusMirrorURL)
 	}
 	if cfg.MTLSSecretName != "env-mtls" {
 		t.Errorf("MTLSSecretName = %q", cfg.MTLSSecretName)
