@@ -76,16 +76,25 @@ func (c *Copier) copyTree(ctx context.Context, sourceRepo, mirrorRepo, ref strin
 		return err
 	}
 	for _, digest := range digests {
-		blob, err := c.Source.GetBlob(ctx, sourceRepo, digest)
-		if err != nil {
-			return fmt.Errorf("read source blob %s: %w", digest, err)
-		}
-		if err := c.Mirror.PutBlob(ctx, mirrorRepo, digest, blob); err != nil {
-			return fmt.Errorf("write mirror blob %s: %w", digest, err)
+		if err := c.copyBlob(ctx, sourceRepo, mirrorRepo, digest); err != nil {
+			return err
 		}
 	}
 	if err := c.Mirror.PutManifest(ctx, mirrorRepo, ref, manifest.MediaType, manifest.Body); err != nil {
 		return fmt.Errorf("write mirror manifest %s: %w", ref, err)
+	}
+	return nil
+}
+
+// copyBlob streams one source blob into the mirror without buffering it.
+func (c *Copier) copyBlob(ctx context.Context, sourceRepo, mirrorRepo, digest string) error {
+	body, size, _, err := c.Source.GetBlob(ctx, sourceRepo, digest, "")
+	if err != nil {
+		return fmt.Errorf("read source blob %s: %w", digest, err)
+	}
+	defer body.Close()
+	if err := c.Mirror.PutBlob(ctx, mirrorRepo, digest, body, size); err != nil {
+		return fmt.Errorf("write mirror blob %s: %w", digest, err)
 	}
 	return nil
 }

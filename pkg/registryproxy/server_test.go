@@ -1,9 +1,13 @@
 package registryproxy
 
 import (
+	"bytes"
 	"context"
+	"fmt"
+	"io"
 	"net/http"
 	"net/http/httptest"
+	"strconv"
 	"strings"
 	"testing"
 	"time"
@@ -18,8 +22,18 @@ type fakeBackend struct {
 func (f *fakeBackend) GetManifest(context.Context, string, string, string) (Manifest, error) {
 	return f.manifest, nil
 }
-func (f *fakeBackend) GetBlob(context.Context, string, string, string) ([]byte, error) {
-	return f.blob, nil
+func (f *fakeBackend) GetBlob(_ context.Context, _, _, _, rangeHeader string) (io.ReadCloser, int64, string, error) {
+	if rangeHeader == "" {
+		return io.NopCloser(bytes.NewReader(f.blob)), int64(len(f.blob)), "", nil
+	}
+	var start, end int
+	if _, err := fmt.Sscanf(rangeHeader, "bytes=%d-%d", &start, &end); err != nil ||
+		start < 0 || end < start || end >= len(f.blob) {
+		return nil, 0, "", &RegistryError{Status: http.StatusRequestedRangeNotSatisfiable, Op: "get blob"}
+	}
+	part := f.blob[start : end+1]
+	return io.NopCloser(bytes.NewReader(part)), int64(len(part)),
+		fmt.Sprintf("bytes %d-%d/%d", start, end, len(f.blob)), nil
 }
 func (f *fakeBackend) Referrers(context.Context, string, string, string) ([]byte, error) {
 	return f.refs, nil
@@ -73,6 +87,12 @@ func TestServerOCIRead(t *testing.T) {
 	server.Handler().ServeHTTP(rec, req)
 	if rec.Code != http.StatusPartialContent || rec.Body.String() != "blo" {
 		t.Errorf("range response = %d %q", rec.Code, rec.Body.String())
+	}
+	if got := rec.Header().Get("Content-Range"); got != "bytes 0-2/9" {
+		t.Errorf("Content-Range = %q", got)
+	}
+	if got := rec.Header().Get("Content-Length"); got != "3" {
+		t.Errorf("Content-Length = %q", got)
 	}
 
 	req = httptest.NewRequest(http.MethodGet, "/docker.io/v2/library/nginx/referrers/sha256:manifest", nil)
@@ -202,9 +222,9 @@ func (b *cancelProbeBackend) GetManifest(ctx context.Context, _, _, _ string) (M
 	return Manifest{Digest: "sha256:manifest", MediaType: ociManifestType, Body: []byte("manifest")}, nil
 }
 
-func (b *cancelProbeBackend) GetBlob(ctx context.Context, _, _, _ string) ([]byte, error) {
+func (b *cancelProbeBackend) GetBlob(ctx context.Context, _, _, _, _ string) (io.ReadCloser, int64, string, error) {
 	b.wait(ctx)
-	return []byte("blob-data"), nil
+	return io.NopCloser(strings.NewReader("blob-data")), 9, "", nil
 }
 
 func (b *cancelProbeBackend) Referrers(ctx context.Context, _, _, _ string) ([]byte, error) {
@@ -254,5 +274,78 @@ func TestBackendContextIsBounded(t *testing.T) {
 	}
 	if remaining := time.Until(deadline); remaining <= 0 || remaining > backendTimeout {
 		t.Errorf("backend deadline = %v, want within (0, %v]", remaining, backendTimeout)
+	}
+}
+
+type zeroReader struct{}
+
+func (zeroReader) Read(p []byte) (int, error) {
+	for i := range p {
+		p[i] = 0
+	}
+	return len(p), nil
+}
+
+type trackingBody struct {
+	r      io.Reader
+	closed bool
+}
+
+func (b *trackingBody) Read(p []byte) (int, error) { return b.r.Read(p) }
+func (b *trackingBody) Close() error {
+	b.closed = true
+	return nil
+}
+
+type streamBackend struct {
+	body *trackingBody
+	size int64
+}
+
+func (b *streamBackend) GetManifest(context.Context, string, string, string) (Manifest, error) {
+	return Manifest{}, nil
+}
+func (b *streamBackend) GetBlob(context.Context, string, string, string, string) (io.ReadCloser, int64, string, error) {
+	return b.body, b.size, "", nil
+}
+func (b *streamBackend) Referrers(context.Context, string, string, string) ([]byte, error) {
+	return nil, nil
+}
+
+func TestServerStreamsLargeBlobWithContentLength(t *testing.T) {
+	const size = 4 << 20
+	body := &trackingBody{r: io.LimitReader(zeroReader{}, size)}
+	server := testServer(&streamBackend{body: body, size: size})
+	rec := httptest.NewRecorder()
+	server.Handler().ServeHTTP(rec, httptest.NewRequest(http.MethodGet,
+		"/docker.io/v2/library/nginx/blobs/sha256:large", nil))
+	if rec.Code != http.StatusOK {
+		t.Fatalf("response = %d %q", rec.Code, rec.Body.String())
+	}
+	if rec.Body.Len() != size {
+		t.Errorf("body length = %d, want %d", rec.Body.Len(), size)
+	}
+	if got := rec.Header().Get("Content-Length"); got != strconv.Itoa(size) {
+		t.Errorf("Content-Length = %q, want %d", got, size)
+	}
+	if !body.closed {
+		t.Error("backend blob stream was not closed")
+	}
+}
+
+func TestHarborBackendFallsBackToSourceOnMirrorMiss(t *testing.T) {
+	source := newFakeRegistry()
+	mirror := newFakeRegistry()
+	source.blobs["dockerio/library/nginx:sha256:layer"] = []byte("layer-data")
+	backend := &HarborBackend{Source: source, Mirror: mirror, MirrorProject: "mirror"}
+	body, size, contentRange, err := backend.GetBlob(context.Background(),
+		"docker.io", "library/nginx", "sha256:layer", "")
+	if err != nil {
+		t.Fatalf("GetBlob() error = %v", err)
+	}
+	defer body.Close()
+	data, _ := io.ReadAll(body)
+	if string(data) != "layer-data" || size != int64(len(data)) || contentRange != "" {
+		t.Errorf("blob = %q size=%d range=%q", data, size, contentRange)
 	}
 }

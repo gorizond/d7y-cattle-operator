@@ -86,7 +86,7 @@ registryProxy:
   chart:
     repo: https://gorizond.github.io/d7y-cattle-operator
     name: registry-proxy
-    version: 0.1.9
+    version: 0.1.10
 
 # External/existing Harbor and the public proxy endpoint. proxy.domain is the
 # operator-wide public proxy DNS name (no scheme); leave empty to disable the
