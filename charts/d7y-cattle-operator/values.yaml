@@ -97,6 +97,7 @@ proxy:
   # Secret in the operator/local namespace. It is copied per cluster and must
   # contain HARBOR_ADMIN_PASSWORD before the Harbor/proxy HelmOps are applied.
   harborAdminSecret: harbor-admin
+  # String "docker.io,ghcr.io" or list ["docker.io", "ghcr.io"].
   registries: docker.io
 
 # Strict node-local containerd registry mirror for seed/data clusters.
