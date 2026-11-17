@@ -76,8 +76,11 @@ func (c *Converter) Convert(ctx context.Context, registry, repo, tag, sourceDige
 	}
 	repoPath := c.MirrorProject + "/" + strings.TrimSuffix(registry, "/") + "/" + strings.TrimPrefix(repo, "/")
 	host := harborHost(c.HarborURL)
-	source := host + "/" + repoPath + ":" + tag
-	target := source + "-merged"
+	source, targetTag, err := conversionRefs(host, repoPath, tag)
+	if err != nil {
+		return ConversionResult{}, err
+	}
+	target := host + "/" + repoPath + ":" + targetTag + "-merged"
 	platform := c.Platform
 	if platform == "" {
 		platform = "linux/amd64"
@@ -125,7 +128,7 @@ func (c *Converter) Convert(ctx context.Context, registry, repo, tag, sourceDige
 		return ConversionResult{}, fmt.Errorf("nydusify convert: %w: %s", err, strings.TrimSpace(string(output)))
 	}
 
-	merged, err := c.Registry.GetManifest(runCtx, repoPath, tag+"-merged")
+	merged, err := c.Registry.GetManifest(runCtx, repoPath, targetTag+"-merged")
 	if err != nil {
 		return ConversionResult{}, fmt.Errorf("read merged index: %w", err)
 	}
@@ -145,8 +148,8 @@ func (c *Converter) Convert(ctx context.Context, registry, repo, tag, sourceDige
 	if err != nil {
 		return ConversionResult{}, err
 	}
-	if err := c.Registry.PutManifest(runCtx, repoPath, tag, ociIndexType, body); err != nil {
-		return ConversionResult{}, fmt.Errorf("move merged index to tag %s: %w", tag, err)
+	if err := c.Registry.PutManifest(runCtx, repoPath, targetTag, ociIndexType, body); err != nil {
+		return ConversionResult{}, fmt.Errorf("move merged index to tag %s: %w", targetTag, err)
 	}
 	indexDigest := merged.Digest
 	if changed {
@@ -154,6 +157,23 @@ func (c *Converter) Convert(ctx context.Context, registry, repo, tag, sourceDige
 		indexDigest = "sha256:" + hex.EncodeToString(sum[:])
 	}
 	return ConversionResult{IndexDigest: indexDigest, SourceDigest: sourceDigest}, nil
+}
+
+// conversionRefs builds nydusify source/target references. A digest source
+// must use repo@sha256:...; its converted index is tagged with a short,
+// valid tag because repo:sha256:...-merged is not a legal reference.
+func conversionRefs(host, repoPath, ref string) (source, targetTag string, err error) {
+	if strings.HasPrefix(ref, "sha256:") {
+		short := strings.TrimPrefix(ref, "sha256:")
+		if len(short) > 12 {
+			short = short[:12]
+		}
+		if short == "" {
+			return "", "", fmt.Errorf("invalid digest reference %q", ref)
+		}
+		return host + "/" + repoPath + "@" + ref, "nd-" + short, nil
+	}
+	return host + "/" + repoPath + ":" + ref, ref, nil
 }
 
 func verifyIndex(ctx context.Context, registry Registry, repoPath string, manifest Manifest) (*indexDocument, error) {

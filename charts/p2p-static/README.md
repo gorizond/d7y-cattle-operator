@@ -77,7 +77,12 @@ deployed, and workloads do not need `runtimeClass: nydus`.
   not enabled. These are nydus-snapshotter `config.toml` options (in the
   `[experimental]` table), not nydusd JSON fields.
 - `/etc/nydus/nydusd-config.json` uses the `registry` backend with the
-  object-form proxy at `http://127.0.0.1:4001` and `fallback: true`.
+  object-form proxy at `http://127.0.0.1:4001` and `fallback: true`. The
+  `blobcache` device cache stays enabled, and `fs_prefetch` is on
+  (`threads_count: 8`, `merging_size: 1 MiB`, `prefetch_all: true`).
+  `rafs.prefetch`/`rafs.readahead` are intentionally not emitted: the pinned
+  nydusd schema does not document those keys, and unknown fields can prevent
+  nydusd from starting.
 
 If manager/scheduler preflight fails, or dfdaemon/nydus download or startup
 fails, the script writes an overlayfs-only direct-registry configuration and

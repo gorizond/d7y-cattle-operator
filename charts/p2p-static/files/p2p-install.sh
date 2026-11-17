@@ -316,6 +316,9 @@ daemon_mode = "multiple"
   enable_index_detect = true
 TOML
 
+# fs_prefetch is the documented nydusd prefetch/readahead control. Avoid
+# rafs.prefetch/rafs.readahead here: the pinned nydusd schema does not document
+# those keys, and unknown fields can make nydusd fail to start.
 write_file "${ROOT}${NYDUS_DIR}/nydusd-config.json" 0644 <<'JSON'
 {
   "device": {

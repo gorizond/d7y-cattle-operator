@@ -395,7 +395,7 @@ func TestLoadHarborProxyEnv(t *testing.T) {
 	t.Setenv("PROXY_BASE_PATH", "/proxy")
 	t.Setenv("PROXY_TLS_SECRET", "poligon-harbor-tls")
 	t.Setenv("HARBOR_CHART_VERSION", "1.19.4")
-	t.Setenv("REGISTRY_PROXY_CHART_VERSION", "0.1.10")
+	t.Setenv("REGISTRY_PROXY_CHART_VERSION", "0.1.11")
 	cfg, err := Load(requiredArgs())
 	if err != nil {
 		t.Fatalf("Load() error = %v", err)
@@ -415,7 +415,7 @@ func TestLoadHarborProxyConfig(t *testing.T) {
 	clearEnv(t)
 	args := append(requiredArgs(),
 		"--harbor-chart-version=1.19.4",
-		"--registry-proxy-chart-version=0.1.10",
+		"--registry-proxy-chart-version=0.1.11",
 		"--proxy-domain=proxy.example.com",
 		"--proxy-harbor-url=https://harbor.example.com",
 		"--proxy-harbor-admin-secret=harbor-admin",
@@ -433,7 +433,7 @@ func TestLoadHarborProxyConfig(t *testing.T) {
 	if cfg.ProxyHarborAdminSecret != "harbor-admin" || cfg.ProxyRegistries != "docker.io,ghcr.io" {
 		t.Errorf("proxy secret/registries = %q/%q", cfg.ProxyHarborAdminSecret, cfg.ProxyRegistries)
 	}
-	if cfg.HarborChartVersion != "1.19.4" || cfg.RegistryProxyChartVersion != "0.1.10" {
+	if cfg.HarborChartVersion != "1.19.4" || cfg.RegistryProxyChartVersion != "0.1.11" {
 		t.Errorf("chart versions = %q/%q", cfg.HarborChartVersion, cfg.RegistryProxyChartVersion)
 	}
 	if cfg.ProxyBasePath != "/proxy" || cfg.ProxyTLSSecret != "poligon-harbor-tls" {

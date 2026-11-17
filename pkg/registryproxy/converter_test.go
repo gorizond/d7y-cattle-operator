@@ -164,3 +164,45 @@ func TestVerifyIndexRejectsWrongOrder(t *testing.T) {
 		t.Fatal("verifyIndex() error = nil for wrong order")
 	}
 }
+
+func TestConverterDigestReferenceArgs(t *testing.T) {
+	const digest = "sha256:0123456789abcdef0123456789abcdef0123456789abcdef0123456789abcdef"
+	const targetTag = "nd-0123456789ab"
+	registry := newFakeRegistry()
+	indexBody, _ := json.Marshal(indexDocument{Manifests: []indexDescriptor{
+		{MediaType: ociManifestType, Digest: "sha256:oci", Platform: &indexPlatform{OS: "linux", Architecture: "amd64"}},
+		{MediaType: ociManifestType, Digest: "sha256:nydus", ArtifactType: nydusArtifactType, Platform: &indexPlatform{OS: "linux", Architecture: "amd64"}},
+	}})
+	registry.manifests["mirror/docker.io/library/nginx:"+targetTag+"-merged"] = Manifest{Digest: "sha256:index", MediaType: ociIndexType, Body: indexBody}
+	registry.manifests["mirror/docker.io/library/nginx:sha256:nydus"] = Manifest{
+		MediaType: ociManifestType,
+		Body:      []byte(`{"layers":[{"annotations":{"containerd.io/snapshot/nydus-bootstrap":""}}]}`),
+	}
+	var captured []string
+	converter := &Converter{
+		HarborURL: "https://harbor.example.com", MirrorProject: "mirror", NydusifyPath: "/usr/local/bin/nydusify",
+		NydusImage: "/usr/local/bin/nydus-image", Registry: registry,
+		Command: func(_ context.Context, _ string, args ...string) *exec.Cmd {
+			captured = args
+			return exec.Command("true")
+		},
+	}
+	if _, err := converter.Convert(context.Background(), "docker.io", "library/nginx", digest, digest); err != nil {
+		t.Fatalf("Convert() error = %v", err)
+	}
+	joined := strings.Join(captured, " ")
+	for _, want := range []string{
+		"--source harbor.example.com/mirror/docker.io/library/nginx@" + digest,
+		"--target harbor.example.com/mirror/docker.io/library/nginx:" + targetTag,
+	} {
+		if !strings.Contains(joined, want) {
+			t.Errorf("args %q missing %q", joined, want)
+		}
+	}
+	if _, ok := registry.manifests["mirror/docker.io/library/nginx:"+targetTag]; !ok {
+		t.Error("converted index was not written under the short digest tag")
+	}
+	if _, ok := registry.manifests["mirror/docker.io/library/nginx:"+digest]; ok {
+		t.Error("converted index was written under an invalid digest tag")
+	}
+}
