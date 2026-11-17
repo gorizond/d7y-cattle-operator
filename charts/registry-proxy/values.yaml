@@ -1,0 +1,75 @@
+replicaCount: 1
+
+serviceAccount:
+  create: true
+  name: ""
+
+image:
+  # Same image as the operator: it contains /registry-proxy.
+  repository: ghcr.io/gorizond/d7y-cattle-operator
+  tag: v0.1.20
+  pullPolicy: IfNotPresent
+
+command:
+  - /registry-proxy
+args:
+  - --config=/etc/registry-proxy/config.yaml
+
+# External Harbor (or the Harbor created by the operator). No PVC here: the
+# proxy is stateless and keeps in-flight conversion state in memory.
+harbor:
+  url: ""
+  adminSecret: harbor-admin
+  robotSecret: registry-proxy-robot
+
+mirror:
+  project: mirror
+
+registry:
+  allowlist:
+    - docker.io
+
+proxy:
+  publicURL: ""
+
+webhook:
+  secretName: registry-proxy-webhook
+
+conversion:
+  platform: linux/amd64
+  # Conversion binaries shipped in the proxy image.
+  nydusify: /usr/local/bin/nydusify
+  nydusImage: /usr/local/bin/nydus-image
+  workDir: /tmp/nydusify
+  timeout: 10m
+
+service:
+  type: ClusterIP
+  port: 8080
+
+# External ingress for the public proxy domain. The operator sets enabled/host
+# from proxy.publicURL; TLS remains a per-environment Secret.
+ingress:
+  enabled: false
+  className: traefik
+  host: ""
+  tlsSecret: ""
+  annotations: {}
+
+resources:
+  requests:
+    cpu: 100m
+    memory: 128Mi
+  limits:
+    cpu: "1"
+    memory: 1Gi
+
+nodeSelector: {}
+tolerations: []
+
+podAnnotations: {}
+
+networkPolicy:
+  enabled: true
+  # Node/hostNetwork clients (dfdaemon) originate from the node network.
+  nodeCIDR: 10.0.0.0/8

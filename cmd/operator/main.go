@@ -6,6 +6,7 @@ import (
 	"net/http"
 	"net/url"
 	"os"
+	"strings"
 
 	lassoclient "github.com/rancher/lasso/pkg/client"
 	provisioning "github.com/rancher/rancher/pkg/generated/controllers/provisioning.cattle.io"
@@ -115,6 +116,21 @@ func run() error {
 			Name:    cfg.MirrorChartName,
 			Version: cfg.MirrorChartVersion,
 		},
+		HarborChart: helmop.Chart{
+			Repo:    cfg.HarborChartRepo,
+			Name:    cfg.HarborChartName,
+			Version: cfg.HarborChartVersion,
+		},
+		RegistryProxyChart: helmop.Chart{
+			Repo:    cfg.RegistryProxyChartRepo,
+			Name:    cfg.RegistryProxyChartName,
+			Version: cfg.RegistryProxyChartVersion,
+		},
+		HarborIngressClass:       "traefik",
+		ProxyDomain:              cfg.ProxyDomain,
+		ProxyHarborURL:           cfg.ProxyHarborURL,
+		ProxyHarborAdminSecret:   cfg.ProxyHarborAdminSecret,
+		ProxyRegistries:          splitCSV(cfg.ProxyRegistries),
 		ExtrasIngressController:  cfg.ExtrasIngressController,
 		ExtrasIngressClassName:   cfg.ExtrasIngressClassName,
 		ExtrasIngressGRPCEnabled: cfg.ExtrasIngressGRPCEnabled,
@@ -138,6 +154,7 @@ func run() error {
 		MTLSSecretName:    cfg.MTLSSecretName,
 		ManagerGRPCDomain: cfg.ManagerGRPCDomain,
 		StaticURL:         cfg.NginxStaticURL,
+		SmartProxyURL:     proxyPublicURL(cfg.ProxyDomain),
 		SchedulerDomain:   cfg.P2PDomain,
 		ClusterIDFallback: cfg.ClusterIDFallback,
 	}
@@ -150,6 +167,23 @@ func run() error {
 
 	slog.Info("webhook server listening", "port", cfg.WebhookPort)
 	return webhook.Serve(ctx, fmt.Sprintf(":%d", cfg.WebhookPort), mux, certLoader)
+}
+
+func splitCSV(raw string) []string {
+	var values []string
+	for _, item := range strings.Split(raw, ",") {
+		if item = strings.TrimSpace(item); item != "" {
+			values = append(values, item)
+		}
+	}
+	return values
+}
+
+func proxyPublicURL(domain string) string {
+	if domain == "" {
+		return ""
+	}
+	return "https://" + domain
 }
 
 func hostFromURL(raw string) (string, error) {

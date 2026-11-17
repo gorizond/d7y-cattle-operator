@@ -207,6 +207,7 @@ assert_contains "$INSTALL" 'SCHEDULER_PORT=443'
 assert_contains "$INSTALL" 'NYDUS_VERSION="${NYDUS_VERSION:-v0.16.0}"'
 assert_contains "$INSTALL" 'nydus-overlayfs'
 assert_contains "$INSTALL" '90-nydus.toml'
+assert_contains "$INSTALL" 'SMART_PROXY_URL'
 
 BEFORE="$(sha256sum "${ROOT_ONE}/etc/dragonfly/dfget.yaml" | cut -d' ' -f1)"
 P2P_ROOT="$ROOT_ONE" SKIP_DOWNLOAD=1 SKIP_MODULES=1 SKIP_SYSTEMD=1 SKIP_PREFLIGHT=1 CONTAINERD_MAJOR=1 \

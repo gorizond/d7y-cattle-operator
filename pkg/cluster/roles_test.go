@@ -45,6 +45,18 @@ func TestResolveRoles(t *testing.T) {
 			want:        Roles{Enabled: true, Seed: true},
 		},
 		{
+			name:        "harbor role",
+			labels:      map[string]string{LabelEnabled: "true"},
+			annotations: map[string]string{AnnotationHarbor: "true", AnnotationHarborDomain: "harbor.example.com"},
+			want:        Roles{Enabled: true, Harbor: true, HarborDomain: "harbor.example.com"},
+		},
+		{
+			name:        "proxy role is independent",
+			labels:      map[string]string{LabelEnabled: "true"},
+			annotations: map[string]string{AnnotationProxy: "true", AnnotationHarborURL: "https://external.example.com"},
+			want:        Roles{Enabled: true, Proxy: true, HarborURL: "https://external.example.com"},
+		},
+		{
 			name:   "both roles",
 			labels: map[string]string{LabelEnabled: "true"},
 			annotations: map[string]string{
@@ -67,6 +79,25 @@ func TestResolveRoles(t *testing.T) {
 				t.Errorf("ResolveRoles() = %+v, want %+v", got, test.want)
 			}
 		})
+	}
+}
+
+func TestHarborValidation(t *testing.T) {
+	for _, value := range []string{"harbor.example.com", "harbor.koldun.negash.ru"} {
+		if err := validateHarborDomain(value); err != nil {
+			t.Errorf("validateHarborDomain(%q) error = %v", value, err)
+		}
+	}
+	for _, value := range []string{"", "https://harbor.example.com", "harbor.example.com:443", "Bad_Domain"} {
+		if err := validateHarborDomain(value); err == nil {
+			t.Errorf("validateHarborDomain(%q) = nil, want error", value)
+		}
+	}
+	if err := validateHarborURL("https://harbor.example.com"); err != nil {
+		t.Errorf("validateHarborURL() error = %v", err)
+	}
+	if err := validateHarborURL("http://harbor.example.com"); err == nil {
+		t.Error("validateHarborURL(http) = nil, want error")
 	}
 }
 

@@ -58,6 +58,8 @@ func TestBuildersUseConfiguredChartVersion(t *testing.T) {
 	c := testCluster()
 	c.Chart.Version = "9.9.9"
 	c.ExtrasChart.Version = "8.8.8"
+	c.HarborChart.Version = "6.6.6"
+	c.RegistryProxyChart.Version = "5.5.5"
 
 	for name, op := range map[string]*fleetv1alpha1.HelmOp{
 		"manager": Manager(c),
@@ -70,6 +72,12 @@ func TestBuildersUseConfiguredChartVersion(t *testing.T) {
 	}
 	if got := Extras(c, ExtrasOptions{}).Spec.Helm.Version; got != "8.8.8" {
 		t.Errorf("extras chart version = %q, want 8.8.8", got)
+	}
+	if got := Harbor(c).Spec.Helm.Version; got != "6.6.6" {
+		t.Errorf("harbor chart version = %q, want 6.6.6", got)
+	}
+	if got := RegistryProxy(c).Spec.Helm.Version; got != "5.5.5" {
+		t.Errorf("registry proxy chart version = %q, want 5.5.5", got)
 	}
 }
 
@@ -86,6 +94,8 @@ func TestHelmOpsHaveNoPersistence(t *testing.T) {
 		"manager": Manager(c),
 		"control": Control(c),
 		"data":    Data(c),
+		"mirror":  Mirror(c),
+		"proxy":   RegistryProxy(c),
 		"extras":  Extras(c, ExtrasOptions{IngressEnabled: true, VPAEnabled: true, Manager: true, Seed: true}),
 	}
 	for name, op := range ops {

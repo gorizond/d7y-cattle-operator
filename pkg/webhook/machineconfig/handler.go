@@ -67,6 +67,7 @@ type Handler struct {
 	MTLSSecretName    string
 	ManagerGRPCDomain string
 	StaticURL         string
+	SmartProxyURL     string
 	SchedulerDomain   string
 	ClusterIDFallback string
 }
@@ -158,6 +159,7 @@ func (h *Handler) Admit(resp *wranglerwebhook.Response, req *wranglerwebhook.Req
 	payload, err := bootstrap.Encode(bootstrap.Payload{
 		ManagerGRPC:        fmt.Sprintf("https://%s:%d", h.ManagerGRPCDomain, managerGRPCPort),
 		StaticURL:          h.StaticURL,
+		SmartProxyURL:      h.SmartProxyURL,
 		SchedulerHost:      schedulerHostName,
 		SchedulerClusterID: schedulerID,
 		CACert:             secret.Data["ca.crt"],

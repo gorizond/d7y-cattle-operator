@@ -56,6 +56,34 @@ func TestReconcileSeedCreatesHelmOps(t *testing.T) {
 	}
 }
 
+func TestReconcileSeedMirrorUsesExternalProxy(t *testing.T) {
+	controller, store, _ := newTestController(t)
+	controller.opts.ProxyHarborURL = "https://external.example.com"
+	cluster := testSeedCluster("42")
+	cluster.Annotations[AnnotationProxy] = "true"
+
+	if _, err := controller.reconcile("", cluster); err != nil {
+		t.Fatalf("reconcile() error = %v", err)
+	}
+	mirror := store.object("fleet-default/c1-containerd-mirror")
+	if mirror == nil {
+		t.Fatal("mirror HelmOp was not created")
+	}
+	if got := dependsOn(mirror); len(got) != 2 || got[0] != "c1-data" || got[1] != "c1-registry-proxy" {
+		t.Errorf("mirror dependsOn = %v, want data+registry-proxy", got)
+	}
+	values := helmValues(t, mirror)
+	if got := valueAtPath(t, values, "proxy", "enabled"); got != true {
+		t.Errorf("mirror proxy.enabled = %v, want true", got)
+	}
+	if got := valueAtPath(t, values, "proxy", "url"); got != "https://proxy.example.com" {
+		t.Errorf("mirror proxy.url = %v", got)
+	}
+	if !store.has("fleet-default/c1-registry-proxy") {
+		t.Error("proxy HelmOp was not created before the mirror")
+	}
+}
+
 func TestReconcileSeedDeletesLegacyNydusHelmOp(t *testing.T) {
 	controller, store, _ := newTestController(t)
 	cluster := testSeedCluster("42")
@@ -122,6 +150,10 @@ func newTestController(t *testing.T) (*Controller, *fakeHelmOpStore, *fakeEventS
 		Type:       corev1.SecretTypeTLS,
 		Data:       map[string][]byte{"ca.crt": []byte("ca"), "tls.crt": []byte("cert")},
 	})
+	secrets.put(&corev1.Secret{
+		ObjectMeta: metav1.ObjectMeta{Name: "harbor-admin", Namespace: "dragonfly-system"},
+		Data:       map[string][]byte{"HARBOR_ADMIN_PASSWORD": []byte("admin-password")},
+	})
 	store := newFakeHelmOpStore()
 	events := &fakeEventStore{}
 	controller := &Controller{
@@ -144,6 +176,12 @@ func newTestController(t *testing.T) (*Controller, *fakeHelmOpStore, *fakeEventS
 			DragonflyChart:           helmop.Chart{Repo: "https://charts.example.com", Name: "dragonfly", Version: "1.10.1-patch.2"},
 			ExtrasChart:              helmop.Chart{Repo: "https://charts.example.com", Name: "dragonfly-extras", Version: "0.1.8"},
 			MirrorChart:              helmop.Chart{Repo: "https://charts.example.com", Name: "containerd-mirror", Version: "0.1.0"},
+			HarborChart:              helmop.Chart{Repo: "https://helm.example.com", Name: "harbor", Version: "1.19.4"},
+			RegistryProxyChart:       helmop.Chart{Repo: "https://charts.example.com", Name: "registry-proxy", Version: "0.1.0"},
+			HarborIngressClass:       "traefik",
+			ProxyDomain:              "proxy.example.com",
+			ProxyHarborAdminSecret:   "harbor-admin",
+			ProxyRegistries:          []string{"docker.io"},
 			ExtrasIngressController:  "nginx",
 			ExtrasIngressGRPCEnabled: true,
 			ExtrasIngressRESTEnabled: true,

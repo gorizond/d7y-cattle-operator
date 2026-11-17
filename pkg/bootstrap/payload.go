@@ -16,6 +16,7 @@ const MaxEncodedSize = 8 * 1024
 type Payload struct {
 	ManagerGRPC        string
 	StaticURL          string
+	SmartProxyURL      string
 	SchedulerHost      string
 	SchedulerClusterID string
 	CACert             []byte
@@ -65,6 +66,13 @@ func Env(p Payload) (string, error) {
 	if err != nil || (static.Scheme != "http" && static.Scheme != "https") || static.Host == "" {
 		return "", fmt.Errorf("bootstrap: static_url must be an absolute http(s) URL")
 	}
+	smartProxy := strings.TrimSpace(p.SmartProxyURL)
+	if smartProxy != "" {
+		proxy, err := url.Parse(smartProxy)
+		if err != nil || (proxy.Scheme != "http" && proxy.Scheme != "https") || proxy.Host == "" {
+			return "", fmt.Errorf("bootstrap: smart_proxy_url must be an absolute http(s) URL")
+		}
+	}
 	host := strings.TrimSpace(p.SchedulerHost)
 	if host == "" || !validDNSName(host) {
 		return "", fmt.Errorf("bootstrap: scheduler_host must be a DNS name")
@@ -80,6 +88,9 @@ func Env(p Payload) (string, error) {
 	var builder strings.Builder
 	fmt.Fprintf(&builder, "MANAGER_GRPC=%s\n", strings.TrimSpace(p.ManagerGRPC))
 	fmt.Fprintf(&builder, "STATIC_URL=%s\n", strings.TrimRight(strings.TrimSpace(p.StaticURL), "/"))
+	if smartProxy != "" {
+		fmt.Fprintf(&builder, "SMART_PROXY_URL=%s\n", strings.TrimRight(smartProxy, "/"))
+	}
 	fmt.Fprintf(&builder, "SCHEDULER_HOST=%s\n", host)
 	fmt.Fprintf(&builder, "SCHEDULER_CLUSTER_ID=%d\n", id)
 	fmt.Fprintf(&builder, "CA_CRT_B64=%s\n", base64.StdEncoding.EncodeToString(p.CACert))

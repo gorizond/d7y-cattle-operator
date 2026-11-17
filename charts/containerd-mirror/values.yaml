@@ -8,6 +8,15 @@ image:
 # Local dfdaemon proxy port used by the _default mirror.
 port: 4001
 
+# External smart registry proxy. When enabled, the allowlisted registries send
+# X-Dragonfly-Registry to <url>/<registry>; the in-cluster proxy Service is not
+# used. Keep disabled for clusters without the proxy role.
+proxy:
+  enabled: false
+  url: ""
+  registries:
+    - docker.io
+
 # RKE2 containerd hosts.toml directory.
 hostPath: /var/lib/rancher/rke2/agent/etc/containerd/certs.d
 

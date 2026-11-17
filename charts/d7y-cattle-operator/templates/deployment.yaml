@@ -62,6 +62,26 @@ spec:
               value: {{ .Values.containerdMirror.chart.name | quote }}
             - name: CONTAINERD_MIRROR_CHART_VERSION
               value: {{ .Values.containerdMirror.chart.version | quote }}
+            - name: HARBOR_CHART_REPO
+              value: {{ .Values.harbor.chart.repo | quote }}
+            - name: HARBOR_CHART_NAME
+              value: {{ .Values.harbor.chart.name | quote }}
+            - name: HARBOR_CHART_VERSION
+              value: {{ .Values.harbor.chart.version | quote }}
+            - name: REGISTRY_PROXY_CHART_REPO
+              value: {{ .Values.registryProxy.chart.repo | quote }}
+            - name: REGISTRY_PROXY_CHART_NAME
+              value: {{ .Values.registryProxy.chart.name | quote }}
+            - name: REGISTRY_PROXY_CHART_VERSION
+              value: {{ .Values.registryProxy.chart.version | quote }}
+            - name: PROXY_DOMAIN
+              value: {{ .Values.proxy.domain | quote }}
+            - name: PROXY_HARBOR_URL
+              value: {{ .Values.proxy.harborURL | quote }}
+            - name: PROXY_HARBOR_ADMIN_SECRET
+              value: {{ .Values.proxy.harborAdminSecret | quote }}
+            - name: PROXY_REGISTRIES
+              value: {{ .Values.proxy.registries | quote }}
             - name: EXTRAS_INGRESS_CONTROLLER
               value: {{ .Values.extras.ingress.controller | quote }}
             - name: EXTRAS_INGRESS_CLASS_NAME

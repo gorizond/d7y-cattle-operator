@@ -75,6 +75,22 @@ func TestEncodeEnvPayload(t *testing.T) {
 	}
 }
 
+func TestEncodeSmartProxyURL(t *testing.T) {
+	payload := testPayload()
+	payload.SmartProxyURL = "https://proxy.example.com/"
+	encoded, err := Encode(payload)
+	if err != nil {
+		t.Fatalf("Encode() error = %v", err)
+	}
+	raw, err := base64.URLEncoding.DecodeString(encoded)
+	if err != nil {
+		t.Fatalf("decode payload: %v", err)
+	}
+	if !strings.Contains(string(raw), "SMART_PROXY_URL=https://proxy.example.com\n") {
+		t.Errorf("payload = %q, want SMART_PROXY_URL without trailing slash", raw)
+	}
+}
+
 func TestEncodeRejectsInvalid(t *testing.T) {
 	cases := map[string]Payload{
 		"manager without https":  {ManagerGRPC: "http://manager", StaticURL: "http://static", SchedulerClusterID: "2", CACert: []byte("ca"), ClientCert: []byte("cert"), ClientKey: []byte("key")},
@@ -84,6 +100,7 @@ func TestEncodeRejectsInvalid(t *testing.T) {
 		"missing cert":           {ManagerGRPC: "https://manager", StaticURL: "http://static", SchedulerHost: "scheduler.example.com", SchedulerClusterID: "2", CACert: []byte("ca"), ClientCert: []byte("cert")},
 		"missing scheduler host": {ManagerGRPC: "https://manager", StaticURL: "http://static", SchedulerClusterID: "2", CACert: []byte("ca"), ClientCert: []byte("cert"), ClientKey: []byte("key")},
 		"invalid scheduler host": {ManagerGRPC: "https://manager", StaticURL: "http://static", SchedulerHost: "bad_host", SchedulerClusterID: "2", CACert: []byte("ca"), ClientCert: []byte("cert"), ClientKey: []byte("key")},
+		"invalid smart proxy":    {ManagerGRPC: "https://manager", StaticURL: "http://static", SmartProxyURL: "ftp://proxy", SchedulerHost: "scheduler.example.com", SchedulerClusterID: "2", CACert: []byte("ca"), ClientCert: []byte("cert"), ClientKey: []byte("key")},
 	}
 	for name, payload := range cases {
 		t.Run(name, func(t *testing.T) {
