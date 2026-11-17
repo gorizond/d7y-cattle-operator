@@ -29,10 +29,17 @@ grep -q 'kind: NetworkPolicy' "$tmp/proxy.yaml" || fail "proxy NetworkPolicy is 
 grep -q 'kubernetes.io/metadata.name: kube-system' "$tmp/netpol.yaml" || fail "NetworkPolicy DNS/Traefik peer is missing"
 grep -A3 'kubernetes.io/metadata.name: kube-system' "$tmp/netpol.yaml" | grep -q 'port: 443' || \
   fail "NetworkPolicy kube-system egress does not allow TCP 443"
-grep -A4 'kubernetes.io/metadata.name: harbor' "$tmp/netpol.yaml" | grep -q 'port: 80' || \
+# Cilium matches post-DNAT backend targetPort, not the Service port.
+grep -A5 'kubernetes.io/metadata.name: kube-system' "$tmp/netpol.yaml" | grep -q 'port: 8443' || \
+  fail "NetworkPolicy kube-system egress does not allow Traefik websecure TCP 8443"
+grep -A9 'kubernetes.io/metadata.name: harbor' "$tmp/netpol.yaml" | grep -q 'port: 80' || \
   fail "NetworkPolicy harbor egress does not allow TCP 80"
-grep -A4 'kubernetes.io/metadata.name: harbor' "$tmp/netpol.yaml" | grep -q 'port: 443' || \
+grep -A9 'kubernetes.io/metadata.name: harbor' "$tmp/netpol.yaml" | grep -q 'port: 443' || \
   fail "NetworkPolicy harbor egress does not allow TCP 443"
+grep -A9 'kubernetes.io/metadata.name: harbor' "$tmp/netpol.yaml" | grep -q 'port: 8080' || \
+  fail "NetworkPolicy harbor egress does not allow Harbor core targetPort TCP 8080"
+grep -A9 'kubernetes.io/metadata.name: harbor' "$tmp/netpol.yaml" | grep -q 'port: 5000' || \
+  fail "NetworkPolicy harbor egress does not allow Harbor registry targetPort TCP 5000"
 grep -A3 'cidr: 0.0.0.0/0' "$tmp/netpol.yaml" | grep -q 'port: 443' || \
   fail "NetworkPolicy external Harbor egress does not allow TCP 443"
 grep -q 'kind: Ingress' "$tmp/proxy.yaml" || fail "proxy Ingress is missing"

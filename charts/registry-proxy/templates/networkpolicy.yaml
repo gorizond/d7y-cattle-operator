@@ -39,6 +39,8 @@ spec:
           protocol: TCP
     # Traefik ingress ClusterIP: Harbor and the proxy are reached by hostname
     # through the ingress controller rather than by Service DNS.
+    # Cilium matches egress policy on the post-DNAT backend targetPort, not the
+    # Service port: Traefik websecure is 8443. 443 stays for other CNIs.
     - to:
         - namespaceSelector:
             matchLabels:
@@ -46,7 +48,11 @@ spec:
       ports:
         - port: 443
           protocol: TCP
+        - port: 8443
+          protocol: TCP
     # Same-cluster Harbor (core, registry, jobservice).
+    # Cilium post-DNAT targetPorts: core 8080, registry 5000; 80/443 stay for
+    # other CNIs and Service-port rendering.
     - to:
         - namespaceSelector:
             matchLabels:
@@ -55,6 +61,10 @@ spec:
         - port: 80
           protocol: TCP
         - port: 443
+          protocol: TCP
+        - port: 8080
+          protocol: TCP
+        - port: 5000
           protocol: TCP
     # External Harbor and upstream registries.
     - to:
