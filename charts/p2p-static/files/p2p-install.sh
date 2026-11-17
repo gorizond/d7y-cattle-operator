@@ -21,6 +21,10 @@ nydusd
 nydus-image
 nydus-overlayfs"
 RESOLVER_BINARY="nydus-resolver"
+# Bump the default with the release tag, or override for a pinned tag/latest.
+RESOLVER_VERSION="${RESOLVER_VERSION:-v0.1.33}"
+RESOLVER_ASSET="${RESOLVER_ASSET:-nydus-resolver-linux-amd64}"
+GH_REPO="${GH_REPO:-gorizond/d7y-cattle-operator}"
 RESOLVER_CONFIG="/etc/nydus-resolver/config.yaml"
 RESOLVER_CA_DIR="/var/lib/nydus-resolver"
 RESOLVER_CA_KEY="${RESOLVER_CA_DIR}/ca.key"
@@ -97,6 +101,42 @@ download_nydus_asset() {
     fi
   done
   return 1
+}
+
+resolver_release_url() {
+  local base="https://github.com/${GH_REPO}/releases"
+  if [ "$RESOLVER_VERSION" = "latest" ]; then
+    printf '%s/latest/download/%s' "$base" "$RESOLVER_ASSET"
+  else
+    printf '%s/download/%s/%s' "$base" "$RESOLVER_VERSION" "$RESOLVER_ASSET"
+  fi
+}
+
+# Download the resolver from the GitHub release and verify the sibling
+# .sha256 asset when the release provides one. Returns nonzero only when the
+# asset itself is unavailable; a checksum mismatch is fatal.
+download_resolver_asset() {
+  local out url checksum expected actual
+  out="$1"
+  url="$(resolver_release_url)"
+  if ! curl -fL --retry 3 --connect-timeout 10 --max-time 300 -o "$out" "$url"; then
+    return 1
+  fi
+  if [ ! -s "$out" ]; then
+    return 1
+  fi
+  checksum="${out}.sha256"
+  if curl -fL --retry 3 --connect-timeout 10 --max-time 300 -o "$checksum" "${url}.sha256" && [ -s "$checksum" ]; then
+    command -v sha256sum >/dev/null 2>&1 || die "sha256sum is required to verify ${RESOLVER_ASSET}"
+    IFS=' ' read -r expected _ < "$checksum"
+    actual="$(sha256sum "$out")"
+    actual="${actual%% *}"
+    if [ -z "$expected" ] || [ "$actual" != "$expected" ]; then
+      die "checksum verification failed for ${url}"
+    fi
+  fi
+  rm -f "$checksum"
+  return 0
 }
 
 # The nginx sub_filter replaces the single placeholder below with $arg_cfg.
@@ -185,6 +225,23 @@ if [ -n "$RESOLVER_UPSTREAM" ] || [ -n "$RESOLVER_LISTEN" ]; then
   case "$RESOLVER_LISTEN" in
     *:*) ;;
     *) die "resolver_listen must include a port" ;;
+  esac
+fi
+
+case "$RESOLVER_ASSET" in
+  ""|*[!A-Za-z0-9._-]*) die "resolver_asset is not a valid release asset name" ;;
+esac
+case "$GH_REPO" in
+  ""|*[!A-Za-z0-9._/-]*|*/*/*) die "gh_repo must be owner/repo" ;;
+esac
+case "$GH_REPO" in
+  */*) ;;
+  *) die "gh_repo must be owner/repo" ;;
+esac
+if [ "$RESOLVER_VERSION" != "latest" ]; then
+  case "$RESOLVER_VERSION" in
+    v[A-Za-z0-9._-]*) ;;
+    *) die "resolver_version must be latest or a v* release tag" ;;
   esac
 fi
 
@@ -683,7 +740,8 @@ WantedBy=multi-user.target
 UNIT
 
 # Host-only updater: keeps the pinned nydus binaries current and restarts the
-# host unit when anything changed. It never touches Kubernetes.
+# host unit when anything changed. nydus-resolver is installed from the GitHub
+# release by p2p-install.sh, not by this static-store updater.
 {
   printf 'STATIC_URL=%q\n' "$STATIC_URL"
   printf 'NYDUS_VERSION=%q\n' "$NYDUS_VERSION"
@@ -708,7 +766,7 @@ bin_dir="/usr/local/bin"
 tmp="$(mktemp -d)"
 trap 'rm -rf "$tmp"' EXIT
 # Fetch every asset first so a partial update never mixes versions.
-for binary in containerd-nydus-grpc nydusd nydus-image nydus-overlayfs nydus-resolver; do
+for binary in containerd-nydus-grpc nydusd nydus-image nydus-overlayfs; do
   fetched=0
   for url in "${STATIC_URL%/}/nydus/${NYDUS_VERSION}/${binary}" "${STATIC_URL%/}/bin/${binary}"; do
     if curl -fsSL --retry 3 --connect-timeout 10 --max-time 300 -o "$tmp/$binary" "$url" && [ -s "$tmp/$binary" ]; then
@@ -723,26 +781,15 @@ for binary in containerd-nydus-grpc nydusd nydus-image nydus-overlayfs nydus-res
 done
 
 changed=0
-resolver_changed=0
-for binary in containerd-nydus-grpc nydusd nydus-image nydus-overlayfs nydus-resolver; do
+for binary in containerd-nydus-grpc nydusd nydus-image nydus-overlayfs; do
   if [ -x "${bin_dir}/${binary}" ] && cmp -s "$tmp/$binary" "${bin_dir}/${binary}"; then
     continue
   fi
   install -m 0755 "$tmp/$binary" "${bin_dir}/.${binary}.new"
   mv -f "${bin_dir}/.${binary}.new" "${bin_dir}/${binary}"
   changed=1
-  if [ "$binary" = "nydus-resolver" ]; then
-    resolver_changed=1
-  fi
 done
 if [ "$changed" = 1 ]; then
-  if [ "$resolver_changed" = 1 ]; then
-    systemctl restart nydus-resolver.service
-    systemctl is-active --quiet nydus-resolver.service || {
-      echo "nydus-updater: nydus-resolver.service is not active after restart" >&2
-      exit 1
-    }
-  fi
   systemctl restart nydus-snapshotter-bootstrap.service
   systemctl is-active --quiet nydus-snapshotter-bootstrap.service || {
     echo "nydus-updater: nydus-snapshotter-bootstrap.service is not active after restart" >&2
@@ -787,20 +834,30 @@ if [ "${SKIP_DOWNLOAD:-0}" = "1" ]; then
   log "SKIP_DOWNLOAD=1: skipping binary downloads (pinned nydus ${NYDUS_VERSION})"
 else
   command -v curl >/dev/null 2>&1 || fallback_direct "curl is required to download binaries"
-  for binary in $NYDUS_BINARIES $RESOLVER_BINARY dfdaemon; do
+  for binary in $NYDUS_BINARIES dfdaemon; do
     tmp="${BIN_DIR}/.${binary}.tmp.$$"
     download_nydus_asset "$binary" "$tmp" || fallback_direct "failed to download ${binary} ${NYDUS_VERSION}"
     chmod 0755 "$tmp"
     mv -f "$tmp" "${BIN_DIR}/${binary}"
   done
+  resolver_tmp="${BIN_DIR}/.${RESOLVER_BINARY}.tmp.$$"
+  if ! download_resolver_asset "$resolver_tmp"; then
+    rm -f "$resolver_tmp" "${resolver_tmp}.sha256"
+    fallback_direct "nydus-resolver release asset ${RESOLVER_ASSET} (${RESOLVER_VERSION}) is unavailable from ${GH_REPO}"
+  fi
+  chmod 0755 "$resolver_tmp"
+  mv -f "$resolver_tmp" "${BIN_DIR}/${RESOLVER_BINARY}"
 fi
 
 if [ "${SKIP_DOWNLOAD:-0}" != "1" ]; then
-  for binary in $NYDUS_BINARIES $RESOLVER_BINARY dfdaemon; do
+  for binary in $NYDUS_BINARIES dfdaemon; do
     if [ ! -x "${BIN_DIR}/${binary}" ]; then
       fallback_direct "${binary} is not executable"
     fi
   done
+  if [ ! -x "${BIN_DIR}/${RESOLVER_BINARY}" ]; then
+    fallback_direct "nydus-resolver is not executable after install"
+  fi
 fi
 
 if [ "$REAL_ROOT" = "1" ] && [ "${SKIP_MODULES:-0}" != "1" ]; then

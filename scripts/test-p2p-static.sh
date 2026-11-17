@@ -47,6 +47,12 @@ grep -q 'Environment=SSL_CERT_FILE=/var/lib/nydus-resolver/ca-bundle.pem' "$tmp/
 grep -q 'After=network-online.target nydus-resolver.service' "$tmp/p2p-static.yaml" || fail "snapshotter does not order after nydus-resolver"
 grep -q 'Wants=network-online.target nydus-resolver.service' "$tmp/p2p-static.yaml" || fail "snapshotter does not want nydus-resolver"
 grep -q 'RESOLVER_UPSTREAM' "$tmp/p2p-static.yaml" || fail "p2p-static script is missing the resolver upstream payload"
+grep -q 'RESOLVER_VERSION=' "$tmp/p2p-static.yaml" || fail "p2p-static script is missing the resolver version"
+grep -q 'RESOLVER_ASSET=' "$tmp/p2p-static.yaml" || fail "p2p-static script is missing the resolver asset name"
+grep -q 'GH_REPO=' "$tmp/p2p-static.yaml" || fail "p2p-static script is missing the release repository"
+grep -q "download/%s/%s" "$tmp/p2p-static.yaml" || fail "p2p-static script is missing the pinned release URL pattern"
+grep -q "latest/download/%s" "$tmp/p2p-static.yaml" || fail "p2p-static script is missing the latest release URL pattern"
+grep -q 'nydus-resolver release asset' "$tmp/p2p-static.yaml" || fail "p2p-static script is missing the release asset fallback"
 if grep -q 'registry_map' "$tmp/p2p-static.yaml"; then
   fail "p2p-static script must not write a registry map"
 fi

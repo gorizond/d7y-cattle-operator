@@ -479,10 +479,11 @@ HelmOps absent and records the event/condition.
 ## nydus-resolver (host HTTPS MITM proxy)
 
 `cmd/nydus-resolver` is a static amd64 host binary, not a container or
-DaemonSet. `p2p-install.sh` downloads it with the other host nydus assets from
-p2p-static, writes `/etc/nydus-resolver/config.yaml`, installs
-`nydus-resolver.service`, and makes `nydus-snapshotter-bootstrap.service`
-depend on it (`After=nydus-resolver.service`, `Wants=nydus-resolver.service`).
+DaemonSet. The release workflow attaches `nydus-resolver-linux-amd64` and its
+`.sha256` to the `v*` GitHub Release. `p2p-install.sh` downloads that asset,
+writes `/etc/nydus-resolver/config.yaml`, installs `nydus-resolver.service`,
+and makes `nydus-snapshotter-bootstrap.service` depend on it
+(`After=nydus-resolver.service`, `Wants=nydus-resolver.service`).
 When the resolver payload is absent, the bootstrap falls back to the direct
 registry so RKE2 can still start.
 
@@ -508,17 +509,24 @@ not in its allowlist.
 
 The resolver generates `/var/lib/nydus-resolver/ca.key` (0600) and
 `ca-bundle.pem` (local CA followed by the system roots). The config template
-is `charts/p2p-static/files/nydus-resolver-config.yaml.tmpl`. The snapshotter unit
-uses `HTTPS_PROXY=http://127.0.0.1:3999`,
+is `charts/p2p-static/files/nydus-resolver-config.yaml.tmpl`. The snapshotter
+unit uses `HTTPS_PROXY=http://127.0.0.1:3999`,
 `NO_PROXY=127.0.0.1,localhost,::1,...`, and
 `SSL_CERT_FILE=/var/lib/nydus-resolver/ca-bundle.pem`, so other TLS in the
 snapshotter keeps working.
 
-Build and publish the static asset to the p2p-static store at
-`${STATIC_URL}/nydus/<version>/nydus-resolver` or `/bin/nydus-resolver`:
+The installer defaults to `RESOLVER_VERSION=v0.1.33`,
+`RESOLVER_ASSET=nydus-resolver-linux-amd64`, and
+`GH_REPO=gorizond/d7y-cattle-operator`; override them for another release.
+The pinned URL is
+`https://github.com/<GH_REPO>/releases/download/<RESOLVER_VERSION>/nydus-resolver-linux-amd64`;
+`latest` uses `/releases/latest/download/`. A missing release asset logs a
+clear fallback to the direct registry instead of installing nothing.
+
+Build the same asset locally with:
 
 ```bash
-make nydus-resolver   # CGO disabled, linux/amd64, trimpath, stripped
+make nydus-resolver   # dist/nydus-resolver-linux-amd64; CGO off, trimpath, stripped
 ```
 
 Multi-arch assets are future work in `p2p-install.sh`; this change is
@@ -764,8 +772,10 @@ make helm-template  # render the operator, extras, p2p-static, and proxy charts
 
 Pushing a `v*` tag runs `.github/workflows/release.yml`:
 
-- builds and pushes the multi-arch operator image tagged with the Git tag
+- builds and pushes the operator image tagged with the Git tag
   (`v<chart version>`);
+- builds the static `nydus-resolver-linux-amd64`, verifies `--help`/missing
+  config behavior, and attaches it plus `.sha256` to the `v*` GitHub Release;
 - lints every chart under `charts/` and publishes it with `chart-releaser` to
   the `gh-pages` branch.
 

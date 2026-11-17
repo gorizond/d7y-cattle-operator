@@ -18,7 +18,7 @@ jobs:
         run: docker run --rm d7y-cattle-operator:test go test ./...
 
       - name: Build host resolver
-        run: docker run --rm d7y-cattle-operator:test sh -c 'CGO_ENABLED=0 GOOS=linux GOARCH=amd64 go build -trimpath -ldflags="-s -w" -o /tmp/nydus-resolver ./cmd/nydus-resolver'
+        run: docker run --rm d7y-cattle-operator:test sh -c 'CGO_ENABLED=0 GOOS=linux GOARCH=amd64 go build -trimpath -ldflags="-s -w" -o /tmp/nydus-resolver-linux-amd64 ./cmd/nydus-resolver'
 
       - name: Build operator image
         run: docker build -t d7y-cattle-operator:ci .

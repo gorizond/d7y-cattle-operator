@@ -119,17 +119,32 @@ Git.
 
 ## Host nydus-resolver
 
-`nydus-resolver` is a static amd64 host binary, installed to
-`/usr/local/bin/nydus-resolver` by `p2p-install.sh` from the same versioned
-static store as the nydus assets:
+`nydus-resolver` is a static amd64 host binary attached to the GitHub
+Release, installed to `/usr/local/bin/nydus-resolver` by `p2p-install.sh`.
+It is not built into the container image and is not a DaemonSet.
 
-- `${STATIC_URL}/nydus/${NYDUS_VERSION}/nydus-resolver`, or
-- `${STATIC_URL}/bin/nydus-resolver` for the legacy layout.
+Release asset and URL:
 
-It is not built into the container image and is not a DaemonSet. The
-`nydus-updater` refreshes it with the other host binaries and restarts
-`nydus-resolver.service` when it changes. Multi-arch assets are future work;
-non-amd64 nodes currently fall back to the direct registry.
+- asset: `nydus-resolver-linux-amd64` and `nydus-resolver-linux-amd64.sha256`
+- pinned: `https://github.com/<GH_REPO>/releases/download/<RESOLVER_VERSION>/nydus-resolver-linux-amd64`
+- latest: `https://github.com/<GH_REPO>/releases/latest/download/nydus-resolver-linux-amd64`
+
+Defaults in `p2p-install.sh`:
+
+```bash
+RESOLVER_VERSION=v0.1.33
+RESOLVER_ASSET=nydus-resolver-linux-amd64
+GH_REPO=gorizond/d7y-cattle-operator
+```
+
+Override them for a different release or repository. The script downloads
+with `curl -fL`, verifies the sibling `.sha256` when the release publishes it,
+installs the binary atomically with mode `0755`, and falls back to the direct
+registry with a clear message if the release asset is unavailable. The daily
+`nydus-updater` continues to refresh nydus assets from the static store; rerun
+`p2p-install.sh` (with the desired `RESOLVER_VERSION`) to update the resolver.
+Multi-arch assets are future work; non-amd64 nodes currently fall back to the
+direct registry.
 
 `nydus-resolver.service` runs before `nydus-snapshotter-bootstrap.service`
 (`Before=`), and the snapshotter unit depends on it with
@@ -183,11 +198,11 @@ updater prefers `${STATIC_URL}/nydus/${NYDUS_VERSION}/<binary>` and falls back
 to `${STATIC_URL}/bin/<binary>` for the legacy unversioned layout.
 
 `nydus-updater.service` runs `nydus-updater` from the daily
-`nydus-updater.timer`. The updater re-fetches the pinned assets (including
-`nydus-resolver`), compares them with the installed binaries, installs changed
-files atomically, restarts `nydus-resolver.service` when that binary changed,
-and then restarts `nydus-snapshotter-bootstrap.service` when anything changed.
-It never talks to Kubernetes.
+`nydus-updater.timer`. The updater re-fetches the pinned nydus assets,
+compares them with the installed binaries, installs changed files atomically,
+and restarts `nydus-snapshotter-bootstrap.service` when anything changed. It
+does not manage `nydus-resolver`; that binary comes from the GitHub release and
+is updated by rerunning `p2p-install.sh`. It never talks to Kubernetes.
 
 ## Containerd version detection
 
@@ -202,8 +217,9 @@ nodes; the bootstrap payload currently has no field for this.
 bash charts/p2p-static/files/test.sh
 ```
 
-The test uses temporary roots and `SKIP_DOWNLOAD=1`; it asserts the env payload
-decode, certificate files/modes, `dfget.yaml`, `dynconfig.yaml`, scheduler ID,
+The test uses temporary roots, `SKIP_DOWNLOAD=1`, and a fake `curl`/release
+asset for the resolver download path; it asserts the env payload decode,
+certificate files/modes, `dfget.yaml`, `dynconfig.yaml`, scheduler ID,
 `/etc/nydus/config.toml` (multiple/fusedev, no tarfs), the registry-backend
 `nydusd-config.json`, the global nydus drop-in (containerd 2.x) and global
 template (containerd 1.x), resolver config/unit ordering/snapshotter proxy

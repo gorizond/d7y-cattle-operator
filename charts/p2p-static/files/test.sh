@@ -154,8 +154,7 @@ assert_contains "${ROOT_ONE}/usr/local/bin/dfdaemon-bootstrap-switch" 'systemctl
 assert_not_contains "${ROOT_ONE}/usr/local/bin/dfdaemon-bootstrap-switch" 'nydus'
 bash -n "${ROOT_ONE}/usr/local/bin/dfdaemon-bootstrap-switch"
 assert_contains "${ROOT_ONE}/usr/local/bin/nydus-updater" 'nydus-overlayfs'
-assert_contains "${ROOT_ONE}/usr/local/bin/nydus-updater" 'nydus-resolver'
-assert_contains "${ROOT_ONE}/usr/local/bin/nydus-updater" 'systemctl restart nydus-resolver.service'
+assert_not_contains "${ROOT_ONE}/usr/local/bin/nydus-updater" 'systemctl restart nydus-resolver.service'
 assert_contains "${ROOT_ONE}/usr/local/bin/nydus-updater" 'systemctl restart nydus-snapshotter-bootstrap.service'
 assert_contains "${ROOT_ONE}/etc/systemd/system/nydus-updater.timer" 'OnUnitActiveSec=24h'
 assert_contains "${ROOT_ONE}/etc/systemd/system/dfdaemon-bootstrap.service" 'Before=rke2-server.service rke2-agent.service'
@@ -260,6 +259,13 @@ assert_contains "$INSTALL" 'RESOLVER_UPSTREAM'
 assert_contains "$INSTALL" 'nydus-resolver'
 assert_contains "$INSTALL" 'HTTPS_PROXY=http://127.0.0.1:3999'
 assert_contains "$INSTALL" 'SSL_CERT_FILE=/var/lib/nydus-resolver/ca-bundle.pem'
+assert_contains "$INSTALL" 'RESOLVER_VERSION="${RESOLVER_VERSION:-v0.1.33}"'
+assert_contains "$INSTALL" 'RESOLVER_ASSET="${RESOLVER_ASSET:-nydus-resolver-linux-amd64}"'
+assert_contains "$INSTALL" 'GH_REPO="${GH_REPO:-gorizond/d7y-cattle-operator}"'
+assert_contains "$INSTALL" "'%s/download/%s/%s'"
+assert_contains "$INSTALL" "'%s/latest/download/%s'"
+assert_contains "$INSTALL" 'curl -fL'
+assert_contains "$INSTALL" 'sha256sum'
 assert_not_contains "$INSTALL" 'registry_map'
 
 BEFORE="$(sha256sum "${ROOT_ONE}/etc/dragonfly/dfget.yaml" | cut -d' ' -f1)"
@@ -349,3 +355,82 @@ if P2P_ROOT="$ROOT_PARTIAL" SKIP_DOWNLOAD=1 SKIP_MODULES=1 SKIP_SYSTEMD=1 SKIP_P
   exit 1
 fi
 assert_contains "${WORK}/partial-resolver.log" 'must be set together'
+
+FAKE_BIN="${WORK}/fake-curl-bin"
+CURL_ASSET_DIR="${WORK}/curl-assets"
+CURL_LOG="${WORK}/curl.log"
+mkdir -p "$FAKE_BIN" "$CURL_ASSET_DIR"
+: > "$CURL_LOG"
+cat > "${FAKE_BIN}/curl" <<'FAKECURL'
+#!/usr/bin/env bash
+set -Eeuo pipefail
+out=""
+url=""
+while [ "$#" -gt 0 ]; do
+  case "$1" in
+    -o) out="$2"; shift 2 ;;
+    --retry|--connect-timeout|--max-time) shift 2 ;;
+    -*) shift ;;
+    *) url="$1"; shift ;;
+  esac
+done
+if [ -z "$out" ] || [ -z "$url" ]; then
+  echo "fake curl: missing -o or URL" >&2
+  exit 2
+fi
+printf '%s\n' "$url" >> "${CURL_LOG:?}"
+asset="${url##*/}"
+if [ -n "${FAKE_CURL_FAIL_ASSET:-}" ] && [ "$asset" = "$FAKE_CURL_FAIL_ASSET" ]; then
+  exit 22
+fi
+case "$asset" in
+  *.sha256)
+    target="${asset%.sha256}"
+    source="${CURL_ASSET_DIR:?}/${target}"
+    if [ ! -f "$source" ]; then
+      echo "fake curl: missing asset ${target}" >&2
+      exit 22
+    fi
+    hash="$(sha256sum "$source")"
+    hash="${hash%% *}"
+    printf '%s  %s\n' "$hash" "$target" > "$out"
+    ;;
+  *)
+    printf '#!/bin/sh\nexit 0\n' > "$out"
+    cp "$out" "${CURL_ASSET_DIR:?}/${asset}"
+    ;;
+esac
+FAKECURL
+chmod 0755 "${FAKE_BIN}/curl"
+
+ROOT_RELEASE="${WORK}/root-release"
+P2P_ROOT="$ROOT_RELEASE" SKIP_MODULES=1 SKIP_SYSTEMD=1 SKIP_PREFLIGHT=1 CONTAINERD_MAJOR=1 \
+  RESOLVER_ARCH=amd64 SYSTEM_CA_FILE="${WORK}/system-ca.pem" \
+  RESOLVER_VERSION=v9.9.9 RESOLVER_ASSET=nydus-resolver-linux-amd64 \
+  GH_REPO=example-org/example-repo \
+  PATH="${FAKE_BIN}:${PATH}" CURL_LOG="$CURL_LOG" CURL_ASSET_DIR="$CURL_ASSET_DIR" \
+  bash "$INSTALL" "$CFG" > "${WORK}/release.log" 2>&1
+
+assert_file "${ROOT_RELEASE}/usr/local/bin/nydus-resolver"
+if [ "$(stat -c '%a' "${ROOT_RELEASE}/usr/local/bin/nydus-resolver")" != "755" ]; then
+  echo "p2p-static self-test: resolver is not mode 0755" >&2
+  exit 1
+fi
+assert_contains "$CURL_LOG" 'https://github.com/example-org/example-repo/releases/download/v9.9.9/nydus-resolver-linux-amd64'
+assert_contains "$CURL_LOG" 'https://github.com/example-org/example-repo/releases/download/v9.9.9/nydus-resolver-linux-amd64.sha256'
+
+ROOT_NO_ASSET="${WORK}/root-no-asset"
+P2P_ROOT="$ROOT_NO_ASSET" SKIP_MODULES=1 SKIP_SYSTEMD=1 SKIP_PREFLIGHT=1 CONTAINERD_MAJOR=1 \
+  RESOLVER_ARCH=amd64 SYSTEM_CA_FILE="${WORK}/system-ca.pem" \
+  RESOLVER_VERSION=v9.9.9 RESOLVER_ASSET=nydus-resolver-linux-amd64 \
+  GH_REPO=example-org/example-repo FAKE_CURL_FAIL_ASSET=nydus-resolver-linux-amd64 \
+  PATH="${FAKE_BIN}:${PATH}" CURL_LOG="${WORK}/curl-fail.log" CURL_ASSET_DIR="$CURL_ASSET_DIR" \
+  bash "$INSTALL" "$CFG" > "${WORK}/no-asset.log" 2>&1
+assert_contains "${WORK}/no-asset.log" 'nydus-resolver release asset'
+assert_contains "${WORK}/no-asset.log" 'is unavailable'
+if [ -f "${ROOT_NO_ASSET}/usr/local/bin/nydus-resolver" ]; then
+  echo "p2p-static self-test: missing release asset installed a resolver" >&2
+  exit 1
+fi
+assert_file "${ROOT_NO_ASSET}/var/lib/rancher/rke2/agent/etc/containerd/config.toml.tmpl"
+assert_contains "${ROOT_NO_ASSET}/var/lib/rancher/rke2/agent/etc/containerd/config.toml.tmpl" 'snapshotter = "overlayfs"'
