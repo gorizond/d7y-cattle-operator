@@ -13,13 +13,18 @@ fail() {
 
 helm lint "$chart" >/dev/null || fail "registry-proxy chart lint failed"
 helm template registry-proxy "$chart" --namespace dragonfly-system \
-  --set ingress.enabled=true --set ingress.host=proxy.example.com >"$tmp/proxy.yaml"
+  --set ingress.enabled=true --set ingress.host=proxy.example.com \
+  --set ingress.path=/proxy --set ingress.tlsSecret=poligon-harbor-tls \
+  --set proxy.basePath=/proxy >"$tmp/proxy.yaml"
 
 grep -q 'kind: Deployment' "$tmp/proxy.yaml" || fail "proxy Deployment is missing"
 grep -q 'kind: Service' "$tmp/proxy.yaml" || fail "proxy Service is missing"
 grep -q 'kind: NetworkPolicy' "$tmp/proxy.yaml" || fail "proxy NetworkPolicy is missing"
 grep -q 'kind: Ingress' "$tmp/proxy.yaml" || fail "proxy Ingress is missing"
 grep -q 'host: "proxy.example.com"' "$tmp/proxy.yaml" || fail "proxy Ingress host is missing"
+grep -q 'path: /proxy' "$tmp/proxy.yaml" || fail "proxy Ingress path is missing"
+grep -q 'secretName: poligon-harbor-tls' "$tmp/proxy.yaml" || fail "proxy Ingress TLS Secret is missing"
+grep -q 'base_path: "/proxy"' "$tmp/proxy.yaml" || fail "proxy config base_path is missing"
 grep -q 'command:' "$tmp/proxy.yaml" || fail "proxy command is missing"
 grep -q '/registry-proxy' "$tmp/proxy.yaml" || fail "proxy command does not use /registry-proxy"
 grep -q 'containerPort: 8080' "$tmp/proxy.yaml" || fail "proxy service port is missing"

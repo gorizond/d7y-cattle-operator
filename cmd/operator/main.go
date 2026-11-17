@@ -131,6 +131,8 @@ func run() error {
 		ProxyHarborURL:           cfg.ProxyHarborURL,
 		ProxyHarborAdminSecret:   cfg.ProxyHarborAdminSecret,
 		ProxyRegistries:          splitCSV(cfg.ProxyRegistries),
+		ProxyBasePath:            cfg.ProxyBasePath,
+		ProxyTLSSecret:           cfg.ProxyTLSSecret,
 		ExtrasIngressController:  cfg.ExtrasIngressController,
 		ExtrasIngressClassName:   cfg.ExtrasIngressClassName,
 		ExtrasIngressGRPCEnabled: cfg.ExtrasIngressGRPCEnabled,
@@ -154,7 +156,7 @@ func run() error {
 		MTLSSecretName:    cfg.MTLSSecretName,
 		ManagerGRPCDomain: cfg.ManagerGRPCDomain,
 		StaticURL:         cfg.NginxStaticURL,
-		SmartProxyURL:     proxyPublicURL(cfg.ProxyDomain),
+		SmartProxyURL:     proxyPublicURL(cfg.ProxyDomain, cfg.ProxyBasePath),
 		SchedulerDomain:   cfg.P2PDomain,
 		ClusterIDFallback: cfg.ClusterIDFallback,
 	}
@@ -179,11 +181,17 @@ func splitCSV(raw string) []string {
 	return values
 }
 
-func proxyPublicURL(domain string) string {
+func proxyPublicURL(domain, basePath string) string {
 	if domain == "" {
 		return ""
 	}
-	return "https://" + domain
+	if basePath == "" {
+		return "https://" + domain
+	}
+	if !strings.HasPrefix(basePath, "/") {
+		basePath = "/" + basePath
+	}
+	return "https://" + domain + strings.TrimRight(basePath, "/")
 }
 
 func hostFromURL(raw string) (string, error) {

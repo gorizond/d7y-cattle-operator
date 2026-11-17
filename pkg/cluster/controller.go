@@ -57,6 +57,8 @@ type Options struct {
 	ProxyHarborURL              string
 	ProxyHarborAdminSecret      string
 	ProxyRegistries             []string
+	ProxyBasePath               string
+	ProxyTLSSecret              string
 	ExtrasIngressController     string
 	ExtrasIngressClassName      string
 	ExtrasIngressGRPCEnabled    bool
@@ -309,11 +311,17 @@ func setRegistryProxyCondition(status *statusBuilder, roles Roles, err error) {
 	status.set(conditionRegistryProxyReady, true, "Ready", "registry proxy HelmOp applied")
 }
 
-func proxyPublicURL(domain string) string {
+func proxyPublicURL(domain, basePath string) string {
 	if domain == "" {
 		return ""
 	}
-	return "https://" + domain
+	if basePath == "" {
+		return "https://" + domain
+	}
+	if !strings.HasPrefix(basePath, "/") {
+		basePath = "/" + basePath
+	}
+	return "https://" + domain + strings.TrimRight(basePath, "/")
 }
 
 func setSeedCondition(status *statusBuilder, cond condition.Cond, err error) {
@@ -377,7 +385,7 @@ func (c *Controller) helmopCluster(cluster *provv1.Cluster) helmop.Cluster {
 		HarborSecretKey:        helmop.HarborSecretKeyName(cluster.Name),
 		ProxyWebhookSecretName: helmop.RegistryProxyWebhookSecretName(cluster.Name),
 		ProxyRobotSecretName:   helmop.RegistryProxyRobotSecretName(cluster.Name),
-		ProxyPublicURL:         proxyPublicURL(c.opts.ProxyDomain),
+		ProxyPublicURL:         proxyPublicURL(c.opts.ProxyDomain, c.opts.ProxyBasePath),
 		ProxyRegistries:        c.opts.ProxyRegistries,
 		ManagerGRPCDomain:      c.opts.ManagerGRPCDomain,
 		ManagerGRPCPort:        c.opts.ManagerGRPCPort,

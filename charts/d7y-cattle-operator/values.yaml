@@ -86,7 +86,7 @@ registryProxy:
   chart:
     repo: https://gorizond.github.io/d7y-cattle-operator
     name: registry-proxy
-    version: 0.1.0
+    version: 0.1.1
 
 # External/existing Harbor and the public proxy endpoint. proxy.domain is the
 # operator-wide public proxy DNS name (no scheme); leave empty to disable the
@@ -99,6 +99,10 @@ proxy:
   harborAdminSecret: harbor-admin
   # String "docker.io,ghcr.io" or list ["docker.io", "ghcr.io"].
   registries: docker.io
+  # Public proxy path on the Harbor host; empty disables the path prefix.
+  basePath: /proxy
+  # Reuse the Harbor cert-manager Secret; empty uses the ingress default.
+  tlsSecret: ""
 
 # Strict node-local containerd registry mirror for seed/data clusters.
 containerdMirror:

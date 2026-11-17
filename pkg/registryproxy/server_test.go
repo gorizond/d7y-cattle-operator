@@ -149,6 +149,30 @@ func TestServerHealthMetricsAndConvert(t *testing.T) {
 	}
 }
 
+func TestServerProxyBasePath(t *testing.T) {
+	server := testServer(&fakeBackend{manifest: Manifest{Digest: "sha256:manifest", MediaType: ociManifestType, Body: []byte("manifest")}})
+	server.Config.Proxy.BasePath = "/proxy"
+	for _, target := range []string{
+		"/proxy/docker.io/v2/library/nginx/manifests/1.27",
+		"/proxy/v2/library/nginx/manifests/1.27?ns=docker.io",
+		"/docker.io/v2/library/nginx/manifests/1.27",
+	} {
+		req := httptest.NewRequest(http.MethodGet, target, nil)
+		rec := httptest.NewRecorder()
+		server.Handler().ServeHTTP(rec, req)
+		if rec.Code != http.StatusOK {
+			t.Errorf("%s = %d, want 200", target, rec.Code)
+		}
+	}
+	server.Convert = http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) { w.WriteHeader(http.StatusAccepted) })
+	req := httptest.NewRequest(http.MethodPost, "/proxy/api/convert", nil)
+	rec := httptest.NewRecorder()
+	server.Handler().ServeHTTP(rec, req)
+	if rec.Code != http.StatusAccepted {
+		t.Errorf("/proxy/api/convert = %d, want 202", rec.Code)
+	}
+}
+
 func TestServerV2Root(t *testing.T) {
 	server := testServer(&fakeBackend{})
 	rec := httptest.NewRecorder()

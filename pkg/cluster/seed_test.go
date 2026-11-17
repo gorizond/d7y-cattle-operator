@@ -76,7 +76,7 @@ func TestReconcileSeedMirrorUsesExternalProxy(t *testing.T) {
 	if got := valueAtPath(t, values, "proxy", "enabled"); got != true {
 		t.Errorf("mirror proxy.enabled = %v, want true", got)
 	}
-	if got := valueAtPath(t, values, "proxy", "url"); got != "https://proxy.example.com" {
+	if got := valueAtPath(t, values, "proxy", "url"); got != "https://proxy.example.com/proxy" {
 		t.Errorf("mirror proxy.url = %v", got)
 	}
 	if !store.has("fleet-default/c1-registry-proxy") {
@@ -180,6 +180,8 @@ func newTestController(t *testing.T) (*Controller, *fakeHelmOpStore, *fakeEventS
 			RegistryProxyChart:       helmop.Chart{Repo: "https://charts.example.com", Name: "registry-proxy", Version: "0.1.0"},
 			HarborIngressClass:       "traefik",
 			ProxyDomain:              "proxy.example.com",
+			ProxyBasePath:            "/proxy",
+			ProxyTLSSecret:           "poligon-harbor-tls",
 			ProxyHarborAdminSecret:   "harbor-admin",
 			ProxyRegistries:          []string{"docker.io"},
 			ExtrasIngressController:  "nginx",

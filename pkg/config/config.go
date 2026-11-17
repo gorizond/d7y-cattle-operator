@@ -32,9 +32,10 @@ const (
 	DefaultHarborChartVersion            = "1.19.4"
 	DefaultRegistryProxyChartRepo        = "https://gorizond.github.io/d7y-cattle-operator"
 	DefaultRegistryProxyChartName        = "registry-proxy"
-	DefaultRegistryProxyChartVersion     = "0.1.0"
+	DefaultRegistryProxyChartVersion     = "0.1.1"
 	DefaultProxyHarborAdminSecret        = "harbor-admin"
 	DefaultProxyRegistries               = "docker.io"
+	DefaultProxyBasePath                 = "/proxy"
 	DefaultExtrasIngressController       = "nginx"
 	DefaultExtrasIngressClassName        = ""
 	DefaultExtrasIngressGRPCEnabled      = true
@@ -78,6 +79,8 @@ type Config struct {
 	ProxyHarborURL              string
 	ProxyHarborAdminSecret      string
 	ProxyRegistries             string
+	ProxyBasePath               string
+	ProxyTLSSecret              string
 	ExtrasIngressController     string
 	ExtrasIngressClassName      string
 	ExtrasIngressGRPCEnabled    bool
@@ -145,6 +148,8 @@ func Load(args []string) (*Config, error) {
 	fs.StringVar(&cfg.ProxyHarborURL, "proxy-harbor-url", envOr("PROXY_HARBOR_URL", ""), "existing/external Harbor base URL for the proxy")
 	fs.StringVar(&cfg.ProxyHarborAdminSecret, "proxy-harbor-admin-secret", envOr("PROXY_HARBOR_ADMIN_SECRET", DefaultProxyHarborAdminSecret), "name of the Harbor admin Secret in the operator namespace")
 	fs.StringVar(&cfg.ProxyRegistries, "proxy-registries", envOr("PROXY_REGISTRIES", DefaultProxyRegistries), "comma-separated upstream registry allowlist")
+	fs.StringVar(&cfg.ProxyBasePath, "proxy-base-path", envOr("PROXY_BASE_PATH", DefaultProxyBasePath), "public proxy base path (default /proxy; empty disables the path prefix)")
+	fs.StringVar(&cfg.ProxyTLSSecret, "proxy-tls-secret", envOr("PROXY_TLS_SECRET", ""), "TLS Secret name for the proxy ingress (empty uses the ingress controller default)")
 	fs.StringVar(&cfg.ExtrasIngressController, "extras-ingress-controller", envOr("EXTRAS_INGRESS_CONTROLLER", DefaultExtrasIngressController), "extras Ingress controller: nginx or traefik")
 	fs.StringVar(&cfg.ExtrasIngressClassName, "extras-ingress-class-name", envOr("EXTRAS_INGRESS_CLASS_NAME", DefaultExtrasIngressClassName), "extras Ingress class name (empty uses the cluster default)")
 	fs.BoolVar(&cfg.ExtrasIngressGRPCEnabled, "extras-ingress-grpc-enabled", defaultGRPCEnabled, "render the extras gRPC Ingress")
@@ -291,6 +296,17 @@ func (c *Config) Validate() error {
 		add("--proxy-harbor-admin-secret is required")
 	} else if msgs := validation.IsDNS1123Subdomain(c.ProxyHarborAdminSecret); len(msgs) > 0 {
 		add("--proxy-harbor-admin-secret: %s", strings.Join(msgs, "; "))
+	}
+	if c.ProxyBasePath != "" {
+		if !strings.HasPrefix(c.ProxyBasePath, "/") || strings.ContainsAny(c.ProxyBasePath, "?#") ||
+			strings.Contains(c.ProxyBasePath, "..") || strings.HasSuffix(c.ProxyBasePath, "/") && c.ProxyBasePath != "/" {
+			add("--proxy-base-path: must start with /, have no query, and no trailing slash")
+		}
+	}
+	if c.ProxyTLSSecret != "" {
+		if msgs := validation.IsDNS1123Subdomain(c.ProxyTLSSecret); len(msgs) > 0 {
+			add("--proxy-tls-secret: %s", strings.Join(msgs, "; "))
+		}
 	}
 	for _, registry := range strings.Split(c.ProxyRegistries, ",") {
 		registry = strings.TrimSpace(registry)

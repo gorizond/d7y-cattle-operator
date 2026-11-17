@@ -9,7 +9,7 @@ import (
 func TestMirrorHelmOpWithProxy(t *testing.T) {
 	c := testCluster()
 	c.ProxyEnabled = true
-	c.ProxyPublicURL = "https://proxy.example.com"
+	c.ProxyPublicURL = "https://proxy.example.com/proxy"
 	c.ProxyRegistries = []string{"docker.io"}
 	op := Mirror(c)
 
@@ -20,7 +20,7 @@ func TestMirrorHelmOpWithProxy(t *testing.T) {
 	if got := valueAt(t, values, "proxy", "enabled"); got != true {
 		t.Errorf("proxy.enabled = %v", got)
 	}
-	if got := valueAt(t, values, "proxy", "url"); got != "https://proxy.example.com" {
+	if got := valueAt(t, values, "proxy", "url"); got != "https://proxy.example.com/proxy" {
 		t.Errorf("proxy.url = %v", got)
 	}
 	registries, ok := valueAt(t, values, "proxy", "registries").([]string)
