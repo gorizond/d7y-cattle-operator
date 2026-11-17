@@ -49,8 +49,29 @@ func TestCreateInjectsPayload(t *testing.T) {
 		!strings.Contains(env, "STATIC_URL=http://static.example.com") ||
 		!strings.Contains(env, "SCHEDULER_HOST=d7y-scheduler.c-m-test.example.com") ||
 		!strings.Contains(env, "SCHEDULER_CLUSTER_ID=2") ||
+		!strings.Contains(env, "RESOLVER_UPSTREAM=https://proxy.example.test") ||
+		!strings.Contains(env, "RESOLVER_LISTEN=127.0.0.1:3999") ||
 		!strings.Contains(env, "CA_CRT_B64=") {
 		t.Errorf("payload env = %q", env)
+	}
+}
+
+func TestCreateWithoutResolverOmitsResolverEnv(t *testing.T) {
+	handler, _, _ := newTestHandler()
+	handler.ResolverUpstream = ""
+	req := testRequest(admissionv1.Create, "c1-pool1", "Amazonec2Config", testUserData, nil, nil)
+	resp := &wranglerwebhook.Response{AdmissionResponse: admissionv1.AdmissionResponse{Allowed: true}}
+
+	if err := handler.Admit(resp, req); err != nil {
+		t.Fatalf("Admit() error = %v", err)
+	}
+	cfg := extractCFG(t, patchedUserData(t, resp))
+	raw, err := base64.URLEncoding.DecodeString(cfg)
+	if err != nil {
+		t.Fatalf("decode cfg: %v", err)
+	}
+	if strings.Contains(string(raw), "RESOLVER_") {
+		t.Errorf("resolver env emitted without upstream: %q", raw)
 	}
 }
 
@@ -272,6 +293,8 @@ func newTestHandler() (*Handler, *fakeClusters, *fakeEvents) {
 		MTLSSecretName:    "dragonfly-p2p-mtls",
 		ManagerGRPCDomain: "grpc.example.com",
 		StaticURL:         "http://static.example.com",
+		ResolverUpstream:  "https://proxy.example.test",
+		ResolverListen:    "127.0.0.1:3999",
 		SchedulerDomain:   "example.com",
 		ClusterIDFallback: "c-m-fallback",
 	}, clusters, events

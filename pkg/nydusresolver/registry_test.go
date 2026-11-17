@@ -1,80 +1,14 @@
 package nydusresolver
 
-import (
-	"reflect"
-	"testing"
-)
-
-func TestDefaultRegistryMap(t *testing.T) {
-	want := map[string]string{
-		"registry-1.docker.io": "docker.io",
-		"index.docker.io":      "docker.io",
-		"docker.io":            "docker.io",
-		"ghcr.io":              "ghcr.io",
-		"quay.io":              "quay.io",
-		"registry.k8s.io":      "registry.k8s.io",
-		"gcr.io":               "gcr.io",
-		"mcr.microsoft.com":    "mcr.microsoft.com",
-	}
-	if got := DefaultRegistryMap(); !reflect.DeepEqual(got, want) {
-		t.Fatalf("DefaultRegistryMap() = %#v, want %#v", got, want)
-	}
-}
-
-func TestParseRegistryMap(t *testing.T) {
-	got, err := ParseRegistryMap(" Registry.Example.COM:443 = mirror/registry.example.com , ghcr.io=ghcr ")
-	if err != nil {
-		t.Fatalf("ParseRegistryMap: %v", err)
-	}
-	want := map[string]string{
-		"registry.example.com": "mirror/registry.example.com",
-		"ghcr.io":              "ghcr",
-	}
-	if !reflect.DeepEqual(got, want) {
-		t.Fatalf("ParseRegistryMap() = %#v, want %#v", got, want)
-	}
-	if empty, err := ParseRegistryMap("  "); err != nil || len(empty) != 0 {
-		t.Fatalf("empty ParseRegistryMap = %#v, %v", empty, err)
-	}
-	for _, invalid := range []string{
-		"ghcr.io",
-		"=docker.io",
-		"ghcr.io=",
-		"ghcr.io=../escape",
-		"bad host=docker.io",
-		"ghcr.io=a?b",
-		"ghcr.io=a,,b=c",
-	} {
-		if _, err := ParseRegistryMap(invalid); err == nil {
-			t.Errorf("ParseRegistryMap(%q) succeeded, want error", invalid)
-		}
-	}
-}
-
-func TestMergeRegistryMaps(t *testing.T) {
-	base := DefaultRegistryMap()
-	merged := MergeRegistryMaps(base, map[string]string{
-		"registry-1.docker.io": "mirror/docker.io",
-		"registry.example.com": "mirror/registry.example.com",
-	})
-	if merged["registry-1.docker.io"] != "mirror/docker.io" {
-		t.Fatalf("override not applied: %q", merged["registry-1.docker.io"])
-	}
-	if merged["registry.example.com"] != "mirror/registry.example.com" {
-		t.Fatalf("new mapping missing: %q", merged["registry.example.com"])
-	}
-	if base["registry-1.docker.io"] != "docker.io" {
-		t.Fatalf("MergeRegistryMaps mutated its base map")
-	}
-}
+import "testing"
 
 func TestNormalizeRegistryHost(t *testing.T) {
 	for input, want := range map[string]string{
-		"registry-1.docker.io":       "registry-1.docker.io",
-		" Registry-1.Docker.IO:443 ": "registry-1.docker.io",
-		"ghcr.io.":                   "ghcr.io",
-		"ghcr.io:":                   "ghcr.io",
-		"":                           "",
+		"registry.example.test":       "registry.example.test",
+		" Registry.Example.Test:443 ": "registry.example.test",
+		"mirror.example.test.":        "mirror.example.test",
+		"mirror.example.test:":        "mirror.example.test",
+		"":                            "",
 	} {
 		if got := NormalizeRegistryHost(input); got != want {
 			t.Errorf("NormalizeRegistryHost(%q) = %q, want %q", input, got, want)
@@ -82,28 +16,58 @@ func TestNormalizeRegistryHost(t *testing.T) {
 	}
 }
 
-func TestRewriteRegistryPath(t *testing.T) {
+func TestRegistryPath(t *testing.T) {
 	tests := []struct {
-		path   string
-		mapped string
-		want   string
-		ok     bool
+		path string
+		host string
+		want string
+		ok   bool
 	}{
-		{"/v2/", "docker.io", "/docker.io/v2/", true},
-		{"/v2", "docker.io", "/docker.io/v2", true},
-		{"/v2/library/alpine/manifests/latest", "docker.io", "/docker.io/v2/library/alpine/manifests/latest", true},
-		{"/v2/foo/blobs/sha256:abc", "mirror/ghcr.io", "/mirror/ghcr.io/v2/foo/blobs/sha256:abc", true},
-		{"/v2evil", "docker.io", "", false},
-		{"/v1/", "docker.io", "", false},
-		{"/", "docker.io", "", false},
+		{"/v2/", "registry.example.test", "/registry.example.test/v2/", true},
+		{"/v2", "registry.example.test", "/registry.example.test/v2", true},
+		{"/v2/library/alpine/manifests/latest", "registry.example.test", "/registry.example.test/v2/library/alpine/manifests/latest", true},
+		{"/v2/foo/blobs/sha256:abc", "mirror.example.test", "/mirror.example.test/v2/foo/blobs/sha256:abc", true},
+		{"/v2/foo", "Registry.Example.Test:443", "/registry.example.test/v2/foo", true},
+		{"/v2evil", "registry.example.test", "", false},
+		{"/v1/", "registry.example.test", "", false},
+		{"/", "registry.example.test", "", false},
 		{"/v2/", "", "", false},
-		{"/v2/", "/", "", false},
+		{"/v2/", "bad_host", "", false},
 	}
 	for _, test := range tests {
-		got, ok := RewriteRegistryPath(test.path, test.mapped)
+		got, ok := RegistryPath(test.path, test.host)
 		if got != test.want || ok != test.ok {
-			t.Errorf("RewriteRegistryPath(%q, %q) = %q, %t; want %q, %t",
-				test.path, test.mapped, got, ok, test.want, test.ok)
+			t.Errorf("RegistryPath(%q, %q) = %q, %t; want %q, %t",
+				test.path, test.host, got, ok, test.want, test.ok)
+		}
+	}
+}
+
+func TestValidateRegistryHost(t *testing.T) {
+	valid := []string{
+		"registry.example.test",
+		"mirror.example.test",
+		"a-b.example.test",
+		"127.0.0.1",
+	}
+	for _, host := range valid {
+		if err := validateRegistryHost(host); err != nil {
+			t.Errorf("validateRegistryHost(%q) = %v", host, err)
+		}
+	}
+	invalid := []string{
+		"",
+		"bad_host",
+		"-bad.example.test",
+		"bad-.example.test",
+		".example.test",
+		"example.test.",
+		"a..b",
+		"host:443",
+	}
+	for _, host := range invalid {
+		if err := validateRegistryHost(host); err == nil {
+			t.Errorf("validateRegistryHost(%q) succeeded, want error", host)
 		}
 	}
 }

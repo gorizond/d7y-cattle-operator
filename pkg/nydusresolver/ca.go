@@ -16,76 +16,102 @@ import (
 	"net"
 	"os"
 	"path/filepath"
-	"strings"
 	"sync"
 	"time"
 )
 
 const caCommonName = "nydus-resolver local CA"
 
+// CAOptions names the local CA key, the combined trust bundle written for
+// clients, and the system roots that must remain trusted alongside the local
+// CA.
+type CAOptions struct {
+	KeyPath      string
+	BundlePath   string
+	SystemCAPath string
+}
+
 // CA is a local certificate authority used to mint leaf certificates for
-// registry hosts intercepted by the resolver.
+// intercepted registry hosts.
 type CA struct {
 	cert    *x509.Certificate
 	key     crypto.Signer
 	certPEM []byte
 }
 
-// CertPEM returns the PEM-encoded CA certificate.
+// CertPEM returns the local CA certificate in PEM form.
 func (ca *CA) CertPEM() []byte {
 	return append([]byte(nil), ca.certPEM...)
 }
 
-// DefaultCAKeyPath derives the CA key path from the CA certificate path. A
-// .crt suffix is replaced with .key; other names get a .key suffix.
-func DefaultCAKeyPath(certPath string) string {
-	if strings.EqualFold(filepath.Ext(certPath), ".crt") {
-		return strings.TrimSuffix(certPath, filepath.Ext(certPath)) + ".key"
+// LoadOrCreateCA loads the local CA key and finds its certificate in the
+// existing bundle, or creates a new key and CA on first start. It then rewrites
+// the bundle as local CA + current system roots so SSL_CERT_FILE keeps other
+// TLS working. Partial or mismatched material fails closed.
+func LoadOrCreateCA(opts CAOptions) (*CA, error) {
+	if opts.KeyPath == "" || opts.BundlePath == "" || opts.SystemCAPath == "" {
+		return nil, errors.New("CA key, bundle, and system CA paths are required")
 	}
-	return certPath + ".key"
-}
-
-// LoadOrCreateCA loads a CA from certFile/keyFile when both are given. With
-// neither flag it loads certOut and its derived key path, generating and
-// persisting a new CA on first start. Partial CA material is an error: the
-// resolver never silently replaces a CA that clients may already trust.
-func LoadOrCreateCA(certFile, keyFile, certOut string) (*CA, error) {
-	if certFile != "" || keyFile != "" {
-		if certFile == "" || keyFile == "" {
-			return nil, errors.New("--ca-cert and --ca-key must be set together")
-		}
-		return loadCA(certFile, keyFile)
-	}
-	if certOut == "" {
-		return nil, errors.New("CA certificate output path is required")
-	}
-	keyOut := DefaultCAKeyPath(certOut)
-	certExists, err := regularFileExists(certOut)
+	keyExists, err := regularFileExists(opts.KeyPath)
 	if err != nil {
 		return nil, err
 	}
-	keyExists, err := regularFileExists(keyOut)
+	bundleExists, err := regularFileExists(opts.BundlePath)
 	if err != nil {
 		return nil, err
 	}
-	if certExists && keyExists {
-		return loadCA(certOut, keyOut)
-	}
-	if certExists != keyExists {
+	if keyExists != bundleExists {
 		return nil, fmt.Errorf("incomplete CA material: %s exists=%t, %s exists=%t; remove both files to regenerate",
-			certOut, certExists, keyOut, keyExists)
+			opts.KeyPath, keyExists, opts.BundlePath, bundleExists)
 	}
 
-	ca, keyPEM, err := generateCA()
+	var ca *CA
+	createdKey := false
+	cleanupKey := func() {
+		if createdKey {
+			_ = os.Remove(opts.KeyPath)
+		}
+	}
+	switch {
+	case keyExists:
+		key, err := readPrivateKey(opts.KeyPath)
+		if err != nil {
+			return nil, err
+		}
+		cert, err := findLocalCA(opts.BundlePath, key.Public())
+		if err != nil {
+			return nil, err
+		}
+		ca = &CA{
+			cert:    cert,
+			key:     key,
+			certPEM: pem.EncodeToMemory(&pem.Block{Type: "CERTIFICATE", Bytes: cert.Raw}),
+		}
+	default:
+		generated, keyPEM, err := generateCA()
+		if err != nil {
+			return nil, err
+		}
+		if err := writeFileAtomic(opts.KeyPath, keyPEM, 0o600); err != nil {
+			return nil, fmt.Errorf("write CA key: %w", err)
+		}
+		ca = generated
+		createdKey = true
+	}
+
+	systemCerts, err := readPEMCertificates(opts.SystemCAPath)
 	if err != nil {
-		return nil, err
+		cleanupKey()
+		return nil, fmt.Errorf("read system CA bundle: %w", err)
 	}
-	if err := writeFileAtomic(keyOut, keyPEM, 0o600); err != nil {
-		return nil, fmt.Errorf("write CA key: %w", err)
+	if len(systemCerts) == 0 {
+		cleanupKey()
+		return nil, fmt.Errorf("system CA bundle %s contains no certificates", opts.SystemCAPath)
 	}
-	if err := writeFileAtomic(certOut, ca.certPEM, 0o644); err != nil {
-		_ = os.Remove(keyOut)
-		return nil, fmt.Errorf("write CA certificate: %w", err)
+	bundle := encodeBundle(ca.cert, systemCerts)
+	if err := writeFileAtomic(opts.BundlePath, bundle, 0o644); err != nil {
+		cleanupKey()
+		return nil, fmt.Errorf("write CA bundle: %w", err)
 	}
 	return ca, nil
 }
@@ -130,46 +156,74 @@ func generateCA() (*CA, []byte, error) {
 	}, keyPEM, nil
 }
 
-func loadCA(certFile, keyFile string) (*CA, error) {
-	certPEM, err := os.ReadFile(certFile)
+func findLocalCA(bundlePath string, publicKey crypto.PublicKey) (*x509.Certificate, error) {
+	certs, err := readPEMCertificates(bundlePath)
 	if err != nil {
-		return nil, fmt.Errorf("read CA certificate: %w", err)
+		return nil, fmt.Errorf("read CA bundle: %w", err)
 	}
-	block, _ := pem.Decode(certPEM)
-	if block == nil || block.Type != "CERTIFICATE" {
-		return nil, fmt.Errorf("CA certificate %s is not PEM", certFile)
+	for _, cert := range certs {
+		if !cert.IsCA || cert.KeyUsage&x509.KeyUsageCertSign == 0 {
+			continue
+		}
+		if publicKeysEqual(cert.PublicKey, publicKey) {
+			return cert, nil
+		}
 	}
-	cert, err := x509.ParseCertificate(block.Bytes)
-	if err != nil {
-		return nil, fmt.Errorf("parse CA certificate: %w", err)
-	}
-	if !cert.IsCA || cert.KeyUsage&x509.KeyUsageCertSign == 0 {
-		return nil, fmt.Errorf("certificate %s is not a CA signing certificate", certFile)
-	}
+	return nil, fmt.Errorf("CA bundle %s has no signing certificate matching the local key", bundlePath)
+}
 
-	keyPEM, err := os.ReadFile(keyFile)
-	if err != nil {
-		return nil, fmt.Errorf("read CA key: %w", err)
-	}
-	keyBlock, _ := pem.Decode(keyPEM)
-	if keyBlock == nil {
-		return nil, fmt.Errorf("CA key %s is not PEM", keyFile)
-	}
-	key, err := parsePrivateKey(keyBlock, keyFile)
+func readPEMCertificates(path string) ([]*x509.Certificate, error) {
+	raw, err := os.ReadFile(path)
 	if err != nil {
 		return nil, err
 	}
-	if !publicKeysEqual(cert.PublicKey, key.Public()) {
-		return nil, fmt.Errorf("CA certificate %s does not match key %s", certFile, keyFile)
+	var certs []*x509.Certificate
+	rest := raw
+	for {
+		block, remaining := pem.Decode(rest)
+		if block == nil {
+			break
+		}
+		rest = remaining
+		if block.Type != "CERTIFICATE" {
+			continue
+		}
+		cert, err := x509.ParseCertificate(block.Bytes)
+		if err != nil {
+			return nil, fmt.Errorf("parse certificate in %s: %w", path, err)
+		}
+		certs = append(certs, cert)
 	}
-	return &CA{
-		cert:    cert,
-		key:     key,
-		certPEM: pem.EncodeToMemory(&pem.Block{Type: "CERTIFICATE", Bytes: cert.Raw}),
-	}, nil
+	return certs, nil
 }
 
-func parsePrivateKey(block *pem.Block, path string) (crypto.Signer, error) {
+func encodeBundle(local *x509.Certificate, system []*x509.Certificate) []byte {
+	seen := make(map[string]struct{}, len(system)+1)
+	var bundle bytes.Buffer
+	add := func(cert *x509.Certificate) {
+		key := string(cert.Raw)
+		if _, ok := seen[key]; ok {
+			return
+		}
+		seen[key] = struct{}{}
+		_ = pem.Encode(&bundle, &pem.Block{Type: "CERTIFICATE", Bytes: cert.Raw})
+	}
+	add(local)
+	for _, cert := range system {
+		add(cert)
+	}
+	return bundle.Bytes()
+}
+
+func readPrivateKey(path string) (crypto.Signer, error) {
+	keyPEM, err := os.ReadFile(path)
+	if err != nil {
+		return nil, fmt.Errorf("read CA key: %w", err)
+	}
+	block, _ := pem.Decode(keyPEM)
+	if block == nil {
+		return nil, fmt.Errorf("CA key %s is not PEM", path)
+	}
 	switch block.Type {
 	case "EC PRIVATE KEY":
 		key, err := x509.ParseECPrivateKey(block.Bytes)

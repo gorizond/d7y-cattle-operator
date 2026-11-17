@@ -1,7 +1,7 @@
 // Package nydusresolver implements the HTTPS MITM forward proxy used by
 // nydus-snapshotter. It terminates TLS with a locally trusted CA, rewrites
-// /v2/... requests to the registry proxy path /<registry>/v2/..., and streams
-// requests and responses without buffering.
+// /v2/... requests to /<connect-host>/v2/... on the upstream registry proxy,
+// and streams requests and responses without buffering.
 package nydusresolver
 
 import (
@@ -31,19 +31,17 @@ const (
 // Options configures the resolver. UpstreamURL must be an absolute http(s)
 // URL; the command enforces https.
 type Options struct {
-	ListenAddr  string
-	UpstreamURL string
-	RegistryMap map[string]string
-	CACertFile  string
-	CAKeyFile   string
-	CACertOut   string
+	ListenAddr   string
+	UpstreamURL  string
+	CAKeyFile    string
+	CABundleFile string
+	SystemCAFile string
 }
 
 // Server is an HTTPS forward proxy with a per-host MITM certificate.
 type Server struct {
 	listen   string
 	upstream *url.URL
-	registry map[string]string
 	leaves   *leafIssuer
 	client   *http.Client
 	log      *slog.Logger
@@ -62,14 +60,11 @@ func New(opts Options) (*Server, error) {
 	if upstream.RawQuery != "" || upstream.Fragment != "" {
 		return nil, errors.New("upstream URL must not contain a query or fragment")
 	}
-	registry, err := normalizeRegistryMap(opts.RegistryMap)
-	if err != nil {
-		return nil, err
-	}
-	if len(registry) == 0 {
-		return nil, errors.New("registry map must not be empty")
-	}
-	ca, err := LoadOrCreateCA(opts.CACertFile, opts.CAKeyFile, opts.CACertOut)
+	ca, err := LoadOrCreateCA(CAOptions{
+		KeyPath:      opts.CAKeyFile,
+		BundlePath:   opts.CABundleFile,
+		SystemCAPath: opts.SystemCAFile,
+	})
 	if err != nil {
 		return nil, err
 	}
@@ -88,12 +83,11 @@ func New(opts Options) (*Server, error) {
 	return &Server{
 		listen:   opts.ListenAddr,
 		upstream: upstream,
-		registry: registry,
 		leaves:   leaves,
 		client: &http.Client{
 			Transport: transport,
 			// A proxy relays redirects; following them would bypass the
-			// registry mapping and fail-closed host set.
+			// CONNECT-host path contract and the upstream registry routing.
 			CheckRedirect: func(*http.Request, []*http.Request) error {
 				return http.ErrUseLastResponse
 			},
@@ -175,8 +169,8 @@ func (s *Server) handleConnect(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	host = NormalizeRegistryHost(host)
-	if _, ok := s.registry[host]; !ok {
-		http.Error(w, "registry is not mapped", http.StatusForbidden)
+	if err := validateRegistryHost(host); err != nil {
+		http.Error(w, "invalid registry host", http.StatusForbidden)
 		return
 	}
 
@@ -240,8 +234,8 @@ func (s *Server) tlsConfig(connectHost string) *tls.Config {
 				name = connectHost
 			}
 			name = NormalizeRegistryHost(name)
-			if _, ok := s.registry[name]; !ok {
-				return nil, errors.New("registry is not mapped")
+			if name != connectHost {
+				return nil, errors.New("SNI does not match CONNECT target")
 			}
 			return s.leaves.Certificate(name)
 		},
@@ -257,12 +251,7 @@ func (s *Server) serveTunnel(w http.ResponseWriter, r *http.Request, connectHost
 		http.Error(w, "host does not match CONNECT target", http.StatusForbidden)
 		return
 	}
-	mapped, ok := s.registry[host]
-	if !ok {
-		http.Error(w, "registry is not mapped", http.StatusForbidden)
-		return
-	}
-	targetPath, ok := RewriteRegistryPath(r.URL.Path, mapped)
+	targetPath, ok := RegistryPath(r.URL.Path, host)
 	if !ok {
 		http.NotFound(w, r)
 		return
@@ -272,7 +261,7 @@ func (s *Server) serveTunnel(w http.ResponseWriter, r *http.Request, connectHost
 	target.Path = joinURLPath(s.upstream.Path, targetPath)
 	target.RawPath = ""
 	if r.URL.RawPath != "" && r.URL.RawPath != r.URL.Path {
-		if rawTarget, ok := RewriteRegistryPath(r.URL.RawPath, mapped); ok {
+		if rawTarget, ok := RegistryPath(r.URL.RawPath, host); ok {
 			target.RawPath = joinURLPath(s.upstream.EscapedPath(), rawTarget)
 		}
 	}

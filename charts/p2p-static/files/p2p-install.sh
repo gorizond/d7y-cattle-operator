@@ -20,6 +20,11 @@ NYDUS_BINARIES="containerd-nydus-grpc
 nydusd
 nydus-image
 nydus-overlayfs"
+RESOLVER_BINARY="nydus-resolver"
+RESOLVER_CONFIG="/etc/nydus-resolver/config.yaml"
+RESOLVER_CA_DIR="/var/lib/nydus-resolver"
+RESOLVER_CA_KEY="${RESOLVER_CA_DIR}/ca.key"
+RESOLVER_CA_BUNDLE="${RESOLVER_CA_DIR}/ca-bundle.pem"
 SCHEDULER_PORT=443
 PREFLIGHT_TIMEOUT="${P2P_PREFLIGHT_TIMEOUT:-3}"
 BIN_DIR="${ROOT}/usr/local/bin"
@@ -123,7 +128,7 @@ while IFS= read -r line || [ -n "$line" ]; do
   value="${line#*=}"
   value="${value%$'\r'}"
   case "$key" in
-    MANAGER_GRPC|STATIC_URL|SMART_PROXY_URL|SCHEDULER_HOST|SCHEDULER_CLUSTER_ID|CA_CRT_B64|CLIENT_CRT_B64|CLIENT_KEY_B64)
+    MANAGER_GRPC|STATIC_URL|SMART_PROXY_URL|RESOLVER_UPSTREAM|RESOLVER_LISTEN|SCHEDULER_HOST|SCHEDULER_CLUSTER_ID|CA_CRT_B64|CLIENT_CRT_B64|CLIENT_KEY_B64)
       printf -v "$key" '%s' "$value"
       ;;
   esac
@@ -157,6 +162,31 @@ case "$STATIC_URL" in
   *" "*|*$'\t'*) die "static_url contains whitespace" ;;
 esac
 STATIC_URL="${STATIC_URL%/}"
+
+RESOLVER_UPSTREAM="${RESOLVER_UPSTREAM:-}"
+RESOLVER_LISTEN="${RESOLVER_LISTEN:-}"
+if [ -n "$RESOLVER_UPSTREAM" ] || [ -n "$RESOLVER_LISTEN" ]; then
+  if [ -z "$RESOLVER_UPSTREAM" ] || [ -z "$RESOLVER_LISTEN" ]; then
+    die "resolver_upstream and resolver_listen must be set together"
+  fi
+  case "$RESOLVER_UPSTREAM" in
+    https://*) ;;
+    *) die "resolver_upstream must use https://" ;;
+  esac
+  case "$RESOLVER_UPSTREAM$RESOLVER_LISTEN" in
+    *" "*|*$'\t'*|*'"'*|*'\'*|*'$'*|*'`'*) die "resolver config contains unsupported characters" ;;
+  esac
+  case "$RESOLVER_UPSTREAM" in
+    *"?"*|*"@"*) die "resolver_upstream must not contain a query or credentials" ;;
+  esac
+  case "$RESOLVER_LISTEN" in
+    ""|*[!A-Za-z0-9.:\[\]]*) die "resolver_listen is not an IP and port" ;;
+  esac
+  case "$RESOLVER_LISTEN" in
+    *:*) ;;
+    *) die "resolver_listen must include a port" ;;
+  esac
+fi
 
 if [ -n "${SMART_PROXY_URL:-}" ]; then
   case "$SMART_PROXY_URL" in
@@ -209,11 +239,43 @@ fallback_direct() {
   log "P2P unavailable: $*; using direct registry so RKE2 can start"
   write_direct_template
   if [ "$REAL_ROOT" = "1" ] && [ "${SKIP_SYSTEMD:-0}" != "1" ] && command -v systemctl >/dev/null 2>&1; then
-    systemctl disable --now dfdaemon-bootstrap.service dfdaemon-bootstrap-boot.service dfdaemon-bootstrap-switch.timer nydus-snapshotter-bootstrap.service nydus-updater.timer >/dev/null 2>&1 || true
+    systemctl disable --now dfdaemon-bootstrap.service dfdaemon-bootstrap-boot.service dfdaemon-bootstrap-switch.timer nydus-resolver.service nydus-snapshotter-bootstrap.service nydus-updater.timer >/dev/null 2>&1 || true
   fi
   log "existing certificate/config files, if any, were preserved; P2P services are not enabled"
   exit 0
 }
+
+# The nydus-resolver binary is required by the host snapshotter when nydus is
+# enabled. Its config is supplied through the bootstrap payload; missing
+# config falls back to the direct registry so RKE2 can still start.
+RESOLVER_ARCH="${RESOLVER_ARCH:-$(uname -m)}"
+case "$RESOLVER_ARCH" in
+  amd64|x86_64) ;;
+  *) fallback_direct "nydus-resolver has no ${RESOLVER_ARCH} asset yet" ;;
+esac
+if [ -z "$RESOLVER_UPSTREAM" ] || [ -z "$RESOLVER_LISTEN" ]; then
+  fallback_direct "nydus-resolver config is missing RESOLVER_UPSTREAM or RESOLVER_LISTEN"
+fi
+
+SYSTEM_CA_FILE="${SYSTEM_CA_FILE:-}"
+if [ -z "$SYSTEM_CA_FILE" ]; then
+  for candidate in \
+    /etc/ssl/certs/ca-certificates.crt \
+    /etc/pki/tls/certs/ca-bundle.crt \
+    /etc/ssl/ca-bundle.pem \
+    /etc/ssl/cert.pem; do
+    if [ -s "$candidate" ]; then
+      SYSTEM_CA_FILE="$candidate"
+      break
+    fi
+  done
+fi
+if [ -z "$SYSTEM_CA_FILE" ] || [ ! -s "$SYSTEM_CA_FILE" ]; then
+  fallback_direct "system CA bundle not found for the resolver"
+fi
+case "$SYSTEM_CA_FILE" in
+  *'"'*|*'\'*|*'$'*|*'`'*) die "system CA path contains unsupported characters" ;;
+esac
 
 tcp_check() {
   local host port
@@ -249,6 +311,8 @@ preflight
 mkdir -p \
   "${ROOT}${CERT_DIR}" \
   "${ROOT}${NYDUS_DIR}" \
+  "${ROOT}${RESOLVER_CONFIG%/*}" \
+  "${ROOT}${RESOLVER_CA_DIR}" \
   "$BIN_DIR" \
   "$SERVICE_DIR" \
   "$RKE2_CONTAINERD_DIR" \
@@ -355,6 +419,14 @@ write_file "${ROOT}${NYDUS_DIR}/nydusd-config.json" 0644 <<'JSON'
   }
 }
 JSON
+
+write_file "${ROOT}${RESOLVER_CONFIG}" 0644 <<EOF
+listen: "$RESOLVER_LISTEN"
+upstream: "$RESOLVER_UPSTREAM"
+ca_key: "$RESOLVER_CA_KEY"
+ca_bundle: "$RESOLVER_CA_BUNDLE"
+system_ca_file: "$SYSTEM_CA_FILE"
+EOF
 
 CONTAINERD_MAJOR="${CONTAINERD_MAJOR:-$(detect_containerd_major)}"
 mkdir -p "$RKE2_CONTAINERD_DIR"
@@ -555,18 +627,49 @@ Unit=dfdaemon-bootstrap-switch.service
 WantedBy=timers.target
 UNIT
 
+write_file "${SERVICE_DIR}/nydus-resolver.service" 0644 <<'UNIT'
+[Unit]
+Description=Nydus resolver HTTPS forward proxy
+Documentation=https://d7y.io
+After=network-online.target
+Wants=network-online.target
+Before=nydus-snapshotter-bootstrap.service rke2-server.service rke2-agent.service
+ConditionPathExists=/etc/nydus-resolver/config.yaml
+
+[Service]
+Type=simple
+Environment=PATH=/usr/local/bin:/usr/local/sbin:/usr/sbin:/usr/bin:/sbin:/bin
+ExecStart=/usr/local/bin/nydus-resolver --config /etc/nydus-resolver/config.yaml
+Restart=always
+RestartSec=5
+NoNewPrivileges=yes
+PrivateTmp=yes
+ProtectSystem=strict
+ProtectHome=yes
+ReadWritePaths=/var/lib/nydus-resolver
+CapabilityBoundingSet=
+AmbientCapabilities=
+RestrictAddressFamilies=AF_INET AF_INET6
+
+[Install]
+WantedBy=multi-user.target
+UNIT
+
 write_file "${SERVICE_DIR}/nydus-snapshotter-bootstrap.service" 0644 <<'UNIT'
 [Unit]
 Description=Dragonfly host nydus snapshotter
 Documentation=https://d7y.io
-After=network-online.target
-Wants=network-online.target
+After=network-online.target nydus-resolver.service
+Wants=network-online.target nydus-resolver.service
 Before=rke2-server.service rke2-agent.service
 ConditionPathExists=/etc/nydus/config.toml
 
 [Service]
 Type=simple
 Environment=PATH=/usr/local/bin:/usr/local/sbin:/usr/sbin:/usr/bin:/sbin:/bin
+Environment=HTTPS_PROXY=http://127.0.0.1:3999
+Environment=NO_PROXY=127.0.0.1,localhost,::1,10.0.0.0/8,172.16.0.0/12,192.168.0.0/16,.svc,.cluster.local
+Environment=SSL_CERT_FILE=/var/lib/nydus-resolver/ca-bundle.pem
 ExecStart=/usr/local/bin/containerd-nydus-grpc --config /etc/nydus/config.toml --nydusd /usr/local/bin/nydusd --nydusd-config /etc/nydus/nydusd-config.json
 ExecStartPost=/bin/sh -c 'i=0; while [ ! -S /run/containerd-nydus/containerd-nydus-grpc.sock ]; do i=$((i + 1)); [ "$i" -ge 60 ] && exit 1; sleep 1; done'
 Restart=always
@@ -605,7 +708,7 @@ bin_dir="/usr/local/bin"
 tmp="$(mktemp -d)"
 trap 'rm -rf "$tmp"' EXIT
 # Fetch every asset first so a partial update never mixes versions.
-for binary in containerd-nydus-grpc nydusd nydus-image nydus-overlayfs; do
+for binary in containerd-nydus-grpc nydusd nydus-image nydus-overlayfs nydus-resolver; do
   fetched=0
   for url in "${STATIC_URL%/}/nydus/${NYDUS_VERSION}/${binary}" "${STATIC_URL%/}/bin/${binary}"; do
     if curl -fsSL --retry 3 --connect-timeout 10 --max-time 300 -o "$tmp/$binary" "$url" && [ -s "$tmp/$binary" ]; then
@@ -620,15 +723,26 @@ for binary in containerd-nydus-grpc nydusd nydus-image nydus-overlayfs; do
 done
 
 changed=0
-for binary in containerd-nydus-grpc nydusd nydus-image nydus-overlayfs; do
+resolver_changed=0
+for binary in containerd-nydus-grpc nydusd nydus-image nydus-overlayfs nydus-resolver; do
   if [ -x "${bin_dir}/${binary}" ] && cmp -s "$tmp/$binary" "${bin_dir}/${binary}"; then
     continue
   fi
   install -m 0755 "$tmp/$binary" "${bin_dir}/.${binary}.new"
   mv -f "${bin_dir}/.${binary}.new" "${bin_dir}/${binary}"
   changed=1
+  if [ "$binary" = "nydus-resolver" ]; then
+    resolver_changed=1
+  fi
 done
 if [ "$changed" = 1 ]; then
+  if [ "$resolver_changed" = 1 ]; then
+    systemctl restart nydus-resolver.service
+    systemctl is-active --quiet nydus-resolver.service || {
+      echo "nydus-updater: nydus-resolver.service is not active after restart" >&2
+      exit 1
+    }
+  fi
   systemctl restart nydus-snapshotter-bootstrap.service
   systemctl is-active --quiet nydus-snapshotter-bootstrap.service || {
     echo "nydus-updater: nydus-snapshotter-bootstrap.service is not active after restart" >&2
@@ -673,7 +787,7 @@ if [ "${SKIP_DOWNLOAD:-0}" = "1" ]; then
   log "SKIP_DOWNLOAD=1: skipping binary downloads (pinned nydus ${NYDUS_VERSION})"
 else
   command -v curl >/dev/null 2>&1 || fallback_direct "curl is required to download binaries"
-  for binary in $NYDUS_BINARIES dfdaemon; do
+  for binary in $NYDUS_BINARIES $RESOLVER_BINARY dfdaemon; do
     tmp="${BIN_DIR}/.${binary}.tmp.$$"
     download_nydus_asset "$binary" "$tmp" || fallback_direct "failed to download ${binary} ${NYDUS_VERSION}"
     chmod 0755 "$tmp"
@@ -682,7 +796,7 @@ else
 fi
 
 if [ "${SKIP_DOWNLOAD:-0}" != "1" ]; then
-  for binary in $NYDUS_BINARIES dfdaemon; do
+  for binary in $NYDUS_BINARIES $RESOLVER_BINARY dfdaemon; do
     if [ ! -x "${BIN_DIR}/${binary}" ]; then
       fallback_direct "${binary} is not executable"
     fi
@@ -704,13 +818,16 @@ fi
 if [ "$REAL_ROOT" = "1" ] && [ "${SKIP_SYSTEMD:-0}" != "1" ]; then
   command -v systemctl >/dev/null 2>&1 || fallback_direct "systemctl is required"
   systemctl daemon-reload || fallback_direct "systemctl daemon-reload failed"
-  systemctl enable dfdaemon-bootstrap.service dfdaemon-bootstrap-boot.service nydus-snapshotter-bootstrap.service nydus-updater.timer dfdaemon-bootstrap-switch.timer || \
+  systemctl enable dfdaemon-bootstrap.service dfdaemon-bootstrap-boot.service nydus-resolver.service nydus-snapshotter-bootstrap.service nydus-updater.timer dfdaemon-bootstrap-switch.timer || \
     fallback_direct "failed to enable bootstrap services"
+  systemctl restart nydus-resolver.service || \
+    fallback_direct "nydus resolver failed to start"
   systemctl restart dfdaemon-bootstrap.service nydus-snapshotter-bootstrap.service || \
     fallback_direct "failed to start bootstrap services"
   systemctl start nydus-updater.timer dfdaemon-bootstrap-switch.timer || \
     fallback_direct "failed to start host timers"
   sleep 2
+  systemctl is-active --quiet nydus-resolver.service || fallback_direct "nydus resolver is not active"
   systemctl is-active --quiet dfdaemon-bootstrap.service || fallback_direct "dfdaemon bootstrap failed to start"
   systemctl is-active --quiet nydus-snapshotter-bootstrap.service || fallback_direct "nydus bootstrap failed to start"
 fi
@@ -719,5 +836,6 @@ log "certificates written to ${CERT_DIR}"
 log "dfget.yaml written with scheduler cluster ID ${SCHEDULER_CLUSTER_ID}"
 log "dynconfig written with scheduler ${SCHEDULER_HOST}:${SCHEDULER_PORT}"
 log "nydus ${NYDUS_VERSION} configuration written to ${NYDUS_DIR}"
+log "nydus-resolver config written to ${RESOLVER_CONFIG} (CA bundle ${RESOLVER_CA_BUNDLE})"
 log "containerd nydus configuration written to ${CONTAINERD_CONFIG_PATH}"
 log "host bootstrap services, nydus updater, and dfdaemon switch installed in ${SERVICE_DIR}"

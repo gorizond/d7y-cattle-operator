@@ -47,6 +47,19 @@ func (r *requestRecorder) all() []recordedRequest {
 	return append([]recordedRequest(nil), r.items...)
 }
 
+func testSystemCA(t *testing.T) string {
+	t.Helper()
+	ca, _, err := generateCA()
+	if err != nil {
+		t.Fatalf("generate system CA: %v", err)
+	}
+	path := filepath.Join(t.TempDir(), "system-ca.pem")
+	if err := os.WriteFile(path, ca.CertPEM(), 0o644); err != nil {
+		t.Fatalf("write system CA: %v", err)
+	}
+	return path
+}
+
 func newUpstream(t *testing.T, recorder *requestRecorder) *httptest.Server {
 	t.Helper()
 	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
@@ -66,7 +79,7 @@ func newUpstream(t *testing.T, recorder *requestRecorder) *httptest.Server {
 		})
 		switch {
 		case strings.HasSuffix(r.URL.Path, "/redirect"):
-			w.Header().Set("Location", "https://storage.example/blob")
+			w.Header().Set("Location", "https://storage.example.test/blob")
 			w.WriteHeader(http.StatusTemporaryRedirect)
 		case r.Method == http.MethodHead:
 			w.Header().Set("Content-Length", "1234")
@@ -89,12 +102,14 @@ func newUpstream(t *testing.T, recorder *requestRecorder) *httptest.Server {
 
 func newTestProxy(t *testing.T, upstreamURL string) (*httptest.Server, *x509.CertPool) {
 	t.Helper()
-	certPath := filepath.Join(t.TempDir(), "ca.crt")
+	dir := t.TempDir()
+	bundlePath := filepath.Join(dir, "ca-bundle.pem")
 	server, err := New(Options{
-		ListenAddr:  "127.0.0.1:0",
-		UpstreamURL: upstreamURL,
-		RegistryMap: DefaultRegistryMap(),
-		CACertOut:   certPath,
+		ListenAddr:   "127.0.0.1:0",
+		UpstreamURL:  upstreamURL,
+		CAKeyFile:    filepath.Join(dir, "ca.key"),
+		CABundleFile: bundlePath,
+		SystemCAFile: testSystemCA(t),
 	})
 	if err != nil {
 		t.Fatalf("New: %v", err)
@@ -102,13 +117,13 @@ func newTestProxy(t *testing.T, upstreamURL string) (*httptest.Server, *x509.Cer
 	proxy := httptest.NewServer(server.Handler())
 	t.Cleanup(proxy.Close)
 
-	caPEM, err := os.ReadFile(certPath)
+	bundlePEM, err := os.ReadFile(bundlePath)
 	if err != nil {
-		t.Fatalf("read CA certificate: %v", err)
+		t.Fatalf("read CA bundle: %v", err)
 	}
 	pool := x509.NewCertPool()
-	if !pool.AppendCertsFromPEM(caPEM) {
-		t.Fatalf("append CA certificate")
+	if !pool.AppendCertsFromPEM(bundlePEM) {
+		t.Fatalf("append CA bundle")
 	}
 	return proxy, pool
 }
@@ -140,7 +155,7 @@ func TestProxyConnectAuthRangeHeadAndMethod(t *testing.T) {
 	}
 
 	request, err := http.NewRequest(http.MethodGet,
-		"https://registry-1.docker.io/v2/library/alpine/manifests/latest?ns=docker.io&x=1", nil)
+		"https://registry.example.test/v2/library/alpine/manifests/latest?ns=registry.example.test&x=1", nil)
 	if err != nil {
 		t.Fatalf("new request: %v", err)
 	}
@@ -162,17 +177,17 @@ func TestProxyConnectAuthRangeHeadAndMethod(t *testing.T) {
 		t.Fatal("TLS peer certificate is missing")
 	}
 	leaf := response.TLS.PeerCertificates[0]
-	if err := leaf.VerifyHostname("registry-1.docker.io"); err != nil {
+	if err := leaf.VerifyHostname("registry.example.test"); err != nil {
 		t.Fatalf("leaf certificate SAN: %v", err)
 	}
-	if !containsString(leaf.DNSNames, "registry-1.docker.io") {
+	if !containsString(leaf.DNSNames, "registry.example.test") {
 		t.Fatalf("leaf DNSNames = %v", leaf.DNSNames)
 	}
 
 	// A second request on the same client exercises keep-alive on the tunneled
 	// connection: the inner HTTP server must keep serving after the first
 	// response.
-	secondResponse, err := client.Get("https://registry-1.docker.io/v2/library/busybox/manifests/latest")
+	secondResponse, err := client.Get("https://registry.example.test/v2/library/busybox/manifests/latest")
 	if err != nil {
 		t.Fatalf("second GET through proxy: %v", err)
 	}
@@ -186,7 +201,7 @@ func TestProxyConnectAuthRangeHeadAndMethod(t *testing.T) {
 	}
 
 	rangeRequest, err := http.NewRequest(http.MethodGet,
-		"https://index.docker.io/v2/library/nginx/blobs/sha256:abc", nil)
+		"https://index.example.test/v2/library/nginx/blobs/sha256:abc", nil)
 	if err != nil {
 		t.Fatalf("new range request: %v", err)
 	}
@@ -208,7 +223,7 @@ func TestProxyConnectAuthRangeHeadAndMethod(t *testing.T) {
 		t.Fatalf("Content-Range = %q", got)
 	}
 
-	headResponse, err := client.Head("https://ghcr.io/v2/gorizond/d7y-cattle-operator/manifests/main")
+	headResponse, err := client.Head("https://head.example.test/v2/example/manifests/main")
 	if err != nil {
 		t.Fatalf("HEAD through proxy: %v", err)
 	}
@@ -221,7 +236,7 @@ func TestProxyConnectAuthRangeHeadAndMethod(t *testing.T) {
 	}
 
 	postRequest, err := http.NewRequest(http.MethodPost,
-		"https://quay.io/v2/foo/bar/blobs/uploads/", strings.NewReader("chunk"))
+		"https://post.example.test/v2/foo/bar/blobs/uploads/", strings.NewReader("chunk"))
 	if err != nil {
 		t.Fatalf("new POST request: %v", err)
 	}
@@ -238,7 +253,7 @@ func TestProxyConnectAuthRangeHeadAndMethod(t *testing.T) {
 	noRedirect.CheckRedirect = func(*http.Request, []*http.Request) error {
 		return http.ErrUseLastResponse
 	}
-	redirectResponse, err := noRedirect.Get("https://gcr.io/v2/foo/redirect")
+	redirectResponse, err := noRedirect.Get("https://redirect.example.test/v2/foo/redirect")
 	if err != nil {
 		t.Fatalf("redirect through proxy: %v", err)
 	}
@@ -246,7 +261,7 @@ func TestProxyConnectAuthRangeHeadAndMethod(t *testing.T) {
 	if redirectResponse.StatusCode != http.StatusTemporaryRedirect {
 		t.Fatalf("redirect status = %d, want 307", redirectResponse.StatusCode)
 	}
-	if got := redirectResponse.Header.Get("Location"); got != "https://storage.example/blob" {
+	if got := redirectResponse.Header.Get("Location"); got != "https://storage.example.test/blob" {
 		t.Fatalf("redirect Location = %q", got)
 	}
 
@@ -256,38 +271,38 @@ func TestProxyConnectAuthRangeHeadAndMethod(t *testing.T) {
 	}
 	assertRecord(t, records[0], recordedRequest{
 		Method:        http.MethodGet,
-		Path:          "/docker.io/v2/library/alpine/manifests/latest",
-		RawQuery:      "ns=docker.io&x=1",
+		Path:          "/registry.example.test/v2/library/alpine/manifests/latest",
+		RawQuery:      "ns=registry.example.test&x=1",
 		Host:          upstreamURL.Host,
 		Authorization: "Basic dGVzdDp0ZXN0",
 		Accept:        "application/vnd.oci.image.index.v1+json",
 	})
 	assertRecord(t, records[1], recordedRequest{
 		Method: http.MethodGet,
-		Path:   "/docker.io/v2/library/busybox/manifests/latest",
+		Path:   "/registry.example.test/v2/library/busybox/manifests/latest",
 		Host:   upstreamURL.Host,
 	})
 	assertRecord(t, records[2], recordedRequest{
 		Method:        http.MethodGet,
-		Path:          "/docker.io/v2/library/nginx/blobs/sha256:abc",
+		Path:          "/index.example.test/v2/library/nginx/blobs/sha256:abc",
 		Host:          upstreamURL.Host,
 		Authorization: "Bearer token-value",
 		Range:         "bytes=0-15",
 	})
 	assertRecord(t, records[3], recordedRequest{
 		Method: http.MethodHead,
-		Path:   "/ghcr.io/v2/gorizond/d7y-cattle-operator/manifests/main",
+		Path:   "/head.example.test/v2/example/manifests/main",
 		Host:   upstreamURL.Host,
 	})
 	assertRecord(t, records[4], recordedRequest{
 		Method: http.MethodPost,
-		Path:   "/quay.io/v2/foo/bar/blobs/uploads/",
+		Path:   "/post.example.test/v2/foo/bar/blobs/uploads/",
 		Host:   upstreamURL.Host,
 		Body:   "chunk",
 	})
 	assertRecord(t, records[5], recordedRequest{
 		Method: http.MethodGet,
-		Path:   "/gcr.io/v2/foo/redirect",
+		Path:   "/redirect.example.test/v2/foo/redirect",
 		Host:   upstreamURL.Host,
 	})
 }
@@ -301,7 +316,30 @@ func assertRecord(t *testing.T, got, want recordedRequest) {
 	}
 }
 
-func TestProxyUnknownHostFailsClosed(t *testing.T) {
+func TestProxyForwardsConnectHost(t *testing.T) {
+	recorder := &requestRecorder{}
+	upstream := newUpstream(t, recorder)
+	proxy, pool := newTestProxy(t, upstream.URL)
+	client := proxyClient(t, proxy.URL, pool)
+
+	response, err := client.Get("https://arbitrary.example.test/v2/library/alpine/manifests/latest")
+	if err != nil {
+		t.Fatalf("GET through proxy: %v", err)
+	}
+	response.Body.Close()
+	if response.StatusCode != http.StatusOK {
+		t.Fatalf("GET response = %d", response.StatusCode)
+	}
+	records := recorder.all()
+	if len(records) != 1 {
+		t.Fatalf("upstream saw %d requests, want 1", len(records))
+	}
+	if records[0].Path != "/arbitrary.example.test/v2/library/alpine/manifests/latest" {
+		t.Fatalf("upstream path = %q", records[0].Path)
+	}
+}
+
+func TestProxyInvalidHostFailsClosed(t *testing.T) {
 	recorder := &requestRecorder{}
 	upstream := newUpstream(t, recorder)
 	proxy, _ := newTestProxy(t, upstream.URL)
@@ -311,7 +349,7 @@ func TestProxyUnknownHostFailsClosed(t *testing.T) {
 		t.Fatalf("dial proxy: %v", err)
 	}
 	defer conn.Close()
-	if _, err := fmt.Fprintf(conn, "CONNECT unknown.example:443 HTTP/1.1\r\nHost: unknown.example:443\r\n\r\n"); err != nil {
+	if _, err := fmt.Fprintf(conn, "CONNECT bad_host:443 HTTP/1.1\r\nHost: bad_host:443\r\n\r\n"); err != nil {
 		t.Fatalf("write CONNECT: %v", err)
 	}
 	response, err := http.ReadResponse(bufio.NewReader(conn), &http.Request{Method: http.MethodConnect})
@@ -320,10 +358,10 @@ func TestProxyUnknownHostFailsClosed(t *testing.T) {
 	}
 	response.Body.Close()
 	if response.StatusCode != http.StatusForbidden {
-		t.Fatalf("unknown host status = %d, want 403", response.StatusCode)
+		t.Fatalf("invalid host status = %d, want 403", response.StatusCode)
 	}
 	if len(recorder.all()) != 0 {
-		t.Fatal("unknown host reached upstream")
+		t.Fatal("invalid host reached upstream")
 	}
 }
 
@@ -353,31 +391,19 @@ func TestHealthz(t *testing.T) {
 }
 
 func TestLoadOrCreateCA(t *testing.T) {
-	certPath := filepath.Join(t.TempDir(), "nested", "ca.crt")
-	ca, err := LoadOrCreateCA("", "", certPath)
+	dir := t.TempDir()
+	keyPath := filepath.Join(dir, "ca.key")
+	bundlePath := filepath.Join(dir, "ca-bundle.pem")
+	systemPath := testSystemCA(t)
+
+	ca, err := LoadOrCreateCA(CAOptions{KeyPath: keyPath, BundlePath: bundlePath, SystemCAPath: systemPath})
 	if err != nil {
 		t.Fatalf("LoadOrCreateCA: %v", err)
 	}
 	if len(ca.CertPEM()) == 0 {
 		t.Fatal("CA certificate is empty")
 	}
-	certPEM, err := os.ReadFile(certPath)
-	if err != nil {
-		t.Fatalf("read generated CA: %v", err)
-	}
-	block, _ := pem.Decode(certPEM)
-	if block == nil || block.Type != "CERTIFICATE" {
-		t.Fatalf("generated CA is not a certificate PEM")
-	}
-	cert, err := x509.ParseCertificate(block.Bytes)
-	if err != nil {
-		t.Fatalf("parse generated CA: %v", err)
-	}
-	if !cert.IsCA || cert.KeyUsage&x509.KeyUsageCertSign == 0 {
-		t.Fatal("generated certificate is not a signing CA")
-	}
 
-	keyPath := DefaultCAKeyPath(certPath)
 	keyInfo, err := os.Stat(keyPath)
 	if err != nil {
 		t.Fatalf("stat generated CA key: %v", err)
@@ -385,28 +411,108 @@ func TestLoadOrCreateCA(t *testing.T) {
 	if perm := keyInfo.Mode().Perm(); perm != 0o600 {
 		t.Fatalf("CA key mode = %o, want 600", perm)
 	}
-
-	reloaded, err := LoadOrCreateCA("", "", certPath)
+	bundlePEM, err := os.ReadFile(bundlePath)
 	if err != nil {
-		t.Fatalf("reload generated CA: %v", err)
+		t.Fatalf("read bundle: %v", err)
+	}
+	bundleInfo, err := os.Stat(bundlePath)
+	if err != nil {
+		t.Fatalf("stat bundle: %v", err)
+	}
+	if perm := bundleInfo.Mode().Perm(); perm != 0o644 {
+		t.Fatalf("bundle mode = %o, want 644", perm)
+	}
+	certs := parseTestBundle(t, bundlePEM)
+	if len(certs) != 2 {
+		t.Fatalf("bundle has %d certificates, want local + system", len(certs))
+	}
+	if !bytes.Equal(certs[0].Raw, ca.cert.Raw) {
+		t.Fatal("bundle does not start with the local CA")
+	}
+	systemPEM, err := os.ReadFile(systemPath)
+	if err != nil {
+		t.Fatalf("read system CA: %v", err)
+	}
+	if !bytes.Equal(certs[1].Raw, parseTestBundle(t, systemPEM)[0].Raw) {
+		t.Fatal("bundle does not preserve the system CA")
+	}
+
+	reloaded, err := LoadOrCreateCA(CAOptions{KeyPath: keyPath, BundlePath: bundlePath, SystemCAPath: systemPath})
+	if err != nil {
+		t.Fatalf("reload CA: %v", err)
 	}
 	if !bytes.Equal(ca.CertPEM(), reloaded.CertPEM()) {
 		t.Fatal("CA certificate changed across restarts")
 	}
-	explicit, err := LoadOrCreateCA(certPath, keyPath, "")
+	reloadedBundle, err := os.ReadFile(bundlePath)
 	if err != nil {
-		t.Fatalf("load explicit CA: %v", err)
+		t.Fatalf("read reloaded bundle: %v", err)
 	}
-	if !bytes.Equal(ca.CertPEM(), explicit.CertPEM()) {
-		t.Fatal("explicit CA differs from generated CA")
+	if len(parseTestBundle(t, reloadedBundle)) != 2 {
+		t.Fatal("reloaded bundle was duplicated")
 	}
 
 	if err := os.Remove(keyPath); err != nil {
-		t.Fatalf("remove CA key: %v", err)
+		t.Fatalf("remove key: %v", err)
 	}
-	if _, err := LoadOrCreateCA("", "", certPath); err == nil {
+	if _, err := LoadOrCreateCA(CAOptions{KeyPath: keyPath, BundlePath: bundlePath, SystemCAPath: systemPath}); err == nil {
 		t.Fatal("incomplete CA material was silently regenerated")
 	}
+}
+
+func TestLoadOrCreateCARequiresSystemRoots(t *testing.T) {
+	dir := t.TempDir()
+	keyPath := filepath.Join(dir, "ca.key")
+	bundlePath := filepath.Join(dir, "ca-bundle.pem")
+	if _, err := LoadOrCreateCA(CAOptions{
+		KeyPath: keyPath, BundlePath: bundlePath, SystemCAPath: filepath.Join(dir, "missing.pem"),
+	}); err == nil {
+		t.Fatal("missing system CA bundle did not fail")
+	}
+	if _, err := os.Stat(keyPath); !os.IsNotExist(err) {
+		t.Fatal("failed first start left a partial CA key behind")
+	}
+}
+
+func TestLoadOrCreateCARejectsMismatchedBundle(t *testing.T) {
+	dir := t.TempDir()
+	keyPath := filepath.Join(dir, "ca.key")
+	bundlePath := filepath.Join(dir, "ca-bundle.pem")
+	systemPath := testSystemCA(t)
+	if _, err := LoadOrCreateCA(CAOptions{KeyPath: keyPath, BundlePath: bundlePath, SystemCAPath: systemPath}); err != nil {
+		t.Fatalf("initial CA: %v", err)
+	}
+	systemPEM, err := os.ReadFile(systemPath)
+	if err != nil {
+		t.Fatalf("read system CA: %v", err)
+	}
+	if err := os.WriteFile(bundlePath, systemPEM, 0o644); err != nil {
+		t.Fatalf("overwrite bundle: %v", err)
+	}
+	if _, err := LoadOrCreateCA(CAOptions{KeyPath: keyPath, BundlePath: bundlePath, SystemCAPath: systemPath}); err == nil {
+		t.Fatal("bundle without a certificate for the local key did not fail")
+	}
+}
+
+func parseTestBundle(t *testing.T, raw []byte) []*x509.Certificate {
+	t.Helper()
+	var certs []*x509.Certificate
+	for {
+		block, rest := pem.Decode(raw)
+		if block == nil {
+			break
+		}
+		raw = rest
+		if block.Type != "CERTIFICATE" {
+			continue
+		}
+		cert, err := x509.ParseCertificate(block.Bytes)
+		if err != nil {
+			t.Fatalf("parse bundle certificate: %v", err)
+		}
+		certs = append(certs, cert)
+	}
+	return certs
 }
 
 func containsString(values []string, want string) bool {

@@ -20,7 +20,7 @@ lint:
 	docker run --rm $(IMAGE):test go vet ./...
 
 nydus-resolver:
-	mkdir -p bin && CGO_ENABLED=0 go build -trimpath -o bin/nydus-resolver ./cmd/nydus-resolver
+	mkdir -p bin && CGO_ENABLED=0 GOOS=linux GOARCH=amd64 go build -trimpath -ldflags="-s -w" -o bin/nydus-resolver ./cmd/nydus-resolver
 
 # Every chart checked into charts/ is linted. The external enapter/keydb chart
 # is pinned by the operator; see README.md.
@@ -33,7 +33,6 @@ helm-template:
 	helm template dragonfly-extras charts/dragonfly-extras --set ingress.enabled=true --set vpa.enabled=true --api-versions autoscaling.k8s.io/v1
 	helm template p2p-static charts/p2p-static
 	helm template registry-proxy charts/registry-proxy
-	helm template nydus-resolver charts/nydus-resolver
 
 chart-test:
 	bash scripts/test-extras-ingress.sh

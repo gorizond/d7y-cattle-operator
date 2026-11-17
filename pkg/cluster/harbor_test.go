@@ -180,7 +180,7 @@ func TestReconcileRegistryProxyIngressAndWebhook(t *testing.T) {
 	controller, store, _ := newTestController(t)
 	controller.opts.ProxyHostAliases = []helmop.HostAlias{{
 		IP:        "10.43.0.10",
-		Hostnames: []string{"harbor.koldun.negash.ru"},
+		Hostnames: []string{"harbor.example.test"},
 	}}
 	cluster := testHarborCluster()
 	controller.clusters.(*fakeClusterStore).set(cluster)

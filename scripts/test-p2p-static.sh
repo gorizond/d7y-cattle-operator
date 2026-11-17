@@ -40,6 +40,25 @@ grep -q '"fs_prefetch": {' "$tmp/p2p-static.yaml" || fail "p2p-static script is 
 grep -q '"threads_count": 8' "$tmp/p2p-static.yaml" || fail "p2p-static script is missing nydusd prefetch threads"
 grep -q '"type": "blobcache"' "$tmp/p2p-static.yaml" || fail "p2p-static script is missing nydusd blobcache"
 grep -q 'dfdaemon-bootstrap-switch.timer' "$tmp/p2p-static.yaml" || fail "p2p-static script is missing the host bootstrap switch timer"
+grep -q 'nydus-resolver.service' "$tmp/p2p-static.yaml" || fail "p2p-static script is missing the host resolver unit"
+grep -q 'ExecStart=/usr/local/bin/nydus-resolver --config /etc/nydus-resolver/config.yaml' "$tmp/p2p-static.yaml" || fail "p2p-static script is missing the resolver exec"
+grep -q 'Environment=HTTPS_PROXY=http://127.0.0.1:3999' "$tmp/p2p-static.yaml" || fail "p2p-static script is missing the snapshotter HTTPS_PROXY"
+grep -q 'Environment=SSL_CERT_FILE=/var/lib/nydus-resolver/ca-bundle.pem' "$tmp/p2p-static.yaml" || fail "p2p-static script is missing the snapshotter CA bundle"
+grep -q 'After=network-online.target nydus-resolver.service' "$tmp/p2p-static.yaml" || fail "snapshotter does not order after nydus-resolver"
+grep -q 'Wants=network-online.target nydus-resolver.service' "$tmp/p2p-static.yaml" || fail "snapshotter does not want nydus-resolver"
+grep -q 'RESOLVER_UPSTREAM' "$tmp/p2p-static.yaml" || fail "p2p-static script is missing the resolver upstream payload"
+if grep -q 'registry_map' "$tmp/p2p-static.yaml"; then
+  fail "p2p-static script must not write a registry map"
+fi
+template="$root/charts/p2p-static/files/nydus-resolver-config.yaml.tmpl"
+[ -f "$template" ] || fail "p2p-static resolver config template is missing"
+grep -q 'ca_bundle:' "$template" || fail "resolver config template is missing ca_bundle"
+if grep -q 'registry_map' "$template"; then
+  fail "resolver config template must not contain a registry map"
+fi
+if [ -d "$root/charts/nydus-resolver" ]; then
+  fail "nydus-resolver must be delivered by p2p-static, not a runtime chart"
+fi
 grep -q 'dfdaemon-bootstrap-boot.service' "$tmp/p2p-static.yaml" || fail "p2p-static script is missing the host bootstrap boot unit"
 if grep -q 'kind: DaemonSet' "$tmp/p2p-static.yaml"; then
   fail "p2p-static must not render a DaemonSet"

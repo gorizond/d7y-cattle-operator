@@ -32,8 +32,9 @@ ingress:
 #
 # The /bin and /nydus directories are populated externally (GitOps, an init
 # job, or a pre-populated existingClaim). /nydus/<version>/ is preferred by the
-# host updater; /bin/ is the legacy fallback. The chart never ships binaries
-# and creates no PVC by default.
+# host updater; /bin/ is the legacy fallback. The same store must contain the
+# static amd64 nydus-resolver binary. The chart never ships binaries and
+# creates no PVC by default.
 static:
   existingClaim: ""
   sizeLimit: ""

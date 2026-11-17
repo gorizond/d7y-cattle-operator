@@ -203,7 +203,7 @@ func (s *Server) route(requestPath string, r *http.Request) (string, string, boo
 	trimmed := strings.Trim(requestPath, "/")
 	parts := strings.SplitN(trimmed, "/", 2)
 	if len(parts) == 2 && (parts[1] == "v2" || strings.HasPrefix(parts[1], "v2/")) {
-		return parts[0], rest, true
+		return normalizeRegistryAlias(parts[0]), rest, true
 	}
 	return headerRegistry(r), rest, true
 }
@@ -247,7 +247,21 @@ func normalizeRegistry(raw string) string {
 	if raw == "" {
 		return ""
 	}
-	return path.Base(raw)
+	return normalizeRegistryAlias(path.Base(raw))
+}
+
+// normalizeRegistryAlias canonicalizes registry host aliases before the
+// allowlist and Harbor project mapping. Docker clients use registry-1 and
+// index hostnames for the same docker.io content.
+func normalizeRegistryAlias(registry string) string {
+	registry = strings.ToLower(strings.TrimSpace(registry))
+	registry = strings.Trim(registry, "/")
+	switch registry {
+	case "registry-1.docker.io", "index.docker.io":
+		return "docker.io"
+	default:
+		return registry
+	}
 }
 
 func splitOCIPath(value string) (repo, kind, ref string, ok bool) {

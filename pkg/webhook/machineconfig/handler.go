@@ -68,6 +68,8 @@ type Handler struct {
 	ManagerGRPCDomain string
 	StaticURL         string
 	SmartProxyURL     string
+	ResolverUpstream  string
+	ResolverListen    string
 	SchedulerDomain   string
 	ClusterIDFallback string
 }
@@ -160,6 +162,8 @@ func (h *Handler) Admit(resp *wranglerwebhook.Response, req *wranglerwebhook.Req
 		ManagerGRPC:        fmt.Sprintf("https://%s:%d", h.ManagerGRPCDomain, managerGRPCPort),
 		StaticURL:          h.StaticURL,
 		SmartProxyURL:      h.SmartProxyURL,
+		ResolverUpstream:   h.ResolverUpstream,
+		ResolverListen:     h.ResolverListen,
 		SchedulerHost:      schedulerHostName,
 		SchedulerClusterID: schedulerID,
 		CACert:             secret.Data["ca.crt"],

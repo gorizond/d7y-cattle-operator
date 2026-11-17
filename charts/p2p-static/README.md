@@ -3,8 +3,9 @@
 Nginx static server for the Dragonfly P2P bootstrap flow. It serves
 `/p2p-install.sh` and the static assets under `/bin/` (and optionally
 `/nydus/<version>/`). The chart does not ship binaries and creates no PVC or
-Secret. The bootstrap script installs the host-only nydus snapshotter and its
-updater; there is no in-cluster nydus DaemonSet or HelmOp.
+Secret. The bootstrap script installs the host-only nydus snapshotter, the
+host `nydus-resolver` HTTPS forward proxy, and their updater; there is no
+in-cluster nydus or resolver DaemonSet/HelmOp.
 
 ## Install
 
@@ -12,7 +13,7 @@ updater; there is no in-cluster nydus DaemonSet or HelmOp.
 helm install p2p-static charts/p2p-static \
   --namespace dragonfly-system \
   --set ingress.enabled=true \
-  --set ingress.hosts[0].host=static.example.com \
+  --set ingress.hosts[0].host=static.example.test \
   --set static.existingClaim=static-bin
 ```
 
@@ -28,15 +29,24 @@ The Ingress is optional and does not manage TLS or DNS.
 env-file, not JSON:
 
 ```text
-MANAGER_GRPC=https://manager-grpc.example.com:65003
-STATIC_URL=http://rancher-static.example.com
-SCHEDULER_HOST=d7y-scheduler.c-m-example.example.com
+MANAGER_GRPC=https://manager-grpc.example.test:65003
+STATIC_URL=http://rancher-static.example.test
+SCHEDULER_HOST=d7y-scheduler.c-m-example.example.test
 SCHEDULER_CLUSTER_ID=2
 CA_CRT_B64=<standard base64 of ca.crt>
 CLIENT_CRT_B64=<standard base64 of tls.crt>
 CLIENT_KEY_B64=<standard base64 of tls.key>
-SMART_PROXY_URL=https://proxy.example.com   # optional; fail-open
+SMART_PROXY_URL=https://proxy.example.test   # optional; fail-open
+RESOLVER_UPSTREAM=https://proxy.example.test
+RESOLVER_LISTEN=127.0.0.1:3999
 ```
+
+`RESOLVER_UPSTREAM` and `RESOLVER_LISTEN` are optional as a pair. When both
+are present the script installs and requires the host resolver; when both are
+absent it falls back to the direct registry. There is no registry map: the
+resolver uses the CONNECT host as the first upstream path segment and the
+registry proxy normalizes aliases and owns `/<registry>/...` routing and the
+registry allowlist.
 
 `SMART_PROXY_URL` is optional. When present it is validated as an
 http(s) URL and kept for the in-cluster mirror bootstrap; new VMs never make
@@ -52,6 +62,13 @@ are never logged; `tls.key` is written with mode `0600`.
 For local testing, set `P2P_ROOT=/tmp/root`, `SKIP_DOWNLOAD=1`, and
 `SKIP_PREFLIGHT=1`; the script will write its files below that root and skip
 network/systemd/module actions.
+
+The resolver config template is
+`files/nydus-resolver-config.yaml.tmpl`. The script writes the real
+`/etc/nydus-resolver/config.yaml` (non-secret) from the payload, the fixed CA
+paths, and the detected system CA bundle. The resolver binary creates
+`/var/lib/nydus-resolver/ca.key` (0600) and `ca-bundle.pem` (local CA + system
+roots) on first start.
 
 ## Containerd design
 
@@ -100,6 +117,38 @@ operator copies it per cluster and Fleet delivers it to Harbor as
 `existingSecretAdminPassword`; values must never be placed in chart values or
 Git.
 
+## Host nydus-resolver
+
+`nydus-resolver` is a static amd64 host binary, installed to
+`/usr/local/bin/nydus-resolver` by `p2p-install.sh` from the same versioned
+static store as the nydus assets:
+
+- `${STATIC_URL}/nydus/${NYDUS_VERSION}/nydus-resolver`, or
+- `${STATIC_URL}/bin/nydus-resolver` for the legacy layout.
+
+It is not built into the container image and is not a DaemonSet. The
+`nydus-updater` refreshes it with the other host binaries and restarts
+`nydus-resolver.service` when it changes. Multi-arch assets are future work;
+non-amd64 nodes currently fall back to the direct registry.
+
+`nydus-resolver.service` runs before `nydus-snapshotter-bootstrap.service`
+(`Before=`), and the snapshotter unit depends on it with
+`After=nydus-resolver.service` and `Wants=nydus-resolver.service`. The
+snapshotter receives:
+
+```ini
+Environment=HTTPS_PROXY=http://127.0.0.1:3999
+Environment=NO_PROXY=127.0.0.1,localhost,::1,10.0.0.0/8,172.16.0.0/12,192.168.0.0/16,.svc,.cluster.local
+Environment=SSL_CERT_FILE=/var/lib/nydus-resolver/ca-bundle.pem
+```
+
+The resolver binds `127.0.0.1:3999`, terminates CONNECT TLS with a local leaf
+certificate, and forwards `<upstream>/<connect-host>/<original-path>`. The
+upstream registry proxy normalizes Docker aliases and enforces its registry
+allowlist; the resolver has no registry names or map. `ca-bundle.pem` contains
+the local CA first and the system roots after it, so using it as
+`SSL_CERT_FILE` does not break other TLS in the snapshotter.
+
 ## Host dfdaemon bootstrap switch
 
 `dfdaemon-bootstrap.service` is the cold-start P2P client that runs before
@@ -134,9 +183,10 @@ updater prefers `${STATIC_URL}/nydus/${NYDUS_VERSION}/<binary>` and falls back
 to `${STATIC_URL}/bin/<binary>` for the legacy unversioned layout.
 
 `nydus-updater.service` runs `nydus-updater` from the daily
-`nydus-updater.timer`. The updater re-fetches the pinned assets, compares
-them with the installed binaries, installs changed files atomically, and
-restarts `nydus-snapshotter-bootstrap.service` only when something changed.
+`nydus-updater.timer`. The updater re-fetches the pinned assets (including
+`nydus-resolver`), compares them with the installed binaries, installs changed
+files atomically, restarts `nydus-resolver.service` when that binary changed,
+and then restarts `nydus-snapshotter-bootstrap.service` when anything changed.
 It never talks to Kubernetes.
 
 ## Containerd version detection
@@ -156,9 +206,9 @@ The test uses temporary roots and `SKIP_DOWNLOAD=1`; it asserts the env payload
 decode, certificate files/modes, `dfget.yaml`, `dynconfig.yaml`, scheduler ID,
 `/etc/nydus/config.toml` (multiple/fusedev, no tarfs), the registry-backend
 `nydusd-config.json`, the global nydus drop-in (containerd 2.x) and global
-template (containerd 1.x), host unit ordering/exec flags, the updater
-script/units, the fail-open direct-registry path, and absence of certificate
-values in logs. `scripts/test-p2p-static.sh` runs `bash -n`, `shellcheck` when
+template (containerd 1.x), resolver config/unit ordering/snapshotter proxy
+environment, the updater script/units, the fail-open direct-registry path,
+and absence of certificate values in logs. `scripts/test-p2p-static.sh` runs `bash -n`, `shellcheck` when
 available, the self-test, and a `helm template` render check.
 
 ## Pilot gaps
@@ -166,8 +216,11 @@ available, the self-test, and a `helm template` render check.
 - Base-template merge and drop-in import behaviour need a live pilot, including
   `containerd config dump` after a manual `rke2-agent`/`rke2-server` restart.
 - The static `/bin` (or `/nydus/<version>`) volume must be populated externally
-  with trusted `v0.16.0` assets; the script checks executability but not
-  checksums/signatures.
+  with trusted `v0.16.0` assets plus the static amd64 `nydus-resolver`; the
+  script checks executability but not checksums/signatures.
+- Resolver systemd ordering, CA bundle regeneration on restart, and
+  `SSL_CERT_FILE` behaviour must be verified on a live node. `nydusd`'s own
+  registry client may not honor the snapshotter's proxy environment.
 - The exact `containerd-nydus-grpc` v0.16.0 flags and the host-unit start order
   need pilot verification.
 - nydus tarfs is intentionally disabled; enabling it later requires a kernel

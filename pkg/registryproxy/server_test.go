@@ -129,6 +129,47 @@ func TestServerQueryNSRegistry(t *testing.T) {
 	}
 }
 
+func TestNormalizeRegistryDockerAliases(t *testing.T) {
+	for input, want := range map[string]string{
+		"registry-1.docker.io":         "docker.io",
+		"index.docker.io":              "docker.io",
+		"https://registry-1.docker.io": "docker.io",
+		"https://index.docker.io/":     "docker.io",
+		"ghcr.io":                      "ghcr.io",
+		"  Registry-1.Docker.IO  ":     "docker.io",
+		"":                             "",
+	} {
+		if got := normalizeRegistry(input); got != want {
+			t.Errorf("normalizeRegistry(%q) = %q, want %q", input, got, want)
+		}
+	}
+}
+
+func TestServerDockerAliasRoute(t *testing.T) {
+	backend := &fakeBackend{
+		manifest: Manifest{Digest: "sha256:manifest", MediaType: "application/vnd.oci.image.manifest.v1+json", Body: []byte("manifest")},
+	}
+	server := testServer(backend)
+
+	for _, target := range []string{
+		"/registry-1.docker.io/v2/library/nginx/manifests/1.27",
+		"/index.docker.io/v2/library/nginx/manifests/1.27",
+		"/registry-1.docker.io/v2/library/nginx/manifests/1.27?ns=https://index.docker.io",
+	} {
+		req := httptest.NewRequest(http.MethodGet, target, nil)
+		rec := httptest.NewRecorder()
+		server.Handler().ServeHTTP(rec, req)
+		if rec.Code != http.StatusOK || rec.Body.String() != "manifest" {
+			t.Errorf("%s response = %d %q", target, rec.Code, rec.Body.String())
+		}
+	}
+
+	registry, rest, ok := server.route("/registry-1.docker.io/v2/library/nginx/manifests/1.27", httptest.NewRequest(http.MethodGet, "/", nil))
+	if !ok || registry != "docker.io" || rest != "/v2/library/nginx/manifests/1.27" {
+		t.Errorf("route() = %q, %q, %t", registry, rest, ok)
+	}
+}
+
 func TestServerRegistryAllowlistAndPushRejected(t *testing.T) {
 	server := testServer(&fakeBackend{})
 	req := httptest.NewRequest(http.MethodGet, "/ghcr.io/v2/library/nginx/manifests/1.27", nil)
