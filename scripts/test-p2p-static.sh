@@ -30,7 +30,7 @@ if grep -q 'enable_oci_tar' "$tmp/p2p-static.yaml"; then
   fail "p2p-static must not assume enable_oci_tar"
 fi
 grep -q 'Direct-registry fallback' "$tmp/p2p-static.yaml" || fail "p2p-static script is missing the direct-registry template"
-grep -q 'v0.16.0' "$tmp/p2p-static.yaml" || fail "p2p-static script is missing the pinned nydus version"
+grep -q 'v0.16.0-p2p.1' "$tmp/p2p-static.yaml" || fail "p2p-static script is missing the pinned nydus version"
 grep -q 'nydus-overlayfs' "$tmp/p2p-static.yaml" || fail "p2p-static script is missing nydus-overlayfs"
 grep -q 'nydus-updater' "$tmp/p2p-static.yaml" || fail "p2p-static script is missing the host nydus updater"
 grep -q 'use_local_image_pull' "$tmp/p2p-static.yaml" || fail "p2p-static script is missing the global nydus drop-in"

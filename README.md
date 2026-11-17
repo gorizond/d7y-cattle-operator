@@ -278,7 +278,7 @@ yet:
 - Existing certificate/config files are preserved, but no P2P services are
   enabled. A later successful run (or an existing seed cluster) installs the
   full public-P2P configuration.
-- Nydus is installed on the host from pinned `v0.16.0` assets
+- Nydus is installed on the host from pinned `v0.16.0-p2p.1` assets
   (`containerd-nydus-grpc`, `nydusd`, `nydus-image`, `nydus-overlayfs`) and is
   the global CRI snapshotter. `enable_oci_tar` is not set (it is not a nydus
   field). A daily host timer runs `nydus-updater` to refresh the assets and
@@ -545,7 +545,7 @@ control/data without blocking manager/KeyDB.
 `charts/p2p-static` serves `/p2p-install.sh` and the static asset volume through
 Nginx. The bootstrap payload is a base64url **env-file** (no JSON, no `jq`, no
 python on the node). The script installs the host-only nydus snapshotter
-(`v0.16.0`, including `nydus-overlayfs`), writes the global nydus containerd
+(`v0.16.0-p2p.1`, including `nydus-overlayfs`), writes the global nydus containerd
 drop-in `config-v3.toml.d/90-nydus.toml`, starts it before RKE2, and installs a
 daily host updater. There is no in-cluster nydus DaemonSet or HelmOp. See
 `charts/p2p-static/README.md` for values, payload keys, drop-ins, and pilot
@@ -656,13 +656,13 @@ that predates those fields would affect REST only.
 
 Nydus runs only on the host, installed by `p2p-install.sh`; the operator no
 longer creates a nydus chart, DaemonSet, HelmOp, RuntimeClass, or VPA. The
-script installs pinned `v0.16.0` binaries (including `nydus-overlayfs`), writes
+script installs pinned `v0.16.0-p2p.1` binaries (including `nydus-overlayfs`), writes
 `/etc/nydus/config.toml` (multiple/fusedev, `[experimental]`
 `enable_referrer_detect`/`enable_index_detect`, no tarfs), the registry-backend
 `nydusd-config.json`, and the global containerd drop-in. It starts the host unit
 before RKE2 and runs a daily updater for the binaries. Do not add
 `enable_oci_tar` (it is not a nydus field). Pilot must verify the drop-in merge
-with `containerd config dump`, the v0.16.0 unit flags, and the host restart
+with `containerd config dump`, the v0.16.0-p2p.1 unit flags, and the host restart
 procedure. Tarfs is intentionally disabled; enabling it requires kernel >= 6.4
 and a matching nydusd. Ordinary-OCI Zran is not claimed.
 

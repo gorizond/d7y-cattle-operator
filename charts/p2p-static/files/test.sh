@@ -106,7 +106,7 @@ assert_contains "${ROOT_ONE}/etc/nydus/nydusd-config.json" '"fs_prefetch": {'
 assert_contains "${ROOT_ONE}/etc/nydus/nydusd-config.json" '"threads_count": 8'
 assert_contains "${ROOT_ONE}/etc/nydus/nydusd-config.json" '"prefetch_all": true'
 assert_not_contains "${ROOT_ONE}/etc/nydus/nydusd-config.json" 'enable_oci_tar'
-assert_contains "${ROOT_ONE}/etc/nydus/updater.env" 'NYDUS_VERSION=v0.16.0'
+assert_contains "${ROOT_ONE}/etc/nydus/updater.env" 'NYDUS_VERSION=v0.16.0-p2p.1'
 assert_file "${ROOT_ONE}/usr/local/bin/dfdaemon-bootstrap-switch"
 assert_file "${ROOT_ONE}/etc/systemd/system/dfdaemon-bootstrap-boot.service"
 assert_file "${ROOT_ONE}/etc/systemd/system/dfdaemon-bootstrap-switch.service"
@@ -208,7 +208,7 @@ assert_not_contains "$INSTALL" 'machineGlobalConfig'
 assert_not_contains "$INSTALL" 'enable_oci_tar'
 assert_contains "$INSTALL" 'fallback_direct'
 assert_contains "$INSTALL" 'SCHEDULER_PORT=443'
-assert_contains "$INSTALL" 'NYDUS_VERSION="${NYDUS_VERSION:-v0.16.0}"'
+assert_contains "$INSTALL" 'NYDUS_VERSION="${NYDUS_VERSION:-v0.16.0-p2p.1}"'
 assert_contains "$INSTALL" 'nydus-overlayfs'
 assert_contains "$INSTALL" '90-nydus.toml'
 assert_contains "$INSTALL" 'SMART_PROXY_URL'

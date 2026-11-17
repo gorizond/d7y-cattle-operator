@@ -15,7 +15,7 @@ CERT_DIR="/etc/dragonfly/certs"
 DFGET_CONFIG="/etc/dragonfly/dfget.yaml"
 DYNCONFIG="/etc/dragonfly/dynconfig.yaml"
 NYDUS_DIR="/etc/nydus"
-NYDUS_VERSION="${NYDUS_VERSION:-v0.16.0}"
+NYDUS_VERSION="${NYDUS_VERSION:-v0.16.0-p2p.1}"
 NYDUS_BINARIES="containerd-nydus-grpc
 nydusd
 nydus-image
@@ -123,7 +123,7 @@ while IFS= read -r line || [ -n "$line" ]; do
   value="${line#*=}"
   value="${value%$'\r'}"
   case "$key" in
-    MANAGER_GRPC|STATIC_URL|SMART_PROXY_URL|SCHEDULER_HOST|SCHEDULER_CLUSTER_ID|CA_CRT_B64|CLIENT_CRT_B64|CLIENT_KEY_B64)
+    MANAGER_GRPC|STATIC_URL|SMART_PROXY_URL|SCHEDULER_HOST|SCHEDULER_CLUSTER_ID|NYDUS_VERSION|CA_CRT_B64|CLIENT_CRT_B64|CLIENT_KEY_B64)
       printf -v "$key" '%s' "$value"
       ;;
   esac

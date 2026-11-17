@@ -128,10 +128,43 @@ RKE2. The in-cluster `client` DaemonSet is the steady state on each node.
 
 ## Host nydus assets and updater
 
-`p2p-install.sh` installs the pinned `v0.16.0` binaries to `/usr/local/bin`:
+`p2p-install.sh` installs the pinned `v0.16.0-p2p.1` binaries to `/usr/local/bin`:
 `containerd-nydus-grpc`, `nydusd`, `nydus-image`, and `nydus-overlayfs`. The
 updater prefers `${STATIC_URL}/nydus/${NYDUS_VERSION}/<binary>` and falls back
 to `${STATIC_URL}/bin/<binary>` for the legacy unversioned layout.
+
+`v0.16.0-p2p.1` is a patched nydus-snapshotter build. It makes the index and
+referrer detector read containerd's `certs.d/<host>/hosts.toml` (RKE2 path
+`/var/lib/rancher/rke2/agent/etc/containerd/certs.d`, standalone path
+`/etc/containerd/certs.d`), so a `docker.io` CRI ref resolves through the same
+Dragonfly/Harbor mirror and `X-Dragonfly-Registry` header that containerd used
+for the pull. Without a certs.d override it keeps the old
+`docker.io` -> `registry-1.docker.io` behavior.
+
+The release image is:
+
+```text
+ghcr.io/gorizond/nydus-snapshotter:v0.16.0-p2p.1
+```
+
+It is built from `misc/snapshotter/Dockerfile` after building
+`containerd-nydus-grpc` and `nydus-overlayfs` from the patched source. The image
+is not the node runtime (the snapshotter is a host binary); use it as the
+binary source and populate the static store:
+
+```bash
+docker create --name nydus-artifacts ghcr.io/gorizond/nydus-snapshotter:v0.16.0-p2p.1
+docker cp nydus-artifacts:/opt/nydus-artifacts/usr/local/bin/containerd-nydus-grpc .
+docker cp nydus-artifacts:/opt/nydus-artifacts/usr/local/bin/nydusd .
+docker cp nydus-artifacts:/opt/nydus-artifacts/usr/local/bin/nydus-image .
+docker cp nydus-artifacts:/opt/nydus-artifacts/usr/local/bin/nydus-overlayfs .
+docker rm nydus-artifacts
+```
+
+Put the four files in the static volume under
+`/nydus/v0.16.0-p2p.1/` (or rebuild and publish the same tag). `NYDUS_VERSION`
+can also be supplied as an optional bootstrap payload key when a different
+static-store version is used.
 
 `nydus-updater.service` runs `nydus-updater` from the daily
 `nydus-updater.timer`. The updater re-fetches the pinned assets, compares
@@ -166,9 +199,9 @@ available, the self-test, and a `helm template` render check.
 - Base-template merge and drop-in import behaviour need a live pilot, including
   `containerd config dump` after a manual `rke2-agent`/`rke2-server` restart.
 - The static `/bin` (or `/nydus/<version>`) volume must be populated externally
-  with trusted `v0.16.0` assets; the script checks executability but not
+  with trusted `v0.16.0-p2p.1` assets; the script checks executability but not
   checksums/signatures.
-- The exact `containerd-nydus-grpc` v0.16.0 flags and the host-unit start order
+- The exact `containerd-nydus-grpc` v0.16.0-p2p.1 flags and the host-unit start order
   need pilot verification.
 - nydus tarfs is intentionally disabled; enabling it later requires a kernel
   with tarfs support (>= 6.4) and a matching nydusd.
