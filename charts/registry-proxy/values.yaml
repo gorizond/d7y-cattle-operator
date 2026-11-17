@@ -84,10 +84,3 @@ networkPolicy:
   enabled: true
   # Node/hostNetwork clients (dfdaemon) originate from the node network.
   nodeCIDR: 10.0.0.0/8
-
-# Cilium entity-based egress for the kube-apiserver. Plain NetworkPolicy
-# ipBlock cannot match the reserved:remote-node / kube-apiserver identity that
-# Cilium uses after DNAT, so the API port is allowed by entity instead.
-# Disable this on non-Cilium CNIs (the rendered CRD would be ignored or fail).
-ciliumNetworkPolicy:
-  enabled: true

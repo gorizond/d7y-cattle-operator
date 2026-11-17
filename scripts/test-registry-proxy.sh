@@ -23,18 +23,9 @@ helm template registry-proxy "$chart" --namespace dragonfly-system \
 helm template registry-proxy "$chart" --namespace dragonfly-system \
   --show-only templates/networkpolicy.yaml >"$tmp/netpol.yaml"
 
-helm template registry-proxy "$chart" --namespace dragonfly-system \
-  --show-only templates/ciliumnetworkpolicy.yaml >"$tmp/cnp.yaml"
-
 grep -q 'kind: Deployment' "$tmp/proxy.yaml" || fail "proxy Deployment is missing"
 grep -q 'kind: Service' "$tmp/proxy.yaml" || fail "proxy Service is missing"
 grep -q 'kind: NetworkPolicy' "$tmp/proxy.yaml" || fail "proxy NetworkPolicy is missing"
-grep -q 'kind: CiliumNetworkPolicy' "$tmp/cnp.yaml" || fail "proxy CiliumNetworkPolicy is missing"
-grep -q 'name: registry-proxy-apiserver' "$tmp/cnp.yaml" || fail "CiliumNetworkPolicy name is missing"
-grep -q 'toEntities:' "$tmp/cnp.yaml" || fail "CiliumNetworkPolicy toEntities is missing"
-grep -q -- '- kube-apiserver' "$tmp/cnp.yaml" || fail "CiliumNetworkPolicy kube-apiserver entity is missing"
-grep -q 'port: "6443"' "$tmp/cnp.yaml" || fail "CiliumNetworkPolicy kube-apiserver port 6443 is missing"
-grep -q 'app.kubernetes.io/name: registry-proxy' "$tmp/cnp.yaml" || fail "CiliumNetworkPolicy endpoint selector is missing"
 grep -q 'kubernetes.io/metadata.name: kube-system' "$tmp/netpol.yaml" || fail "NetworkPolicy DNS/Traefik peer is missing"
 grep -A3 'kubernetes.io/metadata.name: kube-system' "$tmp/netpol.yaml" | grep -q 'port: 443' || \
   fail "NetworkPolicy kube-system egress does not allow TCP 443"
