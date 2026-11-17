@@ -54,11 +54,14 @@ func TestLoadConfig(t *testing.T) {
 	if cfg.RegistryURL() != "https://harbor.example.com" || cfg.Mirror.Project != "mirror" {
 		t.Errorf("config = %+v", cfg)
 	}
-	if !cfg.Allowlisted("docker.io") || cfg.Allowlisted("ghcr.io") {
+	if !cfg.Allowlisted("docker.io") || !cfg.Allowlisted("registry-1.docker.io") || cfg.Allowlisted("ghcr.io") {
 		t.Error("allowlist check failed")
 	}
 	if cfg.ProjectName("docker.io") != "dockerio" {
 		t.Errorf("project mapping = %q", cfg.ProjectName("docker.io"))
+	}
+	if cfg.ProjectName("registry-1.docker.io") != "dockerio" {
+		t.Errorf("alias project mapping = %q", cfg.ProjectName("registry-1.docker.io"))
 	}
 	if cfg.Webhook.Address != "https://proxy.example.com/api/convert" {
 		t.Errorf("webhook.address = %q, want the public URL default", cfg.Webhook.Address)
@@ -66,12 +69,15 @@ func TestLoadConfig(t *testing.T) {
 }
 
 func TestLoadConfigEnvOverride(t *testing.T) {
-	t.Setenv("REGISTRY_ALLOWLIST", "docker.io,ghcr.io")
+	t.Setenv("REGISTRY_ALLOWLIST", "registry-1.docker.io,ghcr.io")
 	t.Setenv("PROXY_PUBLIC_URL", "https://proxy.env.example.com")
 	t.Setenv("WEBHOOK_ADDRESS", "http://c1-registry-proxy.dragonfly-system.svc:8080/api/convert")
 	cfg := testConfig(t)
 	if len(cfg.Registry.Allowlist) != 2 || cfg.Proxy.PublicURL != "https://proxy.env.example.com" {
 		t.Errorf("env override = %+v", cfg)
+	}
+	if cfg.Registry.Allowlist[0] != "docker.io" || !cfg.Allowlisted("index.docker.io") {
+		t.Errorf("allowlist was not canonicalized: %+v", cfg.Registry.Allowlist)
 	}
 	if cfg.Webhook.Address != "http://c1-registry-proxy.dragonfly-system.svc:8080/api/convert" {
 		t.Errorf("webhook.address = %q", cfg.Webhook.Address)

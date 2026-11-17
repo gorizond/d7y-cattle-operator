@@ -117,6 +117,8 @@ not used until the p2p-static and registration MRs.
 | `extras.ingress.restEnabled` | `EXTRAS_INGRESS_REST_ENABLED` | Render the REST Ingress when the manager role is active; default `true` |
 | `extras.ingress.tlsSecret` | `EXTRAS_INGRESS_TLS_SECRET` | Ingress TLS Secret; empty disables the TLS block |
 | `extras.ingress.traefikServersTransportEnabled` | `EXTRAS_TRAEFIK_SERVERS_TRANSPORT_ENABLED` | Render the REST Traefik `ServersTransport`; default `true` |
+| `resolver.upstream` | `RESOLVER_UPSTREAM` | Upstream registry proxy URL for the host resolver; empty disables resolver install |
+| `resolver.listen` | `RESOLVER_LISTEN` | Resolver loopback listen address; default `127.0.0.1:3999` |
 
 Defaults: `mtlsSecretName=dragonfly-p2p-mtls`, `dragonfly.chart.name=dragonfly`,
 `dragonfly.chart.repo=https://gorizond.github.io/dragonflyoss-helm-charts`,
@@ -124,7 +126,7 @@ Defaults: `mtlsSecretName=dragonfly-p2p-mtls`, `dragonfly.chart.name=dragonfly`,
 `extras.chart.version=0.1.8`, `extras.ingress.controller=nginx`,
 `extras.ingress.grpcEnabled=true`, `extras.ingress.restEnabled=true`,
 `manager.grpcPort=443`, `webhook.port=9443`,
-`leaderElect=false`. The public scheduler IP(s) are resolved from DNS at
+`resolver.listen=127.0.0.1:3999`, `leaderElect=false`. The public scheduler IP(s) are resolved from DNS at
 reconcile time; there is no scheduler IP value. `scheduler.domain` has no
 default and is required. `scheduler.clusterID` is only a fallback for an
 unpopulated `status.clusterName`.
@@ -459,6 +461,8 @@ has no PVC/HA, so state durability is a separate decision; v1 stays in-memory.
 
 The proxy resolves the upstream registry from `?ns=<registry>` first, then
 from the path prefix `/<registry>/v2/...`, then from `X-Dragonfly-Registry`.
+Docker aliases (`registry-1.docker.io`, `index.docker.io`) are canonicalized
+to `docker.io` before the allowlist and Harbor project mapping.
 The `containerd-mirror` chart sends allowlisted registries to the external
 `<proxy>/<registry>` through `X-Dragonfly-Registry`; `SMART_PROXY_URL` in the
 bootstrap payload is optional and fail-open. Target clusters do not need an
@@ -471,6 +475,63 @@ registry and the proxy does not enable plain-HTTP conversion.
 Conditions: `d7y.io/HarborReady`, `d7y.io/RegistryProxyReady`, and
 `d7y.io/HarborDomainMissing`. Missing/invalid domain keeps Harbor/proxy
 HelmOps absent and records the event/condition.
+
+## nydus-resolver (host HTTPS MITM proxy)
+
+`cmd/nydus-resolver` is a static amd64 host binary, not a container or
+DaemonSet. The release workflow attaches `nydus-resolver-linux-amd64` and its
+`.sha256` to the `v*` GitHub Release. `p2p-install.sh` downloads that asset,
+writes `/etc/nydus-resolver/config.yaml`, installs `nydus-resolver.service`,
+and makes `nydus-snapshotter-bootstrap.service` depend on it
+(`After=nydus-resolver.service`, `Wants=nydus-resolver.service`).
+When the resolver payload is absent, the bootstrap falls back to the direct
+registry so RKE2 can still start.
+
+The resolver config is entirely external and non-secret:
+
+```yaml
+listen: 127.0.0.1:3999
+upstream: https://proxy.example.test
+ca_key: /var/lib/nydus-resolver/ca.key
+ca_bundle: /var/lib/nydus-resolver/ca-bundle.pem
+system_ca_file: /etc/ssl/certs/ca-certificates.crt
+```
+
+`upstream` is required when the resolver is enabled and has no built-in
+default; an empty `resolver.upstream` value disables the host resolver and the
+bootstrap falls back to the direct registry. There is no registry map:
+the resolver forwards `CONNECT host:443` plus `/v2/...` as
+`<upstream>/<connect-host>/<original-path>`. The registry proxy normalizes
+Docker aliases (`registry-1.docker.io`, `index.docker.io` -> `docker.io`) and
+owns the registry allowlist and `/<registry>/...` routing. The resolver rejects
+malformed hosts/SNI mismatches; the registry proxy returns 403 for registries
+not in its allowlist.
+
+The resolver generates `/var/lib/nydus-resolver/ca.key` (0600) and
+`ca-bundle.pem` (local CA followed by the system roots). The config template
+is `charts/p2p-static/files/nydus-resolver-config.yaml.tmpl`. The snapshotter
+unit uses `HTTPS_PROXY=http://127.0.0.1:3999`,
+`NO_PROXY=127.0.0.1,localhost,::1,...`, and
+`SSL_CERT_FILE=/var/lib/nydus-resolver/ca-bundle.pem`, so other TLS in the
+snapshotter keeps working.
+
+The installer defaults to `RESOLVER_VERSION=v0.1.33`,
+`RESOLVER_ASSET=nydus-resolver-linux-amd64`, and
+`GH_REPO=gorizond/d7y-cattle-operator`; override them for another release.
+The pinned URL is
+`https://github.com/<GH_REPO>/releases/download/<RESOLVER_VERSION>/nydus-resolver-linux-amd64`;
+`latest` uses `/releases/latest/download/`. A missing release asset logs a
+clear fallback to the direct registry instead of installing nothing.
+
+Build the same asset locally with:
+
+```bash
+make nydus-resolver   # dist/nydus-resolver-linux-amd64; CGO off, trimpath, stripped
+```
+
+Multi-arch assets are future work in `p2p-install.sh`; this change is
+amd64-only. See `charts/p2p-static/README.md` for payload fields, unit
+ordering, and known limits.
 
 ## Cluster annotations
 
@@ -696,7 +757,8 @@ make docker-build   # container image
 make docker-test    # go test ./... inside Docker
 make lint           # go vet ./... inside Docker
 make helm-lint      # helm lint every chart under charts/
-make helm-template  # render the operator, extras, and p2p-static charts
+make nydus-resolver # build the HTTPS MITM resolver binary
+make helm-template  # render the operator, extras, p2p-static, and proxy charts
 ```
 
 ## Security notes
@@ -710,16 +772,19 @@ make helm-template  # render the operator, extras, and p2p-static charts
 
 Pushing a `v*` tag runs `.github/workflows/release.yml`:
 
-- builds and pushes the multi-arch operator image tagged with the Git tag
+- builds and pushes the operator image tagged with the Git tag
   (`v<chart version>`);
+- builds the static `nydus-resolver-linux-amd64`, verifies `--help`/missing
+  config behavior, and attaches it plus `.sha256` to the `v*` GitHub Release;
 - lints every chart under `charts/` and publishes it with `chart-releaser` to
   the `gh-pages` branch.
 
-The repository charts are `d7y-cattle-operator`, `dragonfly-extras`, and
-`p2p-static`. The KeyDB chart is external (`enapter/keydb` `0.48.0` from
-`https://enapter.github.io/charts/`) and is not vendored or published here. The
-operator pins that external chart and submits the three-master, no-PVC values
-described above.
+The repository charts are `d7y-cattle-operator`, `dragonfly-extras`,
+`p2p-static`, and `registry-proxy`. The KeyDB chart is
+external (`enapter/keydb` `0.48.0` from
+`https://enapter.github.io/charts/`) and is not vendored or published here.
+The operator pins that external chart and submits the three-master, no-PVC
+values described above.
 
 ## License
 

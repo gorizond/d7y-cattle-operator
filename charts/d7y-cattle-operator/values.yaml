@@ -109,7 +109,15 @@ proxy:
   hostAliases: []
   # - ip: 10.43.0.10
   #   hostnames:
-  #     - harbor.koldun.negash.ru
+  #     - harbor.example.test
+
+# Host nydus-resolver installed by p2p-install.sh. Upstream is the registry
+# proxy URL; empty disables resolver install and makes the bootstrap fall back
+# to the direct registry. The resolver derives the registry path from the
+# CONNECT host, so no registry map is needed here.
+resolver:
+  upstream: ""
+  listen: 127.0.0.1:3999
 
 # Strict node-local containerd registry mirror for seed/data clusters.
 containerdMirror:

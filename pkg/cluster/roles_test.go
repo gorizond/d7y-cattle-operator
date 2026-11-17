@@ -83,7 +83,7 @@ func TestResolveRoles(t *testing.T) {
 }
 
 func TestHarborValidation(t *testing.T) {
-	for _, value := range []string{"harbor.example.com", "harbor.koldun.negash.ru"} {
+	for _, value := range []string{"harbor.example.com", "harbor.example.test"} {
 		if err := validateHarborDomain(value); err != nil {
 			t.Errorf("validateHarborDomain(%q) error = %v", value, err)
 		}

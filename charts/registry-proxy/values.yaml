@@ -38,7 +38,7 @@ proxy:
   hostAliases: []
   # - ip: 10.43.0.10
   #   hostnames:
-  #     - harbor.koldun.negash.ru
+  #     - harbor.example.test
 
 webhook:
   secretName: registry-proxy-webhook

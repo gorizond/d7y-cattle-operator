@@ -1,0 +1,9 @@
+# Template for /etc/nydus-resolver/config.yaml. p2p-install.sh writes the real
+# file from the bootstrap payload and the detected system CA path. There is no
+# registry map: the resolver uses the CONNECT host as the first path segment,
+# and the upstream registry proxy normalizes aliases and owns /<registry>/...
+listen: "__RESOLVER_LISTEN__"
+upstream: "__RESOLVER_UPSTREAM__"
+ca_key: "/var/lib/nydus-resolver/ca.key"
+ca_bundle: "/var/lib/nydus-resolver/ca-bundle.pem"
+system_ca_file: "__SYSTEM_CA_FILE__"

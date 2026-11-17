@@ -1,7 +1,7 @@
 IMAGE ?= ghcr.io/gorizond/d7y-cattle-operator
 TAG ?= dev
 
-.PHONY: build docker-build test docker-test lint helm-lint helm-template chart-test
+.PHONY: build docker-build test docker-test lint helm-lint helm-template chart-test nydus-resolver
 
 # Docker is the source of truth for builds and tests.
 build: docker-build
@@ -18,6 +18,9 @@ docker-test:
 lint:
 	docker build --target test -t $(IMAGE):test .
 	docker run --rm $(IMAGE):test go vet ./...
+
+nydus-resolver:
+	mkdir -p dist && CGO_ENABLED=0 GOOS=linux GOARCH=amd64 go build -trimpath -ldflags="-s -w" -o dist/nydus-resolver-linux-amd64 ./cmd/nydus-resolver
 
 # Every chart checked into charts/ is linted. The external enapter/keydb chart
 # is pinned by the operator; see README.md.

@@ -133,8 +133,10 @@ func (c *Config) Validate() error {
 	if len(c.Registry.Allowlist) == 0 {
 		return fmt.Errorf("registry.allowlist must not be empty")
 	}
-	for _, registry := range c.Registry.Allowlist {
-		if strings.TrimSpace(registry) == "" || strings.ContainsAny(registry, "/:") {
+	for i, registry := range c.Registry.Allowlist {
+		registry = normalizeRegistryAlias(strings.TrimSpace(registry))
+		c.Registry.Allowlist[i] = registry
+		if registry == "" || strings.ContainsAny(registry, "/:") {
 			return fmt.Errorf("registry.allowlist contains invalid registry %q", registry)
 		}
 	}
@@ -178,9 +180,9 @@ func (c *Config) Validate() error {
 
 // Allowlisted reports whether the registry may create Harbor projects.
 func (c *Config) Allowlisted(registry string) bool {
-	registry = strings.ToLower(strings.TrimSpace(registry))
+	registry = normalizeRegistryAlias(registry)
 	for _, allowed := range c.Registry.Allowlist {
-		if strings.ToLower(strings.TrimSpace(allowed)) == registry {
+		if normalizeRegistryAlias(allowed) == registry {
 			return true
 		}
 	}
@@ -195,7 +197,7 @@ func (c *Config) ProjectName(registry string) string {
 // ProjectName maps registry host names to Harbor project names (docker.io ->
 // dockerio). Dots are rejected by Harbor project naming in the pilot.
 func ProjectName(registry string) string {
-	return strings.NewReplacer(".", "", ":", "", "/", "").Replace(strings.ToLower(strings.TrimSpace(registry)))
+	return strings.NewReplacer(".", "", ":", "", "/", "").Replace(normalizeRegistryAlias(registry))
 }
 
 // BasePath returns the normalized public path prefix.

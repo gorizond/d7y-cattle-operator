@@ -14,11 +14,30 @@ trap 'rm -rf "$WORK"' EXIT
 
 payload() {
   local ca cert key env host
-  host="${1:-scheduler.example.com}"
+  host="${1:-scheduler.example.test}"
   ca="$(printf 'dummy-ca\n' | base64 | tr -d '\n')"
   cert="$(printf 'dummy-cert\n' | base64 | tr -d '\n')"
   key="$(printf 'dummy-key\n' | base64 | tr -d '\n')"
-  env="$(printf 'MANAGER_GRPC=https://manager-grpc.example.com:65003\nSTATIC_URL=http://static.example.com\nSCHEDULER_HOST=%s\nSCHEDULER_CLUSTER_ID=2\nCA_CRT_B64=%s\nCLIENT_CRT_B64=%s\nCLIENT_KEY_B64=%s\n' "$host" "$ca" "$cert" "$key")"
+  env="$(printf 'MANAGER_GRPC=https://manager-grpc.example.test:65003\nSTATIC_URL=http://static.example.test\nRESOLVER_UPSTREAM=https://proxy.example.test\nRESOLVER_LISTEN=127.0.0.1:3999\nSCHEDULER_HOST=%s\nSCHEDULER_CLUSTER_ID=2\nCA_CRT_B64=%s\nCLIENT_CRT_B64=%s\nCLIENT_KEY_B64=%s\n' "$host" "$ca" "$cert" "$key")"
+  printf '%s' "$env" | base64 | tr -d '\n' | tr '+/' '-_'
+}
+
+payload_no_resolver() {
+  local ca cert key env host
+  host="${1:-scheduler.example.test}"
+  ca="$(printf 'dummy-ca\n' | base64 | tr -d '\n')"
+  cert="$(printf 'dummy-cert\n' | base64 | tr -d '\n')"
+  key="$(printf 'dummy-key\n' | base64 | tr -d '\n')"
+  env="$(printf 'MANAGER_GRPC=https://manager-grpc.example.test:65003\nSTATIC_URL=http://static.example.test\nSCHEDULER_HOST=%s\nSCHEDULER_CLUSTER_ID=2\nCA_CRT_B64=%s\nCLIENT_CRT_B64=%s\nCLIENT_KEY_B64=%s\n' "$host" "$ca" "$cert" "$key")"
+  printf '%s' "$env" | base64 | tr -d '\n' | tr '+/' '-_'
+}
+
+payload_partial_resolver() {
+  local ca cert key env
+  ca="$(printf 'dummy-ca\n' | base64 | tr -d '\n')"
+  cert="$(printf 'dummy-cert\n' | base64 | tr -d '\n')"
+  key="$(printf 'dummy-key\n' | base64 | tr -d '\n')"
+  env="$(printf 'MANAGER_GRPC=https://manager-grpc.example.test:65003\nSTATIC_URL=http://static.example.test\nRESOLVER_UPSTREAM=https://proxy.example.test\nSCHEDULER_HOST=scheduler.example.test\nSCHEDULER_CLUSTER_ID=2\nCA_CRT_B64=%s\nCLIENT_CRT_B64=%s\nCLIENT_KEY_B64=%s\n' "$ca" "$cert" "$key")"
   printf '%s' "$env" | base64 | tr -d '\n' | tr '+/' '-_'
 }
 
@@ -55,10 +74,13 @@ assert_count() {
   fi
 }
 
+printf 'dummy-system-ca\n' > "${WORK}/system-ca.pem"
+
 CFG="$(payload)"
 ROOT_ONE="${WORK}/root-v1"
 
 P2P_ROOT="$ROOT_ONE" SKIP_DOWNLOAD=1 SKIP_MODULES=1 SKIP_SYSTEMD=1 SKIP_PREFLIGHT=1 CONTAINERD_MAJOR=1 \
+  RESOLVER_ARCH=amd64 SYSTEM_CA_FILE="${WORK}/system-ca.pem" \
   bash "$INSTALL" "$CFG" > "${WORK}/run1.log" 2>&1
 
 assert_file "${ROOT_ONE}/etc/dragonfly/certs/ca.crt"
@@ -69,9 +91,15 @@ assert_file "${ROOT_ONE}/etc/dragonfly/dynconfig.yaml"
 assert_file "${ROOT_ONE}/etc/nydus/config.toml"
 assert_file "${ROOT_ONE}/etc/nydus/nydusd-config.json"
 assert_file "${ROOT_ONE}/etc/nydus/updater.env"
+assert_file "${ROOT_ONE}/etc/nydus-resolver/config.yaml"
+if [ ! -d "${ROOT_ONE}/var/lib/nydus-resolver" ]; then
+  echo "p2p-static self-test: missing resolver CA directory" >&2
+  exit 1
+fi
 assert_file "${ROOT_ONE}/usr/local/bin/nydus-updater"
 assert_file "${ROOT_ONE}/var/lib/rancher/rke2/agent/etc/containerd/config.toml.tmpl"
 assert_file "${ROOT_ONE}/etc/systemd/system/dfdaemon-bootstrap.service"
+assert_file "${ROOT_ONE}/etc/systemd/system/nydus-resolver.service"
 assert_file "${ROOT_ONE}/etc/systemd/system/nydus-snapshotter-bootstrap.service"
 assert_file "${ROOT_ONE}/etc/systemd/system/nydus-updater.service"
 assert_file "${ROOT_ONE}/etc/systemd/system/nydus-updater.timer"
@@ -81,9 +109,9 @@ assert_contains "${ROOT_ONE}/etc/dragonfly/certs/tls.crt" 'dummy-cert'
 assert_contains "${ROOT_ONE}/etc/dragonfly/certs/tls.key" 'dummy-key'
 assert_contains "${ROOT_ONE}/etc/dragonfly/dfget.yaml" 'schedulerClusterID: 2'
 assert_not_contains "${ROOT_ONE}/etc/dragonfly/dfget.yaml" 'manager:'
-assert_not_contains "${ROOT_ONE}/etc/dragonfly/dfget.yaml" 'manager-grpc.example.com'
+assert_not_contains "${ROOT_ONE}/etc/dragonfly/dfget.yaml" 'manager-grpc.example.test'
 assert_contains "${ROOT_ONE}/etc/dragonfly/dfget.yaml" 'tlsVerify: true'
-assert_contains "${ROOT_ONE}/etc/dragonfly/dynconfig.yaml" 'addr: "scheduler.example.com:443"'
+assert_contains "${ROOT_ONE}/etc/dragonfly/dynconfig.yaml" 'addr: "scheduler.example.test:443"'
 assert_not_contains "${ROOT_ONE}/etc/dragonfly/dynconfig.yaml" '.dragonfly-system.svc'
 assert_contains "${ROOT_ONE}/etc/dragonfly/dfget.yaml" 'tlsPolicy: "force"'
 assert_contains "${ROOT_ONE}/etc/dragonfly/dfget.yaml" 'autoIssueCert: false'
@@ -107,6 +135,12 @@ assert_contains "${ROOT_ONE}/etc/nydus/nydusd-config.json" '"threads_count": 8'
 assert_contains "${ROOT_ONE}/etc/nydus/nydusd-config.json" '"prefetch_all": true'
 assert_not_contains "${ROOT_ONE}/etc/nydus/nydusd-config.json" 'enable_oci_tar'
 assert_contains "${ROOT_ONE}/etc/nydus/updater.env" 'NYDUS_VERSION=v0.16.0'
+assert_contains "${ROOT_ONE}/etc/nydus-resolver/config.yaml" 'listen: "127.0.0.1:3999"'
+assert_contains "${ROOT_ONE}/etc/nydus-resolver/config.yaml" 'upstream: "https://proxy.example.test"'
+assert_contains "${ROOT_ONE}/etc/nydus-resolver/config.yaml" 'ca_key: "/var/lib/nydus-resolver/ca.key"'
+assert_contains "${ROOT_ONE}/etc/nydus-resolver/config.yaml" 'ca_bundle: "/var/lib/nydus-resolver/ca-bundle.pem"'
+assert_contains "${ROOT_ONE}/etc/nydus-resolver/config.yaml" "system_ca_file: \"${WORK}/system-ca.pem\""
+assert_not_contains "${ROOT_ONE}/etc/nydus-resolver/config.yaml" 'registry_map'
 assert_file "${ROOT_ONE}/usr/local/bin/dfdaemon-bootstrap-switch"
 assert_file "${ROOT_ONE}/etc/systemd/system/dfdaemon-bootstrap-boot.service"
 assert_file "${ROOT_ONE}/etc/systemd/system/dfdaemon-bootstrap-switch.service"
@@ -120,9 +154,18 @@ assert_contains "${ROOT_ONE}/usr/local/bin/dfdaemon-bootstrap-switch" 'systemctl
 assert_not_contains "${ROOT_ONE}/usr/local/bin/dfdaemon-bootstrap-switch" 'nydus'
 bash -n "${ROOT_ONE}/usr/local/bin/dfdaemon-bootstrap-switch"
 assert_contains "${ROOT_ONE}/usr/local/bin/nydus-updater" 'nydus-overlayfs'
+assert_not_contains "${ROOT_ONE}/usr/local/bin/nydus-updater" 'systemctl restart nydus-resolver.service'
 assert_contains "${ROOT_ONE}/usr/local/bin/nydus-updater" 'systemctl restart nydus-snapshotter-bootstrap.service'
 assert_contains "${ROOT_ONE}/etc/systemd/system/nydus-updater.timer" 'OnUnitActiveSec=24h'
 assert_contains "${ROOT_ONE}/etc/systemd/system/dfdaemon-bootstrap.service" 'Before=rke2-server.service rke2-agent.service'
+assert_contains "${ROOT_ONE}/etc/systemd/system/nydus-resolver.service" 'ExecStart=/usr/local/bin/nydus-resolver --config /etc/nydus-resolver/config.yaml'
+assert_contains "${ROOT_ONE}/etc/systemd/system/nydus-resolver.service" 'Restart=always'
+assert_contains "${ROOT_ONE}/etc/systemd/system/nydus-resolver.service" 'Before=nydus-snapshotter-bootstrap.service'
+assert_contains "${ROOT_ONE}/etc/systemd/system/nydus-snapshotter-bootstrap.service" 'After=network-online.target nydus-resolver.service'
+assert_contains "${ROOT_ONE}/etc/systemd/system/nydus-snapshotter-bootstrap.service" 'Wants=network-online.target nydus-resolver.service'
+assert_contains "${ROOT_ONE}/etc/systemd/system/nydus-snapshotter-bootstrap.service" 'Environment=HTTPS_PROXY=http://127.0.0.1:3999'
+assert_contains "${ROOT_ONE}/etc/systemd/system/nydus-snapshotter-bootstrap.service" 'Environment=NO_PROXY=127.0.0.1,localhost,'
+assert_contains "${ROOT_ONE}/etc/systemd/system/nydus-snapshotter-bootstrap.service" 'Environment=SSL_CERT_FILE=/var/lib/nydus-resolver/ca-bundle.pem'
 assert_contains "${ROOT_ONE}/etc/systemd/system/nydus-snapshotter-bootstrap.service" 'Before=rke2-server.service rke2-agent.service'
 assert_contains "${ROOT_ONE}/etc/systemd/system/nydus-snapshotter-bootstrap.service" 'ExecStart=/usr/local/bin/containerd-nydus-grpc --config /etc/nydus/config.toml --nydusd /usr/local/bin/nydusd --nydusd-config /etc/nydus/nydusd-config.json'
 assert_contains "${ROOT_ONE}/etc/systemd/system/nydus-snapshotter-bootstrap.service" 'ExecStartPost=/bin/sh -c'
@@ -212,9 +255,22 @@ assert_contains "$INSTALL" 'NYDUS_VERSION="${NYDUS_VERSION:-v0.16.0}"'
 assert_contains "$INSTALL" 'nydus-overlayfs'
 assert_contains "$INSTALL" '90-nydus.toml'
 assert_contains "$INSTALL" 'SMART_PROXY_URL'
+assert_contains "$INSTALL" 'RESOLVER_UPSTREAM'
+assert_contains "$INSTALL" 'nydus-resolver'
+assert_contains "$INSTALL" 'HTTPS_PROXY=http://127.0.0.1:3999'
+assert_contains "$INSTALL" 'SSL_CERT_FILE=/var/lib/nydus-resolver/ca-bundle.pem'
+assert_contains "$INSTALL" 'RESOLVER_VERSION="${RESOLVER_VERSION:-v0.1.33}"'
+assert_contains "$INSTALL" 'RESOLVER_ASSET="${RESOLVER_ASSET:-nydus-resolver-linux-amd64}"'
+assert_contains "$INSTALL" 'GH_REPO="${GH_REPO:-gorizond/d7y-cattle-operator}"'
+assert_contains "$INSTALL" "'%s/download/%s/%s'"
+assert_contains "$INSTALL" "'%s/latest/download/%s'"
+assert_contains "$INSTALL" 'curl -fL'
+assert_contains "$INSTALL" 'sha256sum'
+assert_not_contains "$INSTALL" 'registry_map'
 
 BEFORE="$(sha256sum "${ROOT_ONE}/etc/dragonfly/dfget.yaml" | cut -d' ' -f1)"
 P2P_ROOT="$ROOT_ONE" SKIP_DOWNLOAD=1 SKIP_MODULES=1 SKIP_SYSTEMD=1 SKIP_PREFLIGHT=1 CONTAINERD_MAJOR=1 \
+  RESOLVER_ARCH=amd64 SYSTEM_CA_FILE="${WORK}/system-ca.pem" \
   bash "$INSTALL" "$CFG" > "${WORK}/run2.log" 2>&1
 AFTER="$(sha256sum "${ROOT_ONE}/etc/dragonfly/dfget.yaml" | cut -d' ' -f1)"
 if [ "$BEFORE" != "$AFTER" ]; then
@@ -224,6 +280,7 @@ fi
 
 ROOT_TWO="${WORK}/root-v2"
 P2P_ROOT="$ROOT_TWO" SKIP_DOWNLOAD=1 SKIP_MODULES=1 SKIP_SYSTEMD=1 SKIP_PREFLIGHT=1 CONTAINERD_MAJOR=2 \
+  RESOLVER_ARCH=amd64 SYSTEM_CA_FILE="${WORK}/system-ca.pem" \
   bash "$INSTALL" "$CFG" > "${WORK}/run3.log" 2>&1
 V3_DROPIN="${ROOT_TWO}/var/lib/rancher/rke2/agent/etc/containerd/config-v3.toml.d/90-nydus.toml"
 assert_file "$V3_DROPIN"
@@ -241,7 +298,8 @@ fi
 ROOT_FALLBACK="${WORK}/root-fallback"
 FALLBACK_CFG="$(payload scheduler.unreachable.invalid)"
 P2P_ROOT="$ROOT_FALLBACK" SKIP_DOWNLOAD=1 SKIP_MODULES=1 SKIP_SYSTEMD=1 CONTAINERD_MAJOR=1 \
-  P2P_PREFLIGHT_TIMEOUT=1 bash "$INSTALL" "$FALLBACK_CFG" > "${WORK}/fallback.log" 2>&1
+  RESOLVER_ARCH=amd64 SYSTEM_CA_FILE="${WORK}/system-ca.pem" P2P_PREFLIGHT_TIMEOUT=1 \
+  bash "$INSTALL" "$FALLBACK_CFG" > "${WORK}/fallback.log" 2>&1
 FALLBACK_TEMPLATE="${ROOT_FALLBACK}/var/lib/rancher/rke2/agent/etc/containerd/config.toml.tmpl"
 assert_file "$FALLBACK_TEMPLATE"
 assert_contains "$FALLBACK_TEMPLATE" 'snapshotter = "overlayfs"'
@@ -272,3 +330,107 @@ if [ -f "$FALLBACK_DROPIN" ]; then
 fi
 
 echo "p2p-static self-test: OK"
+
+ROOT_NO_RESOLVER="${WORK}/root-no-resolver"
+NO_RESOLVER_CFG="$(payload_no_resolver)"
+P2P_ROOT="$ROOT_NO_RESOLVER" SKIP_DOWNLOAD=1 SKIP_MODULES=1 SKIP_SYSTEMD=1 SKIP_PREFLIGHT=1 CONTAINERD_MAJOR=1 \
+  RESOLVER_ARCH=amd64 SYSTEM_CA_FILE="${WORK}/system-ca.pem" \
+  bash "$INSTALL" "$NO_RESOLVER_CFG" > "${WORK}/no-resolver.log" 2>&1
+assert_contains "${WORK}/no-resolver.log" 'nydus-resolver config is missing'
+if [ -f "${ROOT_NO_RESOLVER}/etc/nydus-resolver/config.yaml" ]; then
+  echo "p2p-static self-test: missing resolver config was written" >&2
+  exit 1
+fi
+if [ -f "${ROOT_NO_RESOLVER}/etc/systemd/system/nydus-resolver.service" ]; then
+  echo "p2p-static self-test: missing resolver config installed the unit" >&2
+  exit 1
+fi
+
+ROOT_PARTIAL="${WORK}/root-partial-resolver"
+PARTIAL_CFG="$(payload_partial_resolver)"
+if P2P_ROOT="$ROOT_PARTIAL" SKIP_DOWNLOAD=1 SKIP_MODULES=1 SKIP_SYSTEMD=1 SKIP_PREFLIGHT=1 CONTAINERD_MAJOR=1 \
+  RESOLVER_ARCH=amd64 SYSTEM_CA_FILE="${WORK}/system-ca.pem" \
+  bash "$INSTALL" "$PARTIAL_CFG" > "${WORK}/partial-resolver.log" 2>&1; then
+  echo "p2p-static self-test: partial resolver config succeeded" >&2
+  exit 1
+fi
+assert_contains "${WORK}/partial-resolver.log" 'must be set together'
+
+FAKE_BIN="${WORK}/fake-curl-bin"
+CURL_ASSET_DIR="${WORK}/curl-assets"
+CURL_LOG="${WORK}/curl.log"
+mkdir -p "$FAKE_BIN" "$CURL_ASSET_DIR"
+: > "$CURL_LOG"
+cat > "${FAKE_BIN}/curl" <<'FAKECURL'
+#!/usr/bin/env bash
+set -Eeuo pipefail
+out=""
+url=""
+while [ "$#" -gt 0 ]; do
+  case "$1" in
+    -o) out="$2"; shift 2 ;;
+    --retry|--connect-timeout|--max-time) shift 2 ;;
+    -*) shift ;;
+    *) url="$1"; shift ;;
+  esac
+done
+if [ -z "$out" ] || [ -z "$url" ]; then
+  echo "fake curl: missing -o or URL" >&2
+  exit 2
+fi
+printf '%s\n' "$url" >> "${CURL_LOG:?}"
+asset="${url##*/}"
+if [ -n "${FAKE_CURL_FAIL_ASSET:-}" ] && [ "$asset" = "$FAKE_CURL_FAIL_ASSET" ]; then
+  exit 22
+fi
+case "$asset" in
+  *.sha256)
+    target="${asset%.sha256}"
+    source="${CURL_ASSET_DIR:?}/${target}"
+    if [ ! -f "$source" ]; then
+      echo "fake curl: missing asset ${target}" >&2
+      exit 22
+    fi
+    hash="$(sha256sum "$source")"
+    hash="${hash%% *}"
+    printf '%s  %s\n' "$hash" "$target" > "$out"
+    ;;
+  *)
+    printf '#!/bin/sh\nexit 0\n' > "$out"
+    cp "$out" "${CURL_ASSET_DIR:?}/${asset}"
+    ;;
+esac
+FAKECURL
+chmod 0755 "${FAKE_BIN}/curl"
+
+ROOT_RELEASE="${WORK}/root-release"
+P2P_ROOT="$ROOT_RELEASE" SKIP_MODULES=1 SKIP_SYSTEMD=1 SKIP_PREFLIGHT=1 CONTAINERD_MAJOR=1 \
+  RESOLVER_ARCH=amd64 SYSTEM_CA_FILE="${WORK}/system-ca.pem" \
+  RESOLVER_VERSION=v9.9.9 RESOLVER_ASSET=nydus-resolver-linux-amd64 \
+  GH_REPO=example-org/example-repo \
+  PATH="${FAKE_BIN}:${PATH}" CURL_LOG="$CURL_LOG" CURL_ASSET_DIR="$CURL_ASSET_DIR" \
+  bash "$INSTALL" "$CFG" > "${WORK}/release.log" 2>&1
+
+assert_file "${ROOT_RELEASE}/usr/local/bin/nydus-resolver"
+if [ "$(stat -c '%a' "${ROOT_RELEASE}/usr/local/bin/nydus-resolver")" != "755" ]; then
+  echo "p2p-static self-test: resolver is not mode 0755" >&2
+  exit 1
+fi
+assert_contains "$CURL_LOG" 'https://github.com/example-org/example-repo/releases/download/v9.9.9/nydus-resolver-linux-amd64'
+assert_contains "$CURL_LOG" 'https://github.com/example-org/example-repo/releases/download/v9.9.9/nydus-resolver-linux-amd64.sha256'
+
+ROOT_NO_ASSET="${WORK}/root-no-asset"
+P2P_ROOT="$ROOT_NO_ASSET" SKIP_MODULES=1 SKIP_SYSTEMD=1 SKIP_PREFLIGHT=1 CONTAINERD_MAJOR=1 \
+  RESOLVER_ARCH=amd64 SYSTEM_CA_FILE="${WORK}/system-ca.pem" \
+  RESOLVER_VERSION=v9.9.9 RESOLVER_ASSET=nydus-resolver-linux-amd64 \
+  GH_REPO=example-org/example-repo FAKE_CURL_FAIL_ASSET=nydus-resolver-linux-amd64 \
+  PATH="${FAKE_BIN}:${PATH}" CURL_LOG="${WORK}/curl-fail.log" CURL_ASSET_DIR="$CURL_ASSET_DIR" \
+  bash "$INSTALL" "$CFG" > "${WORK}/no-asset.log" 2>&1
+assert_contains "${WORK}/no-asset.log" 'nydus-resolver release asset'
+assert_contains "${WORK}/no-asset.log" 'is unavailable'
+if [ -f "${ROOT_NO_ASSET}/usr/local/bin/nydus-resolver" ]; then
+  echo "p2p-static self-test: missing release asset installed a resolver" >&2
+  exit 1
+fi
+assert_file "${ROOT_NO_ASSET}/var/lib/rancher/rke2/agent/etc/containerd/config.toml.tmpl"
+assert_contains "${ROOT_NO_ASSET}/var/lib/rancher/rke2/agent/etc/containerd/config.toml.tmpl" 'snapshotter = "overlayfs"'
