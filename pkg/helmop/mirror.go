@@ -10,6 +10,15 @@ func Mirror(c Cluster) *fleetv1alpha1.HelmOp {
 		"namespace": MirrorTargetNamespace,
 		"port":      MirrorPort,
 		"hostPath":  MirrorCertsDir,
+		"proxy": map[string]any{
+			"enabled":    c.ProxyEnabled && c.ProxyPublicURL != "",
+			"url":        c.ProxyPublicURL,
+			"registries": c.ProxyRegistries,
+		},
+	}
+	dependsOn := []string{DataName(c.Name)}
+	if c.ProxyEnabled && c.ProxyPublicURL != "" {
+		dependsOn = append(dependsOn, RegistryProxyName(c.Name))
 	}
 	return newHelmOpInNamespace(
 		MirrorName(c.Name),
@@ -18,6 +27,6 @@ func Mirror(c Cluster) *fleetv1alpha1.HelmOp {
 		c.MirrorChart,
 		"containerd-mirror",
 		values,
-		[]string{DataName(c.Name)},
+		dependsOn,
 	)
 }

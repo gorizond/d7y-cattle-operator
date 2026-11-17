@@ -35,7 +35,14 @@ SCHEDULER_CLUSTER_ID=2
 CA_CRT_B64=<standard base64 of ca.crt>
 CLIENT_CRT_B64=<standard base64 of tls.crt>
 CLIENT_KEY_B64=<standard base64 of tls.key>
+SMART_PROXY_URL=https://proxy.example.com   # optional; fail-open
 ```
+
+`SMART_PROXY_URL` is optional. When present it is validated as an
+http(s) URL and kept for the in-cluster mirror bootstrap; new VMs never make
+the proxy mandatory (the script stays fail-open). The mirror chart points
+allowlisted registries at the external proxy domain, not at a per-node proxy. The in-cluster
+`containerd-mirror` DaemonSet applies the proxy `hosts.toml` after RKE2.
 
 The script decodes the outer URL-safe base64, parses `KEY=VALUE` lines with
 `read`/`case` (no `eval`), and decodes the certificate fields with `base64 -d`.
@@ -78,6 +85,15 @@ exits success so RKE2 can start. On containerd 2.x it removes the nydus
 drop-in; on 1.x it writes an overlayfs template. It does not enable the
 `127.0.0.1:4001` nydus proxy in that path. Existing certificate/config files
 are left in place for a later retry.
+
+## Harbor admin Secret
+
+Harbor is deployed by the operator, not by this chart. Before enabling
+`p2p.dragonfly.io/harbor`, put a Secret in the local/operator namespace
+(default name `harbor-admin`) with the `HARBOR_ADMIN_PASSWORD` key. The
+operator copies it per cluster and Fleet delivers it to Harbor as
+`existingSecretAdminPassword`; values must never be placed in chart values or
+Git.
 
 ## Host dfdaemon bootstrap switch
 

@@ -34,6 +34,9 @@ Live envtest/pilot verification remains deferred.
   `p2p.dragonfly.io/seed: "true"` and a scheduler cluster ID is present. Nydus
   is host-only: `p2p-install.sh` installs and supervises it on the node; the
   operator creates no nydus DaemonSet or HelmOp.
+- Deploys Harbor on `p2p.dragonfly.io/harbor: "true"` and the external
+  stateless registry proxy on `p2p.dragonfly.io/proxy: "true"`. Harbor uses the
+  existing `<cluster>-keydb`; the proxy has no PVC.
 - Manages the manager Ingresses, the public scheduler TCP front, and optional
   VPAs through the separate `<cluster>-extras` HelmOp and the
   `dragonfly-extras` chart. The operator has no Ingress, IngressRouteTCP, or
@@ -179,6 +182,9 @@ only when the value, reason, or message changes:
 | `d7y.io/KeyDBReady` | The `<cluster>-keydb` HelmOp was applied. |
 | `d7y.io/ControlReady` | The seed scheduler HelmOp was applied (`seed: "true"`). |
 | `d7y.io/DataReady` | The seedClient/client HelmOp was applied (`seed: "true"`). |
+| `d7y.io/HarborReady` | The Harbor HelmOp was applied or an external `harbor-url` is configured. |
+| `d7y.io/RegistryProxyReady` | The independent registry proxy HelmOp was applied. |
+| `d7y.io/HarborDomainMissing` | `harbor: "true"` is set but `harbor-domain` is missing or invalid. |
 | `d7y.io/Registered` | Scheduler and seed-peer records were ensured and linked in the manager. |
 | `d7y.io/RegistrationFailed` | Registration failed permanently; `d7y.io/Retrying` marks transient failures. |
 | `d7y.io/IdMismatch` | The user-provided `scheduler-cluster-id` differs from the manager server ID; the annotation is preserved. |
@@ -399,6 +405,71 @@ HelmOp:
   Secret; the chart no longer renders a CA-only Secret. The operator RBAC
   remains limited to Clusters, HelmOps, Secrets, and Events.
 
+## Harbor and registry proxy
+
+Harbor is deployed only when the Cluster has the `p2p-dragonfly-io: "true"`
+label and `p2p.dragonfly.io/harbor: "true"`. `p2p.dragonfly.io/harbor-domain`
+is required and must be a DNS name (no scheme/port/path); it becomes the Harbor
+`externalURL` and Ingress host. Set the optional
+`p2p.dragonfly.io/harbor-url: https://...` annotation to use an existing or
+external Harbor instead; no Harbor HelmOp is created in that case.
+
+The Harbor admin Secret is delivered from the local/operator cluster. Put a
+Secret in the operator namespace (default name `harbor-admin`, configurable
+with `proxy.harborAdminSecret`) containing the `HARBOR_ADMIN_PASSWORD` key
+before the Harbor HelmOp is applied. The operator copies it per cluster and
+Fleet `downstreamResources` delivers it to the `harbor` namespace as
+`existingSecretAdminPassword`; values are never written to HelmOp values,
+logs, or events. The operator also generates per-cluster `<cluster>-harbor-db`
+and `<cluster>-harbor-secret` Secrets once for the internal DB password and
+Harbor secret key, and delivers them with `existingSecret`/`existingSecretSecretKey`.
+The ingress TLS Secret `<cluster>-harbor-tls` must also exist
+(cert-manager or manual) before Harbor starts.
+
+Harbor values use the existing KeyDB HelmOp
+`<cluster>-keydb.dragonfly-system.svc:6379` (`redis.type=external`) and create
+no Redis PVC. Registry, jobservice, and database PVCs are 50Gi/5Gi/10Gi on the
+`longhorn` storage class with `resourcePolicy: keep`. Internal database,
+`trivy.enabled=false`, and ingress TLS Secret `<cluster>-harbor-tls` are the v1
+defaults.
+
+The registry proxy is independent of Harbor and the seed role:
+`p2p.dragonfly.io/proxy: "true"` creates `<cluster>-registry-proxy` in
+`dragonfly-system`, with the public URL built from the operator value
+`proxy.domain` (`https://<proxy.domain>`). It has no PVC and no in-cluster
+mirror; removing the annotation deletes the HelmOp. Its Harbor URL comes from
+`p2p.dragonfly.io/harbor-url` or the operator value `proxy.harborURL`.
+On the first pull, the proxy creates the Harbor registry endpoint, the
+read-only proxy project (`docker.io` → `dockerio`), the writable `mirror`
+project, and the `PUSH_ARTIFACT` webhook policy; no manual Harbor project is
+needed. The source proxy project is never mutated. The proxy copies source
+manifests/blobs into `mirror/<registry>/<repo>`, runs `nydusify convert
+--merge-platform --oci` to `:<tag>-merged`, verifies the OCI-first/nydus-second
+index, and moves that index to `<tag>`. `/api/convert` is a Harbor-reachable
+shared-secret endpoint and returns 202 before the asynchronous copy/conversion.
+
+The proxy Manager is intentionally in-memory. After a proxy restart, in-flight
+jobs are not automatically restored; the next Harbor `PUSH_ARTIFACT` webhook or
+client pull re-enqueues the job. There is no durable queue, cron, or startup
+reconciliation in v1; Harbor remains the source of truth.
+
+Scaling (future): multiple proxy replicas need a shared KeyDB/Redis-backed
+Manager for job state and deduplication. The current KeyDB is multi-master but
+has no PVC/HA, so state durability is a separate decision; v1 stays in-memory.
+
+The `containerd-mirror` chart sends allowlisted registries to the external
+`<proxy>/<registry>` through `X-Dragonfly-Registry`; `SMART_PROXY_URL` in the
+bootstrap payload is optional and fail-open. Target clusters do not need an
+in-cluster proxy mirror; the proxy Service/Deployment is the separate
+`<cluster>-registry-proxy` HelmOp.
+
+The proxy's `harbor.url` must be HTTPS; nydusify converts through the Harbor
+registry and the proxy does not enable plain-HTTP conversion.
+
+Conditions: `d7y.io/HarborReady`, `d7y.io/RegistryProxyReady`, and
+`d7y.io/HarborDomainMissing`. Missing/invalid domain keeps Harbor/proxy
+HelmOps absent and records the event/condition.
+
 ## Cluster annotations
 
 The operator only acts on Clusters labeled `p2p-dragonfly-io: "true"`.
@@ -411,6 +482,10 @@ The operator only acts on Clusters labeled `p2p-dragonfly-io: "true"`.
 | `p2p.dragonfly.io/scheduler-replicas` | integer | Scheduler replicas (default `1`) |
 | `p2p.dragonfly.io/seedclient-replicas` | integer | Seed client replicas (default `1`) |
 | `p2p.dragonfly.io/monitoring` | label selector, `true`, or `enabled` | Enable metrics and ServiceMonitors for manager/scheduler/seedClient/client when the selector matches the Cluster labels; empty, invalid, or non-matching disables. Requires the Prometheus Operator ServiceMonitor CRD. |
+| `p2p.dragonfly.io/harbor` | `"true"` | Deploy Harbor (requires `harbor-domain`) |
+| `p2p.dragonfly.io/harbor-domain` | DNS name | Harbor Ingress host / `externalURL` |
+| `p2p.dragonfly.io/harbor-url` | HTTPS URL | Use an existing/external Harbor; no Harbor HelmOp |
+| `p2p.dragonfly.io/proxy` | `"true"` | Deploy the independent registry proxy HelmOp |
 | `p2p.dragonfly.io/p2p-data-tls` | `"true"` or `"enabled"` | Keep mTLS on the P2P data path (`seedClient`/`client` upload and scheduler `seedPeer`). Default/off uses plaintext P2P data; scheduler server, manager gRPC/API, and monitoring TLS are unaffected. |
 | `p2p.dragonfly.io/node-config-key` | field name | Machine-config `spec` field patched by the webhook (default `userData`, e.g. `postBootScript`) |
 
@@ -473,6 +548,23 @@ drop-in `config-v3.toml.d/90-nydus.toml`, starts it before RKE2, and installs a
 daily host updater. There is no in-cluster nydus DaemonSet or HelmOp. See
 `charts/p2p-static/README.md` for values, payload keys, drop-ins, and pilot
 risks.
+
+## Smart proxy pilot (after approval)
+
+1. Render/lint locally and enable `p2p.dragonfly.io/harbor`,
+   `p2p.dragonfly.io/harbor-domain`, `p2p.dragonfly.io/proxy`, and
+   `p2p.dragonfly.io/seed` on a test Cluster.
+2. Pull `docker.io/library/nginx:1.27` through a node; no `-nydus` tag and no
+   admission webhook are used.
+3. Check `oras manifest fetch harbor.<domain>/mirror/docker.io/library/nginx:1.27`
+   returns an OCI index with the OCI child first and the nydus child
+   (`artifactType=application/vnd.nydus.image.manifest.v1+json`) second.
+4. Confirm `nydusd`/FUSE on the node, then pull again to confirm Dragonfly P2P.
+   The exact source digest is only the
+   `containerd.io/snapshot/nydus-source-digest` annotation; a digest-pinned
+   consumer sees the index digest, not the original source digest.
+5. Force a conversion failure; the original mirror OCI tag must remain and a
+   later webhook/pull retries. Do not run this pilot without explicit approval.
 
 ## Admission webhook
 

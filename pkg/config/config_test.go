@@ -23,6 +23,16 @@ var envKeys = []string{
 	"CONTAINERD_MIRROR_CHART_REPO",
 	"CONTAINERD_MIRROR_CHART_NAME",
 	"CONTAINERD_MIRROR_CHART_VERSION",
+	"HARBOR_CHART_REPO",
+	"HARBOR_CHART_NAME",
+	"HARBOR_CHART_VERSION",
+	"REGISTRY_PROXY_CHART_REPO",
+	"REGISTRY_PROXY_CHART_NAME",
+	"REGISTRY_PROXY_CHART_VERSION",
+	"PROXY_DOMAIN",
+	"PROXY_HARBOR_URL",
+	"PROXY_HARBOR_ADMIN_SECRET",
+	"PROXY_REGISTRIES",
 	"EXTRAS_INGRESS_CONTROLLER",
 	"EXTRAS_INGRESS_CLASS_NAME",
 	"EXTRAS_INGRESS_GRPC_ENABLED",
@@ -99,6 +109,21 @@ func TestLoadDefaults(t *testing.T) {
 	}
 	if cfg.MirrorChartVersion != DefaultMirrorChartVersion {
 		t.Errorf("MirrorChartVersion = %q, want %q", cfg.MirrorChartVersion, DefaultMirrorChartVersion)
+	}
+	if cfg.HarborChartVersion != DefaultHarborChartVersion {
+		t.Errorf("HarborChartVersion = %q, want %q", cfg.HarborChartVersion, DefaultHarborChartVersion)
+	}
+	if cfg.RegistryProxyChartVersion != DefaultRegistryProxyChartVersion {
+		t.Errorf("RegistryProxyChartVersion = %q, want %q", cfg.RegistryProxyChartVersion, DefaultRegistryProxyChartVersion)
+	}
+	if cfg.ProxyDomain != "" || cfg.ProxyHarborURL != "" {
+		t.Errorf("proxy defaults = domain:%q url:%q, want empty", cfg.ProxyDomain, cfg.ProxyHarborURL)
+	}
+	if cfg.ProxyHarborAdminSecret != DefaultProxyHarborAdminSecret {
+		t.Errorf("ProxyHarborAdminSecret = %q, want %q", cfg.ProxyHarborAdminSecret, DefaultProxyHarborAdminSecret)
+	}
+	if cfg.ProxyRegistries != DefaultProxyRegistries {
+		t.Errorf("ProxyRegistries = %q, want %q", cfg.ProxyRegistries, DefaultProxyRegistries)
 	}
 	if cfg.ExtrasIngressController != DefaultExtrasIngressController {
 		t.Errorf("ExtrasIngressController = %q, want %q", cfg.ExtrasIngressController, DefaultExtrasIngressController)
@@ -194,6 +219,14 @@ func TestLoadInvalidValues(t *testing.T) {
 		"invalid dragonfly chart repo":      "--dragonfly-chart-repo=not-a-url",
 		"invalid extras chart version":      "--extras-chart-version=latest",
 		"invalid extras chart repo":         "--extras-chart-repo=not-a-url",
+		"invalid harbor chart version":      "--harbor-chart-version=latest",
+		"invalid harbor chart repo":         "--harbor-chart-repo=not-a-url",
+		"invalid registry proxy version":    "--registry-proxy-chart-version=latest",
+		"invalid registry proxy repo":       "--registry-proxy-chart-repo=not-a-url",
+		"invalid proxy domain":              "--proxy-domain=Bad_Domain",
+		"invalid proxy harbor URL":          "--proxy-harbor-url=http://harbor.example.com",
+		"invalid proxy admin secret":        "--proxy-harbor-admin-secret=Bad_Secret",
+		"empty proxy registry":              "--proxy-registries=docker.io,",
 		"invalid extras ingress controller": "--extras-ingress-controller=haproxy",
 		"invalid extras ingress class":      "--extras-ingress-class-name=Bad_Name",
 		"invalid extras ingress TLS Secret": "--extras-ingress-tls-secret=Bad_Name",
@@ -336,6 +369,51 @@ func TestLoadEnvOverride(t *testing.T) {
 	}
 	if cfg.Kubeconfig != "/tmp/kubeconfig" {
 		t.Errorf("Kubeconfig = %q", cfg.Kubeconfig)
+	}
+}
+
+func TestLoadHarborProxyEnv(t *testing.T) {
+	clearEnv(t)
+	t.Setenv("PROXY_DOMAIN", "proxy.env.example.com")
+	t.Setenv("PROXY_HARBOR_URL", "https://harbor.env.example.com")
+	t.Setenv("PROXY_HARBOR_ADMIN_SECRET", "env-harbor-admin")
+	t.Setenv("PROXY_REGISTRIES", "docker.io,ghcr.io")
+	t.Setenv("HARBOR_CHART_VERSION", "1.19.4")
+	t.Setenv("REGISTRY_PROXY_CHART_VERSION", "0.1.0")
+	cfg, err := Load(requiredArgs())
+	if err != nil {
+		t.Fatalf("Load() error = %v", err)
+	}
+	if cfg.ProxyDomain != "proxy.env.example.com" || cfg.ProxyHarborURL != "https://harbor.env.example.com" {
+		t.Errorf("proxy env = %q/%q", cfg.ProxyDomain, cfg.ProxyHarborURL)
+	}
+	if cfg.ProxyHarborAdminSecret != "env-harbor-admin" || cfg.ProxyRegistries != "docker.io,ghcr.io" {
+		t.Errorf("proxy secret/registries = %q/%q", cfg.ProxyHarborAdminSecret, cfg.ProxyRegistries)
+	}
+}
+
+func TestLoadHarborProxyConfig(t *testing.T) {
+	clearEnv(t)
+	args := append(requiredArgs(),
+		"--harbor-chart-version=1.19.4",
+		"--registry-proxy-chart-version=0.1.0",
+		"--proxy-domain=proxy.example.com",
+		"--proxy-harbor-url=https://harbor.example.com",
+		"--proxy-harbor-admin-secret=harbor-admin",
+		"--proxy-registries=docker.io,ghcr.io",
+	)
+	cfg, err := Load(args)
+	if err != nil {
+		t.Fatalf("Load() error = %v", err)
+	}
+	if cfg.ProxyDomain != "proxy.example.com" || cfg.ProxyHarborURL != "https://harbor.example.com" {
+		t.Errorf("proxy values = %q/%q", cfg.ProxyDomain, cfg.ProxyHarborURL)
+	}
+	if cfg.ProxyHarborAdminSecret != "harbor-admin" || cfg.ProxyRegistries != "docker.io,ghcr.io" {
+		t.Errorf("proxy secret/registries = %q/%q", cfg.ProxyHarborAdminSecret, cfg.ProxyRegistries)
+	}
+	if cfg.HarborChartVersion != "1.19.4" || cfg.RegistryProxyChartVersion != "0.1.0" {
+		t.Errorf("chart versions = %q/%q", cfg.HarborChartVersion, cfg.RegistryProxyChartVersion)
 	}
 }
 

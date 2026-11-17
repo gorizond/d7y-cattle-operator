@@ -1,0 +1,10 @@
+# Patterns to ignore when building the chart archive.
+.DS_Store
+.git/
+.gitignore
+*.swp
+*.bak
+*.tmp
+*.orig
+.idea/
+.vscode/

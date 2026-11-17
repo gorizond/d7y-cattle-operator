@@ -123,7 +123,7 @@ while IFS= read -r line || [ -n "$line" ]; do
   value="${line#*=}"
   value="${value%$'\r'}"
   case "$key" in
-    MANAGER_GRPC|STATIC_URL|SCHEDULER_HOST|SCHEDULER_CLUSTER_ID|CA_CRT_B64|CLIENT_CRT_B64|CLIENT_KEY_B64)
+    MANAGER_GRPC|STATIC_URL|SMART_PROXY_URL|SCHEDULER_HOST|SCHEDULER_CLUSTER_ID|CA_CRT_B64|CLIENT_CRT_B64|CLIENT_KEY_B64)
       printf -v "$key" '%s' "$value"
       ;;
   esac
@@ -157,6 +157,17 @@ case "$STATIC_URL" in
   *" "*|*$'\t'*) die "static_url contains whitespace" ;;
 esac
 STATIC_URL="${STATIC_URL%/}"
+
+if [ -n "${SMART_PROXY_URL:-}" ]; then
+  case "$SMART_PROXY_URL" in
+    http://*|https://*) ;;
+    *) die "smart_proxy_url must use http:// or https://" ;;
+  esac
+  case "$SMART_PROXY_URL" in
+    *" "*|*$'\t'*) die "smart_proxy_url contains whitespace" ;;
+  esac
+  SMART_PROXY_URL="${SMART_PROXY_URL%/}"
+fi
 
 case "$SCHEDULER_HOST" in
   ""|*[!A-Za-z0-9.-]*|*..*|.*|*.) die "scheduler_host is not a DNS name" ;;

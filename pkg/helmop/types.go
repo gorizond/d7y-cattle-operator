@@ -21,6 +21,11 @@ const (
 	MirrorPort            = 4001
 	MirrorCertsDir        = "/var/lib/rancher/rke2/agent/etc/containerd/certs.d"
 
+	// HarborTargetNamespace is where the Harbor HelmOp is installed.
+	HarborTargetNamespace = "harbor"
+	// RegistryProxyPort is the proxy Service/container port.
+	RegistryProxyPort = 8080
+
 	ManagerGRPCPort = 65003
 	// ManagerGRPCEdgePort is the public gRPC port used by schedulers to reach
 	// the manager through the edge.
@@ -43,6 +48,14 @@ const (
 	KeyDBChartRepo    = "https://enapter.github.io/charts/"
 	KeyDBChartName    = "keydb"
 	KeyDBChartVersion = "0.48.0"
+
+	HarborChartRepo    = "https://helm.goharbor.io"
+	HarborChartName    = "harbor"
+	HarborChartVersion = "1.19.4"
+
+	RegistryProxyChartRepo    = "https://gorizond.github.io/d7y-cattle-operator"
+	RegistryProxyChartName    = "registry-proxy"
+	RegistryProxyChartVersion = "0.1.0"
 )
 
 // HelmOpGVR identifies Fleet HelmOps for the resource client.
@@ -59,12 +72,32 @@ type Chart struct {
 
 // Cluster carries the per-cluster inputs shared by the HelmOp builders.
 type Cluster struct {
-	Name           string
-	Namespace      string
-	MTLSSecretName string
-	Chart          Chart
-	ExtrasChart    Chart
-	MirrorChart    Chart
+	Name               string
+	Namespace          string
+	MTLSSecretName     string
+	Chart              Chart
+	ExtrasChart        Chart
+	MirrorChart        Chart
+	HarborChart        Chart
+	RegistryProxyChart Chart
+
+	// HarborDomain is the Harbor ingress/externalURL host. HarborURL selects
+	// an existing/external Harbor; HarborManaged is true only when the operator
+	// owns the Harbor HelmOp. HarborAdminSecret is the downstream Secret name.
+	HarborDomain       string
+	HarborURL          string
+	HarborManaged      bool
+	HarborAdminSecret  string
+	HarborDBPassword   string
+	HarborSecretKey    string
+	HarborIngressClass string
+
+	// ProxyEnabled is the independent p2p.dragonfly.io/proxy role.
+	ProxyEnabled           bool
+	ProxyPublicURL         string
+	ProxyRegistries        []string
+	ProxyWebhookSecretName string
+	ProxyRobotSecretName   string
 
 	ManagerGRPCDomain  string
 	ManagerGRPCPort    int
@@ -111,6 +144,34 @@ func ExtrasName(cluster string) string { return objectName(cluster, "extras") }
 
 // MirrorName returns the containerd-mirror HelmOp and release name.
 func MirrorName(cluster string) string { return objectName(cluster, "containerd-mirror") }
+
+// HarborName returns the Harbor HelmOp and release name.
+func HarborName(cluster string) string { return objectName(cluster, "harbor") }
+
+// RegistryProxyName returns the registry-proxy HelmOp and release name.
+func RegistryProxyName(cluster string) string { return objectName(cluster, "registry-proxy") }
+
+// HarborAdminSecretName is the per-cluster downstream admin Secret.
+func HarborAdminSecretName(cluster string) string { return objectName(cluster, "harbor-admin") }
+
+// HarborTLSSecretName is the TLS Secret expected by the Harbor ingress.
+func HarborTLSSecretName(cluster string) string { return objectName(cluster, "harbor-tls") }
+
+// HarborDBSecretName is the generated internal database password Secret.
+func HarborDBSecretName(cluster string) string { return objectName(cluster, "harbor-db") }
+
+// HarborSecretKeyName is the generated Harbor core secret-key Secret.
+func HarborSecretKeyName(cluster string) string { return objectName(cluster, "harbor-secret") }
+
+// RegistryProxyWebhookSecretName is the Harbor webhook shared Secret.
+func RegistryProxyWebhookSecretName(cluster string) string {
+	return objectName(cluster, "registry-proxy-webhook")
+}
+
+// RegistryProxyRobotSecretName is the Harbor robot Secret.
+func RegistryProxyRobotSecretName(cluster string) string {
+	return objectName(cluster, "registry-proxy-robot")
+}
 
 // ManagerFullname returns the chart fullnameOverride that makes the Dragonfly
 // chart create the <cluster>-manager Service.

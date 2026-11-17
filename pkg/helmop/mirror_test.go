@@ -1,6 +1,41 @@
 package helmop
 
-import "testing"
+import (
+	"testing"
+
+	fleetv1alpha1 "github.com/rancher/fleet/pkg/apis/fleet.cattle.io/v1alpha1"
+)
+
+func TestMirrorHelmOpWithProxy(t *testing.T) {
+	c := testCluster()
+	c.ProxyEnabled = true
+	c.ProxyPublicURL = "https://proxy.example.com"
+	c.ProxyRegistries = []string{"docker.io"}
+	op := Mirror(c)
+
+	if got := dependsOnNames(op); len(got) != 2 || got[0] != "c1-data" || got[1] != "c1-registry-proxy" {
+		t.Errorf("dependsOn = %v, want data+registry-proxy", got)
+	}
+	values := op.Spec.Helm.Values.Data
+	if got := valueAt(t, values, "proxy", "enabled"); got != true {
+		t.Errorf("proxy.enabled = %v", got)
+	}
+	if got := valueAt(t, values, "proxy", "url"); got != "https://proxy.example.com" {
+		t.Errorf("proxy.url = %v", got)
+	}
+	registries, ok := valueAt(t, values, "proxy", "registries").([]string)
+	if !ok || len(registries) != 1 || registries[0] != "docker.io" {
+		t.Errorf("proxy.registries = %v", registries)
+	}
+}
+
+func dependsOnNames(op *fleetv1alpha1.HelmOp) []string {
+	names := make([]string, 0, len(op.Spec.DependsOn))
+	for _, item := range op.Spec.DependsOn {
+		names = append(names, item.Name)
+	}
+	return names
+}
 
 func TestMirrorHelmOp(t *testing.T) {
 	op := Mirror(testCluster())

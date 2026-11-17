@@ -74,6 +74,31 @@ extras:
     tlsSecret: ""
     traefikServersTransportEnabled: true
 
+# Harbor chart (external). Redis is the existing <cluster>-keydb HelmOp.
+harbor:
+  chart:
+    repo: https://helm.goharbor.io
+    name: harbor
+    version: 1.19.4
+
+# Smart registry proxy chart. Stateless, no PVC.
+registryProxy:
+  chart:
+    repo: https://gorizond.github.io/d7y-cattle-operator
+    name: registry-proxy
+    version: 0.1.0
+
+# External/existing Harbor and the public proxy endpoint. proxy.domain is the
+# operator-wide public proxy DNS name (no scheme); leave empty to disable the
+# proxy HelmOp even if a cluster has the proxy annotation.
+proxy:
+  domain: ""
+  harborURL: ""
+  # Secret in the operator/local namespace. It is copied per cluster and must
+  # contain HARBOR_ADMIN_PASSWORD before the Harbor/proxy HelmOps are applied.
+  harborAdminSecret: harbor-admin
+  registries: docker.io
+
 # Strict node-local containerd registry mirror for seed/data clusters.
 containerdMirror:
   chart:

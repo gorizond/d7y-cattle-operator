@@ -76,6 +76,13 @@ func TestReconcileLabelOnlyClusterConditions(t *testing.T) {
 			t.Errorf("%s reason = %q, want SeedDisabled", name, got.Reason)
 		}
 	}
+	for _, name := range []string{
+		string(conditionHarborReady), string(conditionRegistryProxyReady),
+	} {
+		if got := clusterStore.condition(name); got == nil || got.Status != corev1.ConditionFalse || got.Reason != "Disabled" {
+			t.Errorf("%s = %+v, want False/Disabled", name, got)
+		}
+	}
 }
 
 func TestUnlabeledClusterHasNoStatus(t *testing.T) {

@@ -50,6 +50,13 @@ type Options struct {
 	DragonflyChart              helmop.Chart
 	ExtrasChart                 helmop.Chart
 	MirrorChart                 helmop.Chart
+	HarborChart                 helmop.Chart
+	RegistryProxyChart          helmop.Chart
+	HarborIngressClass          string
+	ProxyDomain                 string
+	ProxyHarborURL              string
+	ProxyHarborAdminSecret      string
+	ProxyRegistries             []string
 	ExtrasIngressController     string
 	ExtrasIngressClassName      string
 	ExtrasIngressGRPCEnabled    bool
@@ -127,6 +134,23 @@ func (c *Controller) reconcile(key string, cluster *provv1.Cluster) (result *pro
 		errs = append(errs, err)
 	} else {
 		status.set(conditionKeyDBReady, true, "Ready", "KeyDB HelmOp applied")
+	}
+
+	if hc.HarborURL == "" {
+		hc.HarborURL = c.opts.ProxyHarborURL
+	}
+	if hc.HarborURL == "" && hc.HarborManaged && roles.HarborDomain != "" {
+		hc.HarborURL = "https://" + roles.HarborDomain
+	}
+	harborErr := c.ensureHarbor(cluster, hc, roles)
+	setHarborCondition(status, roles, harborErr)
+	if harborErr != nil {
+		errs = append(errs, harborErr)
+	}
+	proxyErr := c.ensureRegistryProxy(cluster, hc, roles, harborErr)
+	setRegistryProxyCondition(status, roles, proxyErr)
+	if proxyErr != nil {
+		errs = append(errs, proxyErr)
 	}
 
 	mtlsReady := true
@@ -250,6 +274,48 @@ func reasonFor(retrying bool) string {
 	return "RegistrationFailed"
 }
 
+func setHarborCondition(status *statusBuilder, roles Roles, err error) {
+	switch {
+	case !roles.Harbor:
+		status.set(conditionHarborReady, false, "Disabled", "Harbor is not enabled")
+		status.set(conditionHarborDomainMissing, false, "NotRequired", "Harbor is not enabled")
+	case roles.HarborURL != "" && validateHarborURL(roles.HarborURL) != nil:
+		status.set(conditionHarborReady, false, "HarborURLInvalid", "p2p.dragonfly.io/harbor-url is not an absolute https URL")
+		status.set(conditionHarborDomainMissing, false, "NotRequired", "using an external Harbor")
+	case roles.HarborURL != "":
+		status.set(conditionHarborReady, true, "External", "using the configured external Harbor")
+		status.set(conditionHarborDomainMissing, false, "NotRequired", "using an external Harbor")
+	case validateHarborDomain(roles.HarborDomain) != nil:
+		status.set(conditionHarborReady, false, "HarborDomainMissing", "p2p.dragonfly.io/harbor-domain is missing or invalid")
+		status.set(conditionHarborDomainMissing, true, "Invalid", "p2p.dragonfly.io/harbor-domain is missing or invalid")
+	case err != nil:
+		status.set(conditionHarborReady, false, "ApplyFailed", err.Error())
+		status.set(conditionHarborDomainMissing, false, "Valid", "Harbor domain is valid")
+	default:
+		status.set(conditionHarborReady, true, "Ready", "Harbor HelmOp applied")
+		status.set(conditionHarborDomainMissing, false, "Valid", "Harbor domain is valid")
+	}
+}
+
+func setRegistryProxyCondition(status *statusBuilder, roles Roles, err error) {
+	if !roles.Proxy {
+		status.set(conditionRegistryProxyReady, false, "Disabled", "registry proxy is not enabled")
+		return
+	}
+	if err != nil {
+		status.set(conditionRegistryProxyReady, false, "ApplyFailed", err.Error())
+		return
+	}
+	status.set(conditionRegistryProxyReady, true, "Ready", "registry proxy HelmOp applied")
+}
+
+func proxyPublicURL(domain string) string {
+	if domain == "" {
+		return ""
+	}
+	return "https://" + domain
+}
+
 func setSeedCondition(status *statusBuilder, cond condition.Cond, err error) {
 	if err != nil {
 		status.set(cond, false, "ApplyFailed", err.Error())
@@ -297,23 +363,37 @@ func (c *Controller) ensureMTLSSecret(cluster *provv1.Cluster) error {
 }
 
 func (c *Controller) helmopCluster(cluster *provv1.Cluster) helmop.Cluster {
+	roles := ResolveRoles(cluster)
 	hc := helmop.Cluster{
-		Name:               cluster.Name,
-		Namespace:          cluster.Namespace,
-		MTLSSecretName:     c.opts.MTLSSecretName,
-		Chart:              c.opts.DragonflyChart,
-		ExtrasChart:        c.opts.ExtrasChart,
-		MirrorChart:        c.opts.MirrorChart,
-		ManagerGRPCDomain:  c.opts.ManagerGRPCDomain,
-		ManagerGRPCPort:    c.opts.ManagerGRPCPort,
-		ManagerAPIHost:     c.opts.ManagerAPIHost,
-		SchedulerClusterID: schedulerClusterID(cluster),
-		SchedulerReplicas:  helmop.ReplicasOrOne(AnnotationSchedulerReplicas, cluster.Annotations[AnnotationSchedulerReplicas]),
-		SeedClientReplicas: helmop.ReplicasOrOne(AnnotationSeedClientReplicas, cluster.Annotations[AnnotationSeedClientReplicas]),
-		Monitoring:         monitoringEnabled(cluster),
-		P2PDataTLS:         p2pDataTLSEnabled(cluster),
-		Labels:             apply.Labels(cluster.Namespace, cluster.Name),
+		Name:                   cluster.Name,
+		Namespace:              cluster.Namespace,
+		MTLSSecretName:         c.opts.MTLSSecretName,
+		Chart:                  c.opts.DragonflyChart,
+		ExtrasChart:            c.opts.ExtrasChart,
+		MirrorChart:            c.opts.MirrorChart,
+		HarborChart:            c.opts.HarborChart,
+		RegistryProxyChart:     c.opts.RegistryProxyChart,
+		HarborAdminSecret:      helmop.HarborAdminSecretName(cluster.Name),
+		HarborSecretKey:        helmop.HarborSecretKeyName(cluster.Name),
+		ProxyWebhookSecretName: helmop.RegistryProxyWebhookSecretName(cluster.Name),
+		ProxyRobotSecretName:   helmop.RegistryProxyRobotSecretName(cluster.Name),
+		ProxyPublicURL:         proxyPublicURL(c.opts.ProxyDomain),
+		ProxyRegistries:        c.opts.ProxyRegistries,
+		ManagerGRPCDomain:      c.opts.ManagerGRPCDomain,
+		ManagerGRPCPort:        c.opts.ManagerGRPCPort,
+		ManagerAPIHost:         c.opts.ManagerAPIHost,
+		SchedulerClusterID:     schedulerClusterID(cluster),
+		SchedulerReplicas:      helmop.ReplicasOrOne(AnnotationSchedulerReplicas, cluster.Annotations[AnnotationSchedulerReplicas]),
+		SeedClientReplicas:     helmop.ReplicasOrOne(AnnotationSeedClientReplicas, cluster.Annotations[AnnotationSeedClientReplicas]),
+		Monitoring:             monitoringEnabled(cluster),
+		P2PDataTLS:             p2pDataTLSEnabled(cluster),
+		Labels:                 apply.Labels(cluster.Namespace, cluster.Name),
 	}
+	hc.HarborDomain = roles.HarborDomain
+	hc.HarborURL = roles.HarborURL
+	hc.HarborManaged = roles.Harbor && roles.HarborURL == ""
+	hc.HarborIngressClass = c.opts.HarborIngressClass
+	hc.ProxyEnabled = roles.Proxy
 	// The certificate revision is derived from the live Secret so a rotation
 	// changes pod template annotations exactly once. Missing ca.crt errors are
 	// reported by ensureMTLSSecret.
@@ -555,6 +635,8 @@ func (c *Controller) cleanupAll(cluster *provv1.Cluster) error {
 		helmop.KeyDBName(cluster.Name),
 		helmop.ManagerName(cluster.Name),
 		helmop.ExtrasName(cluster.Name),
+		helmop.HarborName(cluster.Name),
+		helmop.RegistryProxyName(cluster.Name),
 	} {
 		if err := c.deleteHelmOp(cluster, name); err != nil {
 			errs = append(errs, err)

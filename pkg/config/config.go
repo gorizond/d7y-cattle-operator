@@ -27,6 +27,14 @@ const (
 	DefaultMirrorChartRepo               = "https://gorizond.github.io/d7y-cattle-operator"
 	DefaultMirrorChartName               = "containerd-mirror"
 	DefaultMirrorChartVersion            = "0.1.0"
+	DefaultHarborChartRepo               = "https://helm.goharbor.io"
+	DefaultHarborChartName               = "harbor"
+	DefaultHarborChartVersion            = "1.19.4"
+	DefaultRegistryProxyChartRepo        = "https://gorizond.github.io/d7y-cattle-operator"
+	DefaultRegistryProxyChartName        = "registry-proxy"
+	DefaultRegistryProxyChartVersion     = "0.1.0"
+	DefaultProxyHarborAdminSecret        = "harbor-admin"
+	DefaultProxyRegistries               = "docker.io"
 	DefaultExtrasIngressController       = "nginx"
 	DefaultExtrasIngressClassName        = ""
 	DefaultExtrasIngressGRPCEnabled      = true
@@ -60,6 +68,16 @@ type Config struct {
 	MirrorChartRepo             string
 	MirrorChartName             string
 	MirrorChartVersion          string
+	HarborChartRepo             string
+	HarborChartName             string
+	HarborChartVersion          string
+	RegistryProxyChartRepo      string
+	RegistryProxyChartName      string
+	RegistryProxyChartVersion   string
+	ProxyDomain                 string
+	ProxyHarborURL              string
+	ProxyHarborAdminSecret      string
+	ProxyRegistries             string
 	ExtrasIngressController     string
 	ExtrasIngressClassName      string
 	ExtrasIngressGRPCEnabled    bool
@@ -117,6 +135,16 @@ func Load(args []string) (*Config, error) {
 	fs.StringVar(&cfg.MirrorChartRepo, "containerd-mirror-chart-repo", envOr("CONTAINERD_MIRROR_CHART_REPO", DefaultMirrorChartRepo), "Helm repository URL of the containerd-mirror chart")
 	fs.StringVar(&cfg.MirrorChartName, "containerd-mirror-chart-name", envOr("CONTAINERD_MIRROR_CHART_NAME", DefaultMirrorChartName), "containerd-mirror chart name")
 	fs.StringVar(&cfg.MirrorChartVersion, "containerd-mirror-chart-version", envOr("CONTAINERD_MIRROR_CHART_VERSION", DefaultMirrorChartVersion), "containerd-mirror chart version")
+	fs.StringVar(&cfg.HarborChartRepo, "harbor-chart-repo", envOr("HARBOR_CHART_REPO", DefaultHarborChartRepo), "Helm repository URL of the Harbor chart")
+	fs.StringVar(&cfg.HarborChartName, "harbor-chart-name", envOr("HARBOR_CHART_NAME", DefaultHarborChartName), "Harbor chart name")
+	fs.StringVar(&cfg.HarborChartVersion, "harbor-chart-version", envOr("HARBOR_CHART_VERSION", DefaultHarborChartVersion), "Harbor chart version")
+	fs.StringVar(&cfg.RegistryProxyChartRepo, "registry-proxy-chart-repo", envOr("REGISTRY_PROXY_CHART_REPO", DefaultRegistryProxyChartRepo), "Helm repository URL of the registry-proxy chart")
+	fs.StringVar(&cfg.RegistryProxyChartName, "registry-proxy-chart-name", envOr("REGISTRY_PROXY_CHART_NAME", DefaultRegistryProxyChartName), "registry-proxy chart name")
+	fs.StringVar(&cfg.RegistryProxyChartVersion, "registry-proxy-chart-version", envOr("REGISTRY_PROXY_CHART_VERSION", DefaultRegistryProxyChartVersion), "registry-proxy chart version")
+	fs.StringVar(&cfg.ProxyDomain, "proxy-domain", envOr("PROXY_DOMAIN", ""), "public registry proxy domain (DNS name, no scheme)")
+	fs.StringVar(&cfg.ProxyHarborURL, "proxy-harbor-url", envOr("PROXY_HARBOR_URL", ""), "existing/external Harbor base URL for the proxy")
+	fs.StringVar(&cfg.ProxyHarborAdminSecret, "proxy-harbor-admin-secret", envOr("PROXY_HARBOR_ADMIN_SECRET", DefaultProxyHarborAdminSecret), "name of the Harbor admin Secret in the operator namespace")
+	fs.StringVar(&cfg.ProxyRegistries, "proxy-registries", envOr("PROXY_REGISTRIES", DefaultProxyRegistries), "comma-separated upstream registry allowlist")
 	fs.StringVar(&cfg.ExtrasIngressController, "extras-ingress-controller", envOr("EXTRAS_INGRESS_CONTROLLER", DefaultExtrasIngressController), "extras Ingress controller: nginx or traefik")
 	fs.StringVar(&cfg.ExtrasIngressClassName, "extras-ingress-class-name", envOr("EXTRAS_INGRESS_CLASS_NAME", DefaultExtrasIngressClassName), "extras Ingress class name (empty uses the cluster default)")
 	fs.BoolVar(&cfg.ExtrasIngressGRPCEnabled, "extras-ingress-grpc-enabled", defaultGRPCEnabled, "render the extras gRPC Ingress")
@@ -222,6 +250,57 @@ func (c *Config) Validate() error {
 	}
 	if !chartVersionPattern.MatchString(c.MirrorChartVersion) {
 		add("--containerd-mirror-chart-version: %q is not a valid chart version", c.MirrorChartVersion)
+	}
+	if c.HarborChartRepo == "" {
+		add("--harbor-chart-repo is required")
+	} else if err := validateURL(c.HarborChartRepo, "http", "https"); err != nil {
+		add("--harbor-chart-repo: %v", err)
+	}
+	if c.HarborChartName == "" {
+		add("--harbor-chart-name is required")
+	} else if msgs := validation.IsDNS1123Label(c.HarborChartName); len(msgs) > 0 {
+		add("--harbor-chart-name: %s", strings.Join(msgs, "; "))
+	}
+	if !chartVersionPattern.MatchString(c.HarborChartVersion) {
+		add("--harbor-chart-version: %q is not a valid chart version", c.HarborChartVersion)
+	}
+	if c.RegistryProxyChartRepo == "" {
+		add("--registry-proxy-chart-repo is required")
+	} else if err := validateURL(c.RegistryProxyChartRepo, "http", "https"); err != nil {
+		add("--registry-proxy-chart-repo: %v", err)
+	}
+	if c.RegistryProxyChartName == "" {
+		add("--registry-proxy-chart-name is required")
+	} else if msgs := validation.IsDNS1123Label(c.RegistryProxyChartName); len(msgs) > 0 {
+		add("--registry-proxy-chart-name: %s", strings.Join(msgs, "; "))
+	}
+	if !chartVersionPattern.MatchString(c.RegistryProxyChartVersion) {
+		add("--registry-proxy-chart-version: %q is not a valid chart version", c.RegistryProxyChartVersion)
+	}
+	if c.ProxyDomain != "" {
+		if msgs := validation.IsDNS1123Subdomain(c.ProxyDomain); len(msgs) > 0 {
+			add("--proxy-domain: %s", strings.Join(msgs, "; "))
+		}
+	}
+	if c.ProxyHarborURL != "" {
+		if err := validateURL(c.ProxyHarborURL, "https"); err != nil {
+			add("--proxy-harbor-url: %v", err)
+		}
+	}
+	if c.ProxyHarborAdminSecret == "" {
+		add("--proxy-harbor-admin-secret is required")
+	} else if msgs := validation.IsDNS1123Subdomain(c.ProxyHarborAdminSecret); len(msgs) > 0 {
+		add("--proxy-harbor-admin-secret: %s", strings.Join(msgs, "; "))
+	}
+	for _, registry := range strings.Split(c.ProxyRegistries, ",") {
+		registry = strings.TrimSpace(registry)
+		if registry == "" {
+			add("--proxy-registries: contains an empty registry")
+			continue
+		}
+		if msgs := validation.IsDNS1123Subdomain(registry); len(msgs) > 0 {
+			add("--proxy-registries: %s: %s", registry, strings.Join(msgs, "; "))
+		}
 	}
 	switch c.ExtrasIngressController {
 	case "nginx", "traefik":
