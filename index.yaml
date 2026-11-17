@@ -18,6 +18,20 @@ entries:
     version: 0.1.0
   d7y-cattle-operator:
   - apiVersion: v2
+    appVersion: 0.1.31
+    created: "2026-11-17T11:11:31.16442017Z"
+    description: Dragonfly P2P operator for Rancher-managed RKE2 clusters
+    digest: 77c1164408f1ab6a3b259b6fb54183c0a618e63d5383b76cd0417fd26b9c39ed
+    home: https://github.com/gorizond/d7y-cattle-operator
+    kubeVersion: '>=1.28.0-0'
+    name: d7y-cattle-operator
+    sources:
+    - https://github.com/gorizond/d7y-cattle-operator
+    type: application
+    urls:
+    - https://github.com/gorizond/d7y-cattle-operator/releases/download/d7y-cattle-operator-0.1.31/d7y-cattle-operator-0.1.31.tgz
+    version: 0.1.31
+  - apiVersion: v2
     appVersion: 0.1.30
     created: "2026-11-17T09:57:55.45417923Z"
     description: Dragonfly P2P operator for Rancher-managed RKE2 clusters
@@ -553,6 +567,20 @@ entries:
     version: 0.1.0
   registry-proxy:
   - apiVersion: v2
+    appVersion: 0.1.31
+    created: "2026-11-17T11:11:31.722416631Z"
+    description: Smart OCI registry proxy fronting Harbor for Dragonfly/nydus clusters
+    digest: 19092d7621954662af0c56a7533d135158095520c938efe7e8e9e49c346aa8d5
+    home: https://github.com/gorizond/d7y-cattle-operator
+    kubeVersion: '>=1.28.0-0'
+    name: registry-proxy
+    sources:
+    - https://github.com/gorizond/d7y-cattle-operator
+    type: application
+    urls:
+    - https://github.com/gorizond/d7y-cattle-operator/releases/download/registry-proxy-0.1.10/registry-proxy-0.1.10.tgz
+    version: 0.1.10
+  - apiVersion: v2
     appVersion: 0.1.30
     created: "2026-11-17T09:57:56.038282318Z"
     description: Smart OCI registry proxy fronting Harbor for Dragonfly/nydus clusters
@@ -664,4 +692,4 @@ entries:
     urls:
     - https://github.com/gorizond/d7y-cattle-operator/releases/download/registry-proxy-0.1.0/registry-proxy-0.1.0.tgz
     version: 0.1.0
-generated: "2026-11-17T09:57:56.038478182Z"
+generated: "2026-11-17T11:11:31.722773332Z"
