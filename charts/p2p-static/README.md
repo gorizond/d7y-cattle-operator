@@ -148,9 +148,24 @@ ghcr.io/gorizond/nydus-snapshotter:v0.16.0-p2p.1
 ```
 
 It is built from `misc/snapshotter/Dockerfile` after building
-`containerd-nydus-grpc` and `nydus-overlayfs` from the patched source. The image
-is not the node runtime (the snapshotter is a host binary); use it as the
-binary source and populate the static store:
+`containerd-nydus-grpc` and `nydus-overlayfs` from the patched source
+(https://github.com/containerd/nydus-snapshotter/pull/824). The image is not the
+node runtime (the snapshotter is a host binary); use it as the binary source
+and populate the static store:
+
+```bash
+git clone https://github.com/gorizond/nydus-snapshotter.git
+cd nydus-snapshotter
+git checkout fix/certs-d-index-detection
+LDFLAGS='-s -w -X github.com/containerd/nydus-snapshotter/version.Version=v0.16.0-p2p.1'
+CGO_ENABLED=0 go build -trimpath -ldflags "$LDFLAGS" \
+  -o misc/snapshotter/containerd-nydus-grpc ./cmd/containerd-nydus-grpc
+CGO_ENABLED=0 go build -trimpath -ldflags "$LDFLAGS" \
+  -o misc/snapshotter/nydus-overlayfs ./cmd/nydus-overlayfs
+docker build -t ghcr.io/gorizond/nydus-snapshotter:v0.16.0-p2p.1 \
+  --build-arg NYDUS_VER=v2.4.5 misc/snapshotter
+rm -f misc/snapshotter/containerd-nydus-grpc misc/snapshotter/nydus-overlayfs
+```
 
 ```bash
 docker create --name nydus-artifacts ghcr.io/gorizond/nydus-snapshotter:v0.16.0-p2p.1
