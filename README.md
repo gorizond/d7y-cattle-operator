@@ -472,6 +472,42 @@ Conditions: `d7y.io/HarborReady`, `d7y.io/RegistryProxyReady`, and
 `d7y.io/HarborDomainMissing`. Missing/invalid domain keeps Harbor/proxy
 HelmOps absent and records the event/condition.
 
+## nydus-resolver (HTTPS MITM proxy)
+
+`cmd/nydus-resolver` is a separate node-local forward proxy for
+`nydus-snapshotter`. It is built into the same image as the operator and
+registry proxy and packaged as the independent `charts/nydus-resolver`
+DaemonSet. It is **not** wired into any operator HelmOp; nothing is deployed
+unless the chart is installed explicitly.
+
+The snapshotter keeps normal registry hostnames and sets
+`HTTPS_PROXY=http://127.0.0.1:3999`. The resolver accepts `CONNECT host:443`,
+terminates TLS with a leaf certificate signed by a local CA, and forwards
+`/v2/...` to `https://proxy.koldun.negash.ru/<registry>/v2/...` while
+preserving method, headers (`Authorization`, `Range`, `Accept`), query
+strings, and streaming bodies. `registry-1.docker.io` and `index.docker.io`
+map to `docker.io`; `ghcr.io`, `quay.io`, `registry.k8s.io`, `gcr.io`, and
+`mcr.microsoft.com` map to themselves. Unknown hosts fail closed with `403`.
+
+The CA is generated on first start under `/var/lib/nydus-resolver`
+(hostPath): `ca.crt` is public and `ca.key` stays mode `0600`. Snapshotter
+processes need `SSL_CERT_FILE=/var/lib/nydus-resolver/ca.crt`; `NO_PROXY` must
+cover loopback, cluster/service networks, and hosts that should bypass the
+proxy. The DaemonSet uses `hostNetwork: true` and binds only
+`127.0.0.1:3999`; it creates no PVC, Service, RBAC, or operator resources.
+
+```bash
+make nydus-resolver
+helm install nydus-resolver charts/nydus-resolver \
+  --namespace dragonfly-system \
+  --set image.tag=<tag containing /nydus-resolver>
+```
+
+The image and chart are `linux/amd64` only. A multi-arch
+nydus-snapshotter/P2P installer is future work; this change does not modify
+`p2p-install.sh`, the webhook payload, or any live workload. See
+`charts/nydus-resolver/README.md` for values, CA rotation, and known limits.
+
 ## Cluster annotations
 
 The operator only acts on Clusters labeled `p2p-dragonfly-io: "true"`.
@@ -696,7 +732,8 @@ make docker-build   # container image
 make docker-test    # go test ./... inside Docker
 make lint           # go vet ./... inside Docker
 make helm-lint      # helm lint every chart under charts/
-make helm-template  # render the operator, extras, and p2p-static charts
+make nydus-resolver # build the HTTPS MITM resolver binary
+make helm-template  # render the operator, extras, p2p-static, and resolver charts
 ```
 
 ## Security notes
@@ -715,11 +752,12 @@ Pushing a `v*` tag runs `.github/workflows/release.yml`:
 - lints every chart under `charts/` and publishes it with `chart-releaser` to
   the `gh-pages` branch.
 
-The repository charts are `d7y-cattle-operator`, `dragonfly-extras`, and
-`p2p-static`. The KeyDB chart is external (`enapter/keydb` `0.48.0` from
-`https://enapter.github.io/charts/`) and is not vendored or published here. The
-operator pins that external chart and submits the three-master, no-PVC values
-described above.
+The repository charts are `d7y-cattle-operator`, `dragonfly-extras`,
+`p2p-static`, `registry-proxy`, and `nydus-resolver`. The KeyDB chart is
+external (`enapter/keydb` `0.48.0` from
+`https://enapter.github.io/charts/`) and is not vendored or published here.
+The operator pins that external chart and submits the three-master, no-PVC
+values described above.
 
 ## License
 
