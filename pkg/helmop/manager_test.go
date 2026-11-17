@@ -15,7 +15,7 @@ func testCluster() Cluster {
 		ExtrasChart:        Chart{Repo: "https://charts.example.com", Name: "dragonfly-extras", Version: "0.1.8"},
 		MirrorChart:        Chart{Repo: "https://charts.example.com", Name: "containerd-mirror", Version: "0.1.0"},
 		HarborChart:        Chart{Repo: "https://helm.example.com", Name: "harbor", Version: "1.19.4"},
-		RegistryProxyChart: Chart{Repo: "https://charts.example.com", Name: "registry-proxy", Version: "0.1.2"},
+		RegistryProxyChart: Chart{Repo: "https://charts.example.com", Name: "registry-proxy", Version: "0.1.3"},
 		HarborDomain:       "harbor.example.com",
 		HarborAdminSecret:  "c1-harbor-admin",
 		ProxyRegistries:    []string{"docker.io"},

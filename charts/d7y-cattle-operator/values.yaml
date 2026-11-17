@@ -86,7 +86,7 @@ registryProxy:
   chart:
     repo: https://gorizond.github.io/d7y-cattle-operator
     name: registry-proxy
-    version: 0.1.2
+    version: 0.1.3
 
 # External/existing Harbor and the public proxy endpoint. proxy.domain is the
 # operator-wide public proxy DNS name (no scheme); leave empty to disable the
@@ -103,6 +103,12 @@ proxy:
   basePath: /proxy
   # Reuse the Harbor cert-manager Secret; empty uses the ingress default.
   tlsSecret: ""
+  # Optional /etc/hosts entries for the registry proxy pod, e.g. a
+  # same-cluster Harbor reached through the Traefik ClusterIP.
+  hostAliases: []
+  # - ip: 10.43.0.10
+  #   hostnames:
+  #     - harbor.koldun.negash.ru
 
 # Strict node-local containerd registry mirror for seed/data clusters.
 containerdMirror:

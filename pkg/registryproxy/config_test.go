@@ -60,22 +60,30 @@ func TestLoadConfig(t *testing.T) {
 	if cfg.ProjectName("docker.io") != "dockerio" {
 		t.Errorf("project mapping = %q", cfg.ProjectName("docker.io"))
 	}
+	if cfg.Webhook.Address != "https://proxy.example.com/api/convert" {
+		t.Errorf("webhook.address = %q, want the public URL default", cfg.Webhook.Address)
+	}
 }
 
 func TestLoadConfigEnvOverride(t *testing.T) {
 	t.Setenv("REGISTRY_ALLOWLIST", "docker.io,ghcr.io")
 	t.Setenv("PROXY_PUBLIC_URL", "https://proxy.env.example.com")
+	t.Setenv("WEBHOOK_ADDRESS", "http://c1-registry-proxy.dragonfly-system.svc:8080/api/convert")
 	cfg := testConfig(t)
 	if len(cfg.Registry.Allowlist) != 2 || cfg.Proxy.PublicURL != "https://proxy.env.example.com" {
 		t.Errorf("env override = %+v", cfg)
+	}
+	if cfg.Webhook.Address != "http://c1-registry-proxy.dragonfly-system.svc:8080/api/convert" {
+		t.Errorf("webhook.address = %q", cfg.Webhook.Address)
 	}
 }
 
 func TestConfigRejectsInvalid(t *testing.T) {
 	cases := map[string]string{
-		"missing harbor":  "registry: {allowlist: [docker.io]}\nmirror: {project: mirror}\nproxy: {public_url: https://proxy.example.com}\nwebhook: {secret_name: s}\nconversion: {nydusify: /bin/nydusify, nydus_image: /bin/nydus-image}\n",
-		"empty allowlist": "harbor: {url: https://harbor.example.com}\nmirror: {project: mirror}\nproxy: {public_url: https://proxy.example.com}\nwebhook: {secret_name: s}\nconversion: {nydusify: /bin/nydusify, nydus_image: /bin/nydus-image}\n",
-		"bad nydus path":  "harbor: {url: https://harbor.example.com}\nmirror: {project: mirror}\nregistry: {allowlist: [docker.io]}\nproxy: {public_url: https://proxy.example.com}\nwebhook: {secret_name: s}\nconversion: {nydusify: /bin/nydusify, nydus_image: nydus-image}\n",
+		"missing harbor":      "registry: {allowlist: [docker.io]}\nmirror: {project: mirror}\nproxy: {public_url: https://proxy.example.com}\nwebhook: {secret_name: s}\nconversion: {nydusify: /bin/nydusify, nydus_image: /bin/nydus-image}\n",
+		"empty allowlist":     "harbor: {url: https://harbor.example.com}\nmirror: {project: mirror}\nproxy: {public_url: https://proxy.example.com}\nwebhook: {secret_name: s}\nconversion: {nydusify: /bin/nydusify, nydus_image: /bin/nydus-image}\n",
+		"bad nydus path":      "harbor: {url: https://harbor.example.com}\nmirror: {project: mirror}\nregistry: {allowlist: [docker.io]}\nproxy: {public_url: https://proxy.example.com}\nwebhook: {secret_name: s}\nconversion: {nydusify: /bin/nydusify, nydus_image: nydus-image}\n",
+		"bad webhook address": "harbor: {url: https://harbor.example.com}\nmirror: {project: mirror}\nregistry: {allowlist: [docker.io]}\nproxy: {public_url: https://proxy.example.com}\nwebhook: {secret_name: s, address: not-a-url}\nconversion: {nydusify: /bin/nydusify, nydus_image: /bin/nydus-image}\n",
 	}
 	for name, content := range cases {
 		t.Run(name, func(t *testing.T) {

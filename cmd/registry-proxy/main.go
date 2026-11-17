@@ -150,7 +150,7 @@ func initialize(ctx context.Context, cfg *registryproxy.Config, bootstrap *boots
 	provisioner := &registryproxy.Provisioner{
 		Harbor:         harbor,
 		MirrorProject:  cfg.Mirror.Project,
-		WebhookAddress: strings.TrimRight(cfg.Proxy.PublicURL, "/") + "/api/convert",
+		WebhookAddress: cfg.Webhook.Address,
 		WebhookSecret:  webhookSecret,
 	}
 	sourceProjects := make([]string, 0, len(cfg.Registry.Allowlist))

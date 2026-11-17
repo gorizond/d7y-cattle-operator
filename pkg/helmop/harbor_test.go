@@ -83,12 +83,13 @@ func TestRegistryProxyHelmOp(t *testing.T) {
 	c.ProxyWebhookSecretName = "c1-registry-proxy-webhook"
 	c.ProxyRobotSecretName = "c1-registry-proxy-robot"
 	c.ProxyRegistries = []string{"docker.io"}
+	c.ProxyHostAliases = []HostAlias{{IP: "10.0.0.10", Hostnames: []string{"harbor.example.com"}}}
 	op := RegistryProxy(c)
 
 	if op.Name != "c1-registry-proxy" || op.Spec.TargetNamespace != TargetNamespace {
 		t.Errorf("name/target namespace = %s/%s", op.Name, op.Spec.TargetNamespace)
 	}
-	if op.Spec.Helm.Chart != "registry-proxy" || op.Spec.Helm.Version != "0.1.2" {
+	if op.Spec.Helm.Chart != "registry-proxy" || op.Spec.Helm.Version != "0.1.3" {
 		t.Errorf("chart = %s %s", op.Spec.Helm.Chart, op.Spec.Helm.Version)
 	}
 	if len(op.Spec.DependsOn) != 1 || op.Spec.DependsOn[0].Name != "c1-harbor" {
@@ -118,6 +119,20 @@ func TestRegistryProxyHelmOp(t *testing.T) {
 	if got := valueAt(t, values, "ingress", "tlsSecret"); got != "poligon-harbor-tls" {
 		t.Errorf("ingress.tlsSecret = %v", got)
 	}
+	if got := valueAt(t, values, "proxy", "basePath"); got != "/proxy" {
+		t.Errorf("proxy.basePath = %v", got)
+	}
+	if got := valueAt(t, values, "webhook", "address"); got != "http://c1-registry-proxy.dragonfly-system.svc:8080/api/convert" {
+		t.Errorf("webhook.address = %v", got)
+	}
+	aliases, ok := valueAt(t, values, "proxy", "hostAliases").([]any)
+	if !ok || len(aliases) != 1 {
+		t.Fatalf("proxy.hostAliases = %v", valueAt(t, values, "proxy", "hostAliases"))
+	}
+	alias, _ := aliases[0].(map[string]any)
+	if alias["ip"] != "10.0.0.10" {
+		t.Errorf("proxy.hostAliases[0].ip = %v", alias["ip"])
+	}
 	if got := valueAt(t, values, "conversion", "nydusImage"); got != "/usr/local/bin/nydus-image" {
 		t.Errorf("conversion.nydusImage = %v", got)
 	}
@@ -136,5 +151,8 @@ func TestRegistryProxyExternalHarborHasNoHarborDependency(t *testing.T) {
 	}
 	if got := valueAt(t, op.Spec.Helm.Values.Data, "harbor", "url"); got != "https://external.example.com" {
 		t.Errorf("harbor.url = %v", got)
+	}
+	if got := valueAt(t, op.Spec.Helm.Values.Data, "webhook", "address"); got != "" {
+		t.Errorf("webhook.address = %v, want the chart default for an external Harbor", got)
 	}
 }

@@ -55,7 +55,7 @@ const (
 
 	RegistryProxyChartRepo    = "https://gorizond.github.io/d7y-cattle-operator"
 	RegistryProxyChartName    = "registry-proxy"
-	RegistryProxyChartVersion = "0.1.2"
+	RegistryProxyChartVersion = "0.1.3"
 )
 
 // HelmOpGVR identifies Fleet HelmOps for the resource client.
@@ -68,6 +68,12 @@ type Chart struct {
 	Repo    string
 	Name    string
 	Version string
+}
+
+// HostAlias is a pod /etc/hosts entry, rendered as a Kubernetes HostAlias.
+type HostAlias struct {
+	IP        string   `json:"ip"`
+	Hostnames []string `json:"hostnames"`
 }
 
 // Cluster carries the per-cluster inputs shared by the HelmOp builders.
@@ -97,6 +103,7 @@ type Cluster struct {
 	ProxyPublicURL         string
 	ProxyBasePath          string
 	ProxyTLSSecret         string
+	ProxyHostAliases       []HostAlias
 	ProxyRegistries        []string
 	ProxyWebhookSecretName string
 	ProxyRobotSecretName   string

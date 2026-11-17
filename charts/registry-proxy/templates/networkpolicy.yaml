@@ -37,12 +37,30 @@ spec:
           protocol: UDP
         - port: 53
           protocol: TCP
+    # Traefik ingress ClusterIP: Harbor and the proxy are reached by hostname
+    # through the ingress controller rather than by Service DNS.
+    - to:
+        - namespaceSelector:
+            matchLabels:
+              kubernetes.io/metadata.name: kube-system
+      ports:
+        - port: 443
+          protocol: TCP
+    # Same-cluster Harbor (core, registry, jobservice).
+    - to:
+        - namespaceSelector:
+            matchLabels:
+              kubernetes.io/metadata.name: harbor
+      ports:
+        - port: 80
+          protocol: TCP
+        - port: 443
+          protocol: TCP
+    # External Harbor and upstream registries.
     - to:
         - ipBlock:
             cidr: 0.0.0.0/0
       ports:
         - port: 443
-          protocol: TCP
-        - port: 8080
           protocol: TCP
 {{- end }}

@@ -133,6 +133,7 @@ func run() error {
 		ProxyRegistries:          splitCSV(cfg.ProxyRegistries),
 		ProxyBasePath:            cfg.ProxyBasePath,
 		ProxyTLSSecret:           cfg.ProxyTLSSecret,
+		ProxyHostAliases:         cfg.ProxyHostAliases,
 		ExtrasIngressController:  cfg.ExtrasIngressController,
 		ExtrasIngressClassName:   cfg.ExtrasIngressClassName,
 		ExtrasIngressGRPCEnabled: cfg.ExtrasIngressGRPCEnabled,

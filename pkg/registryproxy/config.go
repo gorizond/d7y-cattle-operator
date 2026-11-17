@@ -32,6 +32,7 @@ type Config struct {
 	} `yaml:"proxy"`
 	Webhook struct {
 		SecretName string `yaml:"secret_name"`
+		Address    string `yaml:"address"`
 	} `yaml:"webhook"`
 	Conversion struct {
 		Platform   string `yaml:"platform"`
@@ -80,6 +81,9 @@ func applyEnv(cfg *Config) {
 	}
 	if value := os.Getenv("WEBHOOK_SECRET_NAME"); value != "" {
 		cfg.Webhook.SecretName = value
+	}
+	if value := os.Getenv("WEBHOOK_ADDRESS"); value != "" {
+		cfg.Webhook.Address = value
 	}
 	if value := os.Getenv("REGISTRY_ALLOWLIST"); value != "" {
 		cfg.Registry.Allowlist = splitCSV(value)
@@ -146,6 +150,11 @@ func (c *Config) Validate() error {
 	p, err := url.Parse(c.Proxy.PublicURL)
 	if err != nil || (p.Scheme != "http" && p.Scheme != "https") || p.Host == "" {
 		return fmt.Errorf("proxy.public_url must be an absolute http(s) URL")
+	}
+	if c.Webhook.Address == "" {
+		c.Webhook.Address = strings.TrimRight(c.Proxy.PublicURL, "/") + "/api/convert"
+	} else if u, err := url.Parse(c.Webhook.Address); err != nil || (u.Scheme != "http" && u.Scheme != "https") || u.Host == "" {
+		return fmt.Errorf("webhook.address must be an absolute http(s) URL")
 	}
 	if c.Webhook.SecretName == "" {
 		return fmt.Errorf("webhook.secret_name is required")

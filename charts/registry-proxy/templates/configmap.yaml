@@ -23,6 +23,7 @@ data:
       base_path: {{ .Values.proxy.basePath | quote }}
     webhook:
       secret_name: {{ .Values.webhook.secretName | quote }}
+      address: {{ .Values.webhook.address | quote }}
     conversion:
       platform: {{ .Values.conversion.platform | quote }}
       nydusify: {{ .Values.conversion.nydusify | quote }}
