@@ -6,6 +6,7 @@ import (
 	"net/http/httptest"
 	"strings"
 	"testing"
+	"time"
 )
 
 type fakeBackend struct {
@@ -179,5 +180,79 @@ func TestServerV2Root(t *testing.T) {
 	server.Handler().ServeHTTP(rec, httptest.NewRequest(http.MethodGet, "/v2/", nil))
 	if rec.Code != http.StatusOK || rec.Header().Get("Docker-Distribution-Api-Version") != "registry/2.0" {
 		t.Errorf("/v2/ = %d %q", rec.Code, rec.Header().Get("Docker-Distribution-Api-Version"))
+	}
+}
+
+// cancelProbeBackend blocks until the test releases it and records the
+// context error seen by the backend call.
+type cancelProbeBackend struct {
+	started chan struct{}
+	release chan struct{}
+	ctxErr  error
+}
+
+func (b *cancelProbeBackend) wait(ctx context.Context) {
+	close(b.started)
+	<-b.release
+	b.ctxErr = ctx.Err()
+}
+
+func (b *cancelProbeBackend) GetManifest(ctx context.Context, _, _, _ string) (Manifest, error) {
+	b.wait(ctx)
+	return Manifest{Digest: "sha256:manifest", MediaType: ociManifestType, Body: []byte("manifest")}, nil
+}
+
+func (b *cancelProbeBackend) GetBlob(ctx context.Context, _, _, _ string) ([]byte, error) {
+	b.wait(ctx)
+	return []byte("blob-data"), nil
+}
+
+func (b *cancelProbeBackend) Referrers(ctx context.Context, _, _, _ string) ([]byte, error) {
+	b.wait(ctx)
+	return []byte(`{"schemaVersion":2}`), nil
+}
+
+func TestServerDetachesBackendFromClientCancel(t *testing.T) {
+	for name, target := range map[string]string{
+		"manifest":  "/docker.io/v2/library/nginx/manifests/1.27",
+		"blob":      "/docker.io/v2/library/nginx/blobs/sha256:blob",
+		"referrers": "/docker.io/v2/library/nginx/referrers/sha256:manifest",
+	} {
+		t.Run(name, func(t *testing.T) {
+			backend := &cancelProbeBackend{started: make(chan struct{}), release: make(chan struct{})}
+			server := testServer(backend)
+			reqCtx, cancel := context.WithCancel(context.Background())
+			req := httptest.NewRequest(http.MethodGet, target, nil).WithContext(reqCtx)
+			rec := httptest.NewRecorder()
+			done := make(chan struct{})
+			go func() {
+				server.Handler().ServeHTTP(rec, req)
+				close(done)
+			}()
+
+			<-backend.started
+			cancel()
+			close(backend.release)
+			<-done
+
+			if backend.ctxErr != nil {
+				t.Errorf("backend context canceled with the client: %v", backend.ctxErr)
+			}
+			if rec.Code != http.StatusOK {
+				t.Errorf("response = %d %q, want 200", rec.Code, rec.Body.String())
+			}
+		})
+	}
+}
+
+func TestBackendContextIsBounded(t *testing.T) {
+	ctx, cancel := backendContext(context.Background())
+	defer cancel()
+	deadline, ok := ctx.Deadline()
+	if !ok {
+		t.Fatal("backend context has no deadline")
+	}
+	if remaining := time.Until(deadline); remaining <= 0 || remaining > backendTimeout {
+		t.Errorf("backend deadline = %v, want within (0, %v]", remaining, backendTimeout)
 	}
 }
