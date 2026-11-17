@@ -1,8 +1,11 @@
 package registryproxy
 
 import (
+	"bytes"
 	"context"
 	"errors"
+	"log/slog"
+	"strings"
 	"sync/atomic"
 	"testing"
 	"time"
@@ -77,6 +80,44 @@ func TestManagerRestartDoesNotRestoreInFlightJob(t *testing.T) {
 	}
 	if got := after.Pending(); got != 1 {
 		t.Fatalf("after next trigger pending = %d, want 1", got)
+	}
+}
+
+func TestManagerLogsJobFailure(t *testing.T) {
+	var logs bytes.Buffer
+	previous := slog.Default()
+	slog.SetDefault(slog.New(slog.NewTextHandler(&logs, nil)))
+	defer slog.SetDefault(previous)
+
+	manager := NewManager(func(context.Context, Job) error {
+		return errors.New("copy exploded")
+	})
+	ctx, cancel := context.WithCancel(context.Background())
+	defer cancel()
+	manager.Start(ctx)
+	job := Job{Registry: "docker.io", Repository: "library/nginx", Reference: "1.27", Digest: "sha256:abc"}
+	if !manager.Enqueue(job) {
+		t.Fatal("Enqueue() = false")
+	}
+	waitState(t, manager, job.Key(), "failed")
+	if state, _ := manager.State(job.Key()); state.LastError != "copy exploded" {
+		t.Errorf("LastError = %q", state.LastError)
+	}
+	logged := logs.String()
+	for _, want := range []string{
+		"registry proxy job failed",
+		"key=" + job.Key(),
+		"registry=docker.io",
+		"repository=library/nginx",
+		"attempt=3",
+		"copy exploded",
+	} {
+		if !strings.Contains(logged, want) {
+			t.Errorf("log does not contain %q: %s", want, logged)
+		}
+	}
+	if strings.Contains(strings.ToLower(logged), "secret") {
+		t.Errorf("log contains secret material: %s", logged)
 	}
 }
 

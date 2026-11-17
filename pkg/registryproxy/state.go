@@ -3,6 +3,7 @@ package registryproxy
 import (
 	"context"
 	"fmt"
+	"log/slog"
 	"strings"
 	"sync"
 	"time"
@@ -127,6 +128,14 @@ func (m *Manager) run(ctx context.Context, job Job) {
 			m.setState(key, "ready", attempt, "")
 			return
 		}
+		slog.Error("registry proxy job failed",
+			"key", key,
+			"registry", job.Registry,
+			"repository", job.Repository,
+			"reference", job.TagOrReference(),
+			"attempt", attempt,
+			"error", err,
+		)
 		m.setState(key, "converting", attempt, err.Error())
 	}
 	m.setState(key, "failed", 3, err.Error())
