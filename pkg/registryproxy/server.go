@@ -163,28 +163,57 @@ func (s *Server) serve(w http.ResponseWriter, r *http.Request) {
 }
 
 func (s *Server) route(r *http.Request) (string, string, bool) {
+	rest, ok := ociRest(r.URL.Path)
+	if !ok {
+		return "", "", false
+	}
+	if registry := queryRegistry(r); registry != "" {
+		return registry, rest, true
+	}
 	trimmed := strings.Trim(r.URL.Path, "/")
 	parts := strings.SplitN(trimmed, "/", 2)
-	if len(parts) == 2 && parts[1] == "v2" || (len(parts) == 2 && strings.HasPrefix(parts[1], "v2/")) {
-		return parts[0], "/" + parts[1], true
+	if len(parts) == 2 && (parts[1] == "v2" || strings.HasPrefix(parts[1], "v2/")) {
+		return parts[0], rest, true
+	}
+	return headerRegistry(r), rest, true
+}
+
+func ociRest(raw string) (string, bool) {
+	trimmed := strings.Trim(raw, "/")
+	parts := strings.SplitN(trimmed, "/", 2)
+	if len(parts) == 2 && (parts[1] == "v2" || strings.HasPrefix(parts[1], "v2/")) {
+		return "/" + parts[1], true
 	}
 	if len(parts) == 1 && parts[0] == "v2" {
-		return headerRegistry(r), "/v2/", true
+		return "/v2/", true
 	}
-	if strings.HasPrefix(r.URL.Path, "/v2/") {
-		return headerRegistry(r), r.URL.Path, true
+	if strings.HasPrefix(raw, "/v2/") {
+		return raw, true
 	}
-	return "", "", false
+	return "", false
+}
+
+func queryRegistry(r *http.Request) string {
+	return normalizeRegistry(r.URL.Query().Get("ns"))
 }
 
 func headerRegistry(r *http.Request) string {
-	raw := strings.TrimSpace(r.Header.Get("X-Dragonfly-Registry"))
+	return normalizeRegistry(r.Header.Get("X-Dragonfly-Registry"))
+}
+
+func normalizeRegistry(raw string) string {
+	raw = strings.TrimSpace(raw)
 	if raw == "" {
 		return ""
 	}
 	if parsed, err := url.Parse(raw); err == nil && parsed.Host != "" {
-		raw = strings.Trim(parsed.Path, "/")
+		if pathPart := strings.Trim(parsed.Path, "/"); pathPart != "" {
+			raw = pathPart
+		} else {
+			raw = parsed.Host
+		}
 	}
+	raw = strings.Trim(raw, "/")
 	if raw == "" {
 		return ""
 	}
