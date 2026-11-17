@@ -2,8 +2,8 @@ apiVersion: v2
 name: registry-proxy
 description: Smart OCI registry proxy fronting Harbor for Dragonfly/nydus clusters
 type: application
-version: 0.1.6
-appVersion: "0.1.27"
+version: 0.1.7
+appVersion: "0.1.28"
 kubeVersion: ">=1.28.0-0"
 home: https://github.com/gorizond/d7y-cattle-operator
 sources:

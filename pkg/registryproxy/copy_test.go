@@ -63,3 +63,49 @@ func TestCopierCopiesToMirrorAndLeavesSourceUntouched(t *testing.T) {
 		t.Errorf("source registry was written: %s", key)
 	}
 }
+
+func TestCopierCopiesOCIIndexChildren(t *testing.T) {
+	source := newFakeRegistry()
+	mirror := newFakeRegistry()
+	index := []byte(`{"schemaVersion":2,"mediaType":"application/vnd.oci.image.index.v1+json","manifests":[{"mediaType":"application/vnd.oci.image.manifest.v1+json","digest":"sha256:child1","platform":{"architecture":"amd64","os":"linux"}},{"mediaType":"application/vnd.oci.image.manifest.v1+json","digest":"sha256:child2","platform":{"architecture":"arm64","os":"linux"}}]}`)
+	source.manifests["dockerio/library/nginx:1.27"] = Manifest{Digest: "sha256:index", MediaType: ociIndexType, Body: index}
+	children := map[string]string{
+		"sha256:child1": `{"schemaVersion":2,"mediaType":"application/vnd.oci.image.manifest.v1+json","config":{"digest":"sha256:config1"},"layers":[{"digest":"sha256:layer1"}]}`,
+		"sha256:child2": `{"schemaVersion":2,"mediaType":"application/vnd.oci.image.manifest.v1+json","config":{"digest":"sha256:config2"},"layers":[{"digest":"sha256:layer2"}]}`,
+	}
+	for digest, body := range children {
+		source.manifests["dockerio/library/nginx:"+digest] = Manifest{Digest: digest, MediaType: ociManifestType, Body: []byte(body)}
+	}
+	for _, digest := range []string{"sha256:config1", "sha256:layer1", "sha256:config2", "sha256:layer2"} {
+		source.blobs["dockerio/library/nginx:"+digest] = []byte(digest)
+	}
+
+	copier := &Copier{Source: source, Mirror: mirror, MirrorProject: "mirror"}
+	digest, err := copier.Copy(context.Background(), "docker.io", "library/nginx", "1.27")
+	if err != nil {
+		t.Fatalf("Copy() error = %v", err)
+	}
+	if digest != "sha256:index" {
+		t.Errorf("digest = %q", digest)
+	}
+	top, ok := mirror.manifests["mirror/docker.io/library/nginx:1.27"]
+	if !ok || string(top.Body) != string(index) {
+		t.Error("mirror index was not written with the original descriptors")
+	}
+	for _, child := range []string{"sha256:child1", "sha256:child2"} {
+		if _, ok := mirror.manifests["mirror/docker.io/library/nginx:"+child]; !ok {
+			t.Errorf("mirror child manifest %s was not written", child)
+		}
+	}
+	for _, blob := range []string{"sha256:config1", "sha256:layer1", "sha256:config2", "sha256:layer2"} {
+		if len(mirror.blobs["mirror/docker.io/library/nginx:"+blob]) == 0 {
+			t.Errorf("mirror blob %s was not written", blob)
+		}
+	}
+	if _, err := copier.Copy(context.Background(), "docker.io", "library/nginx", "1.27"); err != nil {
+		t.Fatalf("Copy(idempotent) error = %v", err)
+	}
+	for key := range source.puts {
+		t.Errorf("source registry was written: %s", key)
+	}
+}

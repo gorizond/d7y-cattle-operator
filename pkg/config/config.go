@@ -36,7 +36,7 @@ const (
 	DefaultHarborChartVersion            = "1.19.4"
 	DefaultRegistryProxyChartRepo        = "https://gorizond.github.io/d7y-cattle-operator"
 	DefaultRegistryProxyChartName        = "registry-proxy"
-	DefaultRegistryProxyChartVersion     = "0.1.6"
+	DefaultRegistryProxyChartVersion     = "0.1.7"
 	DefaultProxyHarborAdminSecret        = "harbor-admin"
 	DefaultProxyRegistries               = "docker.io"
 	DefaultProxyBasePath                 = "/proxy"
