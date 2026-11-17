@@ -23,8 +23,8 @@ type Manifest struct {
 // Registry is the subset of the OCI distribution API used by the proxy.
 type Registry interface {
 	GetManifest(ctx context.Context, repo, ref string) (Manifest, error)
-	GetBlob(ctx context.Context, repo, digest string) ([]byte, error)
-	PutBlob(ctx context.Context, repo, digest string, body []byte) error
+	GetBlob(ctx context.Context, repo, digest, rangeHeader string) (io.ReadCloser, int64, string, error)
+	PutBlob(ctx context.Context, repo, digest string, body io.Reader, size int64) error
 	PutManifest(ctx context.Context, repo, ref, mediaType string, body []byte) error
 	Referrers(ctx context.Context, repo, digest string) ([]byte, error)
 }
@@ -105,20 +105,34 @@ func (r *HTTPRegistry) GetManifest(ctx context.Context, repo, ref string) (Manif
 	return Manifest{Digest: digest, MediaType: resp.Header.Get("Content-Type"), Body: body}, nil
 }
 
-func (r *HTTPRegistry) GetBlob(ctx context.Context, repo, digest string) ([]byte, error) {
-	resp, err := r.do(ctx, http.MethodGet, "/v2/"+repo+"/blobs/"+digest, nil)
+// GetBlob opens a blob stream. Range is passed through to the registry and
+// may yield a 206 response; the returned content length is the selected range
+// length and contentRange is non-empty for partial content.
+func (r *HTTPRegistry) GetBlob(ctx context.Context, repo, digest, rangeHeader string) (io.ReadCloser, int64, string, error) {
+	req, err := http.NewRequestWithContext(ctx, http.MethodGet,
+		strings.TrimRight(r.BaseURL, "/")+"/v2/"+repo+"/blobs/"+digest, nil)
 	if err != nil {
-		return nil, err
+		return nil, 0, "", err
 	}
-	defer resp.Body.Close()
-	body, _ := io.ReadAll(resp.Body)
-	if resp.StatusCode != http.StatusOK {
-		return nil, &RegistryError{Status: resp.StatusCode, Op: "get blob", Body: string(body)}
+	if rangeHeader != "" {
+		req.Header.Set("Range", rangeHeader)
 	}
-	return body, nil
+	if r.Username != "" {
+		req.SetBasicAuth(r.Username, r.Password)
+	}
+	resp, err := r.client().Do(req)
+	if err != nil {
+		return nil, 0, "", err
+	}
+	if resp.StatusCode != http.StatusOK && resp.StatusCode != http.StatusPartialContent {
+		defer resp.Body.Close()
+		body, _ := io.ReadAll(io.LimitReader(resp.Body, 64<<10))
+		return nil, 0, "", &RegistryError{Status: resp.StatusCode, Op: "get blob", Body: string(body)}
+	}
+	return resp.Body, resp.ContentLength, resp.Header.Get("Content-Range"), nil
 }
 
-func (r *HTTPRegistry) PutBlob(ctx context.Context, repo, digest string, body []byte) error {
+func (r *HTTPRegistry) PutBlob(ctx context.Context, repo, digest string, body io.Reader, size int64) error {
 	head, err := r.do(ctx, http.MethodHead, "/v2/"+repo+"/blobs/"+digest, nil)
 	if err == nil {
 		head.Body.Close()
@@ -146,9 +160,12 @@ func (r *HTTPRegistry) PutBlob(ctx context.Context, repo, digest string, body []
 	query := upload.Query()
 	query.Set("digest", digest)
 	upload.RawQuery = query.Encode()
-	req, err := http.NewRequestWithContext(ctx, http.MethodPut, upload.String(), bytes.NewReader(body))
+	req, err := http.NewRequestWithContext(ctx, http.MethodPut, upload.String(), body)
 	if err != nil {
 		return err
+	}
+	if size >= 0 {
+		req.ContentLength = size
 	}
 	req.Header.Set("Content-Type", "application/octet-stream")
 	if r.Username != "" {

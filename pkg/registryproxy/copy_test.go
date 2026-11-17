@@ -1,29 +1,47 @@
 package registryproxy
 
 import (
+	"bytes"
 	"context"
+	"io"
+	"net/http"
 	"testing"
 )
 
 type fakeRegistry struct {
 	manifests map[string]Manifest
 	blobs     map[string][]byte
+	blobSizes map[string]int64
 	puts      map[string]int
 }
 
 func newFakeRegistry() *fakeRegistry {
-	return &fakeRegistry{manifests: map[string]Manifest{}, blobs: map[string][]byte{}, puts: map[string]int{}}
+	return &fakeRegistry{
+		manifests: map[string]Manifest{},
+		blobs:     map[string][]byte{},
+		blobSizes: map[string]int64{},
+		puts:      map[string]int{},
+	}
 }
 
 func (f *fakeRegistry) GetManifest(_ context.Context, repo, ref string) (Manifest, error) {
 	return f.manifests[repo+":"+ref], nil
 }
-func (f *fakeRegistry) GetBlob(_ context.Context, repo, digest string) ([]byte, error) {
-	return f.blobs[repo+":"+digest], nil
+func (f *fakeRegistry) GetBlob(_ context.Context, repo, digest, _ string) (io.ReadCloser, int64, string, error) {
+	body, ok := f.blobs[repo+":"+digest]
+	if !ok {
+		return nil, 0, "", &RegistryError{Status: http.StatusNotFound, Op: "get blob"}
+	}
+	return io.NopCloser(bytes.NewReader(body)), int64(len(body)), "", nil
 }
-func (f *fakeRegistry) PutBlob(_ context.Context, repo, digest string, body []byte) error {
+func (f *fakeRegistry) PutBlob(_ context.Context, repo, digest string, body io.Reader, size int64) error {
+	data, err := io.ReadAll(body)
+	if err != nil {
+		return err
+	}
 	f.puts["blob:"+repo+":"+digest]++
-	f.blobs[repo+":"+digest] = body
+	f.blobs[repo+":"+digest] = data
+	f.blobSizes[repo+":"+digest] = size
 	return nil
 }
 func (f *fakeRegistry) PutManifest(_ context.Context, repo, ref, _ string, body []byte) error {
@@ -98,8 +116,12 @@ func TestCopierCopiesOCIIndexChildren(t *testing.T) {
 		}
 	}
 	for _, blob := range []string{"sha256:config1", "sha256:layer1", "sha256:config2", "sha256:layer2"} {
-		if len(mirror.blobs["mirror/docker.io/library/nginx:"+blob]) == 0 {
+		key := "mirror/docker.io/library/nginx:" + blob
+		if len(mirror.blobs[key]) == 0 {
 			t.Errorf("mirror blob %s was not written", blob)
+		}
+		if mirror.blobSizes[key] != int64(len(source.blobs["dockerio/library/nginx:"+blob])) {
+			t.Errorf("mirror blob %s size = %d", blob, mirror.blobSizes[key])
 		}
 	}
 	if _, err := copier.Copy(context.Background(), "docker.io", "library/nginx", "1.27"); err != nil {

@@ -1,12 +1,13 @@
 package registryproxy
 
 import (
-	"bytes"
 	"context"
 	"fmt"
+	"io"
 	"net/http"
 	"net/url"
 	"path"
+	"strconv"
 	"strings"
 	"sync/atomic"
 	"time"
@@ -15,7 +16,7 @@ import (
 // Backend serves manifests, blobs, and referrers for one upstream registry.
 type Backend interface {
 	GetManifest(ctx context.Context, registry, repo, ref string) (Manifest, error)
-	GetBlob(ctx context.Context, registry, repo, digest string) ([]byte, error)
+	GetBlob(ctx context.Context, registry, repo, digest, rangeHeader string) (io.ReadCloser, int64, string, error)
 	Referrers(ctx context.Context, registry, repo, digest string) ([]byte, error)
 }
 
@@ -66,16 +67,20 @@ func (b *HarborBackend) GetManifest(ctx context.Context, registry, repo, ref str
 	return b.Source.GetManifest(ctx, sourceRepo(registry, repo), ref)
 }
 
-func (b *HarborBackend) GetBlob(ctx context.Context, registry, repo, digest string) ([]byte, error) {
+func (b *HarborBackend) GetBlob(ctx context.Context, registry, repo, digest, rangeHeader string) (io.ReadCloser, int64, string, error) {
 	if err := b.ensure(ctx, registry); err != nil {
-		return nil, err
+		return nil, 0, "", err
 	}
 	if b.Mirror != nil {
-		if blob, err := b.Mirror.GetBlob(ctx, b.mirrorRepo(registry, repo), digest); err == nil {
-			return blob, nil
+		body, size, contentRange, err := b.Mirror.GetBlob(ctx, b.mirrorRepo(registry, repo), digest, rangeHeader)
+		if err == nil {
+			return body, size, contentRange, nil
+		}
+		if body != nil {
+			body.Close()
 		}
 	}
-	return b.Source.GetBlob(ctx, sourceRepo(registry, repo), digest)
+	return b.Source.GetBlob(ctx, sourceRepo(registry, repo), digest, rangeHeader)
 }
 
 func (b *HarborBackend) Referrers(ctx context.Context, registry, repo, digest string) ([]byte, error) {
@@ -282,14 +287,29 @@ func (s *Server) manifest(w http.ResponseWriter, r *http.Request, registry, repo
 func (s *Server) blob(w http.ResponseWriter, r *http.Request, registry, repo, digest string) {
 	ctx, cancel := backendContext(r.Context())
 	defer cancel()
-	body, err := s.Backend.GetBlob(ctx, registry, repo, digest)
+	body, size, contentRange, err := s.Backend.GetBlob(ctx, registry, repo, digest, r.Header.Get("Range"))
 	if err != nil {
 		s.writeError(w, err)
 		return
 	}
+	defer body.Close()
 	w.Header().Set("Content-Type", "application/octet-stream")
 	w.Header().Set("Docker-Content-Digest", digest)
-	http.ServeContent(w, r, digest, time.Time{}, bytes.NewReader(body))
+	if size >= 0 {
+		w.Header().Set("Content-Length", strconv.FormatInt(size, 10))
+	}
+	status := http.StatusOK
+	if contentRange != "" {
+		w.Header().Set("Content-Range", contentRange)
+		status = http.StatusPartialContent
+	}
+	w.WriteHeader(status)
+	if r.Method == http.MethodHead {
+		return
+	}
+	if _, err := io.Copy(w, body); err != nil {
+		s.errors.Add(1)
+	}
 }
 
 func (s *Server) referrers(w http.ResponseWriter, r *http.Request, registry, repo, digest string) {
