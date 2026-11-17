@@ -36,6 +36,7 @@ type HarborProject struct {
 }
 
 type HarborRobot struct {
+	ID     int    `json:"id"`
 	Name   string `json:"name"`
 	Secret string `json:"secret"`
 }
@@ -249,8 +250,16 @@ func (h *HarborClient) EnsureSystemRobot(ctx context.Context, name string, sourc
 		return HarborRobot{}, err
 	}
 	for _, item := range list {
-		if item.Name == name {
+		if robotName(item.Name) != name {
+			continue
+		}
+		if item.Secret != "" {
 			return item, nil
+		}
+		// Harbor only returns a robot secret on creation. Delete the
+		// secret-less leftover so the POST below issues fresh credentials.
+		if _, err := h.do(ctx, http.MethodDelete, "/api/v2.0/robots/"+strconv.Itoa(item.ID), nil, nil); err != nil {
+			return HarborRobot{}, err
 		}
 	}
 	permissions := make([]map[string]any, 0, len(sourceProjects)+1)
@@ -283,12 +292,16 @@ func (h *HarborClient) EnsureSystemRobot(ctx context.Context, name string, sourc
 		return HarborRobot{}, err
 	}
 	for _, item := range created {
-		if item.Name == name {
+		if robotName(item.Name) == name {
 			return item, nil
 		}
 	}
 	return HarborRobot{}, fmt.Errorf("harbor robot %q not found after create", name)
 }
+
+// robotName normalizes Harbor's login name for system robots, which is
+// returned as "robot$<name>".
+func robotName(name string) string { return strings.TrimPrefix(name, "robot$") }
 
 // Provisioner creates the registry, read-only proxy project, writable mirror,
 // and webhook policy on the first use of an upstream registry.

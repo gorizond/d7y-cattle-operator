@@ -5,6 +5,8 @@ import (
 	"encoding/json"
 	"net/http"
 	"net/http/httptest"
+	"strconv"
+	"strings"
 	"sync"
 	"testing"
 )
@@ -70,11 +72,25 @@ func (f *fakeHarbor) handler() http.Handler {
 		case r.Method == http.MethodGet && r.URL.Path == "/api/v2.0/robots":
 			_ = json.NewEncoder(w).Encode(f.robots)
 		case r.Method == http.MethodPost && r.URL.Path == "/api/v2.0/robots":
+			var body struct {
+				Name string `json:"name"`
+			}
+			_ = json.NewDecoder(r.Body).Decode(&body)
 			f.posts["robot"]++
-			robot := HarborRobot{Name: "d7y-registry-proxy", Secret: "robot-secret"}
+			robot := HarborRobot{ID: len(f.robots) + 1, Name: "robot$" + body.Name, Secret: "robot-secret"}
 			f.robots = append(f.robots, robot)
 			_ = json.NewEncoder(w).Encode(robot)
 			w.WriteHeader(http.StatusCreated)
+		case r.Method == http.MethodDelete && strings.HasPrefix(r.URL.Path, "/api/v2.0/robots/"):
+			id, _ := strconv.Atoi(strings.TrimPrefix(r.URL.Path, "/api/v2.0/robots/"))
+			f.posts["robot_delete"]++
+			for i, robot := range f.robots {
+				if robot.ID == id {
+					f.robots = append(f.robots[:i], f.robots[i+1:]...)
+					break
+				}
+			}
+			w.WriteHeader(http.StatusOK)
 		default:
 			http.NotFound(w, r)
 		}
@@ -194,6 +210,57 @@ func TestEnsureRobotSecretUsesExistingCredentials(t *testing.T) {
 	}
 	if robot.Name != "robot$d7y" || robot.Secret != "existing" {
 		t.Errorf("robot = %+v, want persisted credentials", robot)
+	}
+}
+
+func TestEnsureSystemRobotMatchesPrefixedName(t *testing.T) {
+	fake := &fakeHarbor{robots: []HarborRobot{{
+		ID: 9, Name: "robot$d7y-registry-proxy", Secret: "existing-secret",
+	}}}
+	server := httptest.NewServer(fake.handler())
+	defer server.Close()
+
+	robot, err := (&HarborClient{BaseURL: server.URL}).EnsureSystemRobot(
+		context.Background(), "d7y-registry-proxy", []string{"dockerio"}, "mirror")
+	if err != nil {
+		t.Fatalf("EnsureSystemRobot() error = %v", err)
+	}
+	if robot.Name != "robot$d7y-registry-proxy" || robot.Secret != "existing-secret" {
+		t.Errorf("robot = %+v, want the existing robot", robot)
+	}
+	fake.mu.Lock()
+	defer fake.mu.Unlock()
+	if fake.posts["robot"] != 0 || fake.posts["robot_delete"] != 0 {
+		t.Errorf("robot POST/DELETE = %d/%d, want 0/0", fake.posts["robot"], fake.posts["robot_delete"])
+	}
+}
+
+func TestEnsureSystemRobotRecreatesSecretlessRobot(t *testing.T) {
+	fake := &fakeHarbor{robots: []HarborRobot{{
+		ID: 7, Name: "robot$d7y-registry-proxy",
+	}}}
+	server := httptest.NewServer(fake.handler())
+	defer server.Close()
+	harbor := &HarborClient{BaseURL: server.URL}
+
+	robot, err := harbor.EnsureSystemRobot(context.Background(), "d7y-registry-proxy", []string{"dockerio"}, "mirror")
+	if err != nil {
+		t.Fatalf("EnsureSystemRobot() error = %v", err)
+	}
+	if robot.Name != "robot$d7y-registry-proxy" || robot.Secret == "" {
+		t.Errorf("robot = %+v, want recreated robot with a secret", robot)
+	}
+	// A second call reuses the recreated robot instead of deleting it again.
+	if _, err := harbor.EnsureSystemRobot(context.Background(), "d7y-registry-proxy", []string{"dockerio"}, "mirror"); err != nil {
+		t.Fatalf("EnsureSystemRobot(idempotent) error = %v", err)
+	}
+	fake.mu.Lock()
+	defer fake.mu.Unlock()
+	if fake.posts["robot_delete"] != 1 || fake.posts["robot"] != 1 {
+		t.Errorf("robot DELETE/POST = %d/%d, want 1/1", fake.posts["robot_delete"], fake.posts["robot"])
+	}
+	if len(fake.robots) != 1 {
+		t.Errorf("robots = %+v, want exactly one", fake.robots)
 	}
 }
 
