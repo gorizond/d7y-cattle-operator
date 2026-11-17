@@ -19,6 +19,17 @@ type Backend interface {
 	Referrers(ctx context.Context, registry, repo, digest string) ([]byte, error)
 }
 
+// backendTimeout bounds the upstream fetch after the client request is
+// detached from it.
+const backendTimeout = 2 * time.Minute
+
+// backendContext detaches the upstream call from the client request. dfdaemon
+// cancels cold pulls early; the Harbor fetch should still complete and warm
+// the cache instead of returning "context canceled".
+func backendContext(ctx context.Context) (context.Context, context.CancelFunc) {
+	return context.WithTimeout(context.WithoutCancel(ctx), backendTimeout)
+}
+
 // HarborBackend reads the writable mirror first and falls back to the Harbor
 // proxy project (source cache). It never writes from the read path.
 type HarborBackend struct {
@@ -248,7 +259,9 @@ func splitOCIPath(value string) (repo, kind, ref string, ok bool) {
 }
 
 func (s *Server) manifest(w http.ResponseWriter, r *http.Request, registry, repo, ref string) {
-	manifest, err := s.Backend.GetManifest(r.Context(), registry, repo, ref)
+	ctx, cancel := backendContext(r.Context())
+	defer cancel()
+	manifest, err := s.Backend.GetManifest(ctx, registry, repo, ref)
 	if err != nil {
 		s.writeError(w, err)
 		return
@@ -267,7 +280,9 @@ func (s *Server) manifest(w http.ResponseWriter, r *http.Request, registry, repo
 }
 
 func (s *Server) blob(w http.ResponseWriter, r *http.Request, registry, repo, digest string) {
-	body, err := s.Backend.GetBlob(r.Context(), registry, repo, digest)
+	ctx, cancel := backendContext(r.Context())
+	defer cancel()
+	body, err := s.Backend.GetBlob(ctx, registry, repo, digest)
 	if err != nil {
 		s.writeError(w, err)
 		return
@@ -278,7 +293,9 @@ func (s *Server) blob(w http.ResponseWriter, r *http.Request, registry, repo, di
 }
 
 func (s *Server) referrers(w http.ResponseWriter, r *http.Request, registry, repo, digest string) {
-	body, err := s.Backend.Referrers(r.Context(), registry, repo, digest)
+	ctx, cancel := backendContext(r.Context())
+	defer cancel()
+	body, err := s.Backend.Referrers(ctx, registry, repo, digest)
 	if err != nil {
 		s.writeError(w, err)
 		return
