@@ -88,10 +88,6 @@ spec:
               value: {{ .Values.proxy.tlsSecret | quote }}
             - name: PROXY_HOST_ALIASES
               value: {{ .Values.proxy.hostAliases | default list | toJson | quote }}
-            - name: RESOLVER_UPSTREAM
-              value: {{ .Values.resolver.upstream | quote }}
-            - name: RESOLVER_LISTEN
-              value: {{ .Values.resolver.listen | quote }}
             - name: EXTRAS_INGRESS_CONTROLLER
               value: {{ .Values.extras.ingress.controller | quote }}
             - name: EXTRAS_INGRESS_CLASS_NAME

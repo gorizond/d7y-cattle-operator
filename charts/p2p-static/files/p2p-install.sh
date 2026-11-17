@@ -15,20 +15,20 @@ CERT_DIR="/etc/dragonfly/certs"
 DFGET_CONFIG="/etc/dragonfly/dfget.yaml"
 DYNCONFIG="/etc/dragonfly/dynconfig.yaml"
 NYDUS_DIR="/etc/nydus"
+# Static-store assets for nydusd/nydus-image/nydus-overlayfs. The host
+# snapshotter is a separate patched release, see below.
 NYDUS_VERSION="${NYDUS_VERSION:-v0.16.0}"
-NYDUS_BINARIES="containerd-nydus-grpc
-nydusd
+NYDUS_BINARIES="nydusd
 nydus-image
 nydus-overlayfs"
-RESOLVER_BINARY="nydus-resolver"
-# Bump the default with the release tag, or override for a pinned tag/latest.
-RESOLVER_VERSION="${RESOLVER_VERSION:-v0.1.33}"
-RESOLVER_ASSET="${RESOLVER_ASSET:-nydus-resolver-linux-amd64}"
-GH_REPO="${GH_REPO:-gorizond/d7y-cattle-operator}"
-RESOLVER_CONFIG="/etc/nydus-resolver/config.yaml"
-RESOLVER_CA_DIR="/var/lib/nydus-resolver"
-RESOLVER_CA_KEY="${RESOLVER_CA_DIR}/ca.key"
-RESOLVER_CA_BUNDLE="${RESOLVER_CA_DIR}/ca-bundle.pem"
+# Patched nydus-snapshotter release (host containerd-nydus-grpc binary). It
+# reads containerd certs.d/hosts.toml, so a docker.io ref resolves through the
+# same mirror that containerd used for the pull. Installed to the existing
+# /usr/local/bin/containerd-nydus-grpc path and run by the same unit.
+NYDUS_SNAPSHOTTER_REPO="${NYDUS_SNAPSHOTTER_REPO:-gorizond/nydus-snapshotter}"
+NYDUS_SNAPSHOTTER_VERSION="${NYDUS_SNAPSHOTTER_VERSION:-v0.16.0-p2p.1}"
+NYDUS_SNAPSHOTTER_ASSET="${NYDUS_SNAPSHOTTER_ASSET:-nydus-snapshotter-linux-amd64}"
+NYDUS_SNAPSHOTTER_BINARY="containerd-nydus-grpc"
 SCHEDULER_PORT=443
 PREFLIGHT_TIMEOUT="${P2P_PREFLIGHT_TIMEOUT:-3}"
 BIN_DIR="${ROOT}/usr/local/bin"
@@ -103,22 +103,22 @@ download_nydus_asset() {
   return 1
 }
 
-resolver_release_url() {
-  local base="https://github.com/${GH_REPO}/releases"
-  if [ "$RESOLVER_VERSION" = "latest" ]; then
-    printf '%s/latest/download/%s' "$base" "$RESOLVER_ASSET"
+nydus_snapshotter_release_url() {
+  local base="https://github.com/${NYDUS_SNAPSHOTTER_REPO}/releases"
+  if [ "$NYDUS_SNAPSHOTTER_VERSION" = "latest" ]; then
+    printf '%s/latest/download/%s' "$base" "$NYDUS_SNAPSHOTTER_ASSET"
   else
-    printf '%s/download/%s/%s' "$base" "$RESOLVER_VERSION" "$RESOLVER_ASSET"
+    printf '%s/download/%s/%s' "$base" "$NYDUS_SNAPSHOTTER_VERSION" "$NYDUS_SNAPSHOTTER_ASSET"
   fi
 }
 
-# Download the resolver from the GitHub release and verify the sibling
-# .sha256 asset when the release provides one. Returns nonzero only when the
-# asset itself is unavailable; a checksum mismatch is fatal.
-download_resolver_asset() {
+# Download the patched nydus-snapshotter release and verify its sibling
+# .sha256 asset. Returns nonzero when the release asset is unavailable; a
+# checksum mismatch is fatal.
+download_nydus_snapshotter_asset() {
   local out url checksum expected actual
   out="$1"
-  url="$(resolver_release_url)"
+  url="$(nydus_snapshotter_release_url)"
   if ! curl -fL --retry 3 --connect-timeout 10 --max-time 300 -o "$out" "$url"; then
     return 1
   fi
@@ -126,14 +126,16 @@ download_resolver_asset() {
     return 1
   fi
   checksum="${out}.sha256"
-  if curl -fL --retry 3 --connect-timeout 10 --max-time 300 -o "$checksum" "${url}.sha256" && [ -s "$checksum" ]; then
-    command -v sha256sum >/dev/null 2>&1 || die "sha256sum is required to verify ${RESOLVER_ASSET}"
-    IFS=' ' read -r expected _ < "$checksum"
-    actual="$(sha256sum "$out")"
-    actual="${actual%% *}"
-    if [ -z "$expected" ] || [ "$actual" != "$expected" ]; then
-      die "checksum verification failed for ${url}"
-    fi
+  if ! curl -fL --retry 3 --connect-timeout 10 --max-time 300 -o "$checksum" "${url}.sha256" || [ ! -s "$checksum" ]; then
+    rm -f "$checksum"
+    return 1
+  fi
+  command -v sha256sum >/dev/null 2>&1 || die "sha256sum is required to verify ${NYDUS_SNAPSHOTTER_ASSET}"
+  IFS=' ' read -r expected _ < "$checksum"
+  actual="$(sha256sum "$out")"
+  actual="${actual%% *}"
+  if [ -z "$expected" ] || [ "$actual" != "$expected" ]; then
+    die "checksum verification failed for ${url}"
   fi
   rm -f "$checksum"
   return 0
@@ -168,7 +170,7 @@ while IFS= read -r line || [ -n "$line" ]; do
   value="${line#*=}"
   value="${value%$'\r'}"
   case "$key" in
-    MANAGER_GRPC|STATIC_URL|SMART_PROXY_URL|RESOLVER_UPSTREAM|RESOLVER_LISTEN|SCHEDULER_HOST|SCHEDULER_CLUSTER_ID|CA_CRT_B64|CLIENT_CRT_B64|CLIENT_KEY_B64)
+    MANAGER_GRPC|STATIC_URL|SMART_PROXY_URL|SCHEDULER_HOST|SCHEDULER_CLUSTER_ID|NYDUS_VERSION|CA_CRT_B64|CLIENT_CRT_B64|CLIENT_KEY_B64)
       printf -v "$key" '%s' "$value"
       ;;
   esac
@@ -203,45 +205,20 @@ case "$STATIC_URL" in
 esac
 STATIC_URL="${STATIC_URL%/}"
 
-RESOLVER_UPSTREAM="${RESOLVER_UPSTREAM:-}"
-RESOLVER_LISTEN="${RESOLVER_LISTEN:-}"
-if [ -n "$RESOLVER_UPSTREAM" ] || [ -n "$RESOLVER_LISTEN" ]; then
-  if [ -z "$RESOLVER_UPSTREAM" ] || [ -z "$RESOLVER_LISTEN" ]; then
-    die "resolver_upstream and resolver_listen must be set together"
-  fi
-  case "$RESOLVER_UPSTREAM" in
-    https://*) ;;
-    *) die "resolver_upstream must use https://" ;;
-  esac
-  case "$RESOLVER_UPSTREAM$RESOLVER_LISTEN" in
-    *" "*|*$'\t'*|*'"'*|*'\'*|*'$'*|*'`'*) die "resolver config contains unsupported characters" ;;
-  esac
-  case "$RESOLVER_UPSTREAM" in
-    *"?"*|*"@"*) die "resolver_upstream must not contain a query or credentials" ;;
-  esac
-  case "$RESOLVER_LISTEN" in
-    ""|*[!A-Za-z0-9.:\[\]]*) die "resolver_listen is not an IP and port" ;;
-  esac
-  case "$RESOLVER_LISTEN" in
-    *:*) ;;
-    *) die "resolver_listen must include a port" ;;
-  esac
-fi
-
-case "$RESOLVER_ASSET" in
-  ""|*[!A-Za-z0-9._-]*) die "resolver_asset is not a valid release asset name" ;;
+case "$NYDUS_SNAPSHOTTER_ASSET" in
+  ""|*[!A-Za-z0-9._-]*) die "nydus_snapshotter_asset is not a valid release asset name" ;;
 esac
-case "$GH_REPO" in
-  ""|*[!A-Za-z0-9._/-]*|*/*/*) die "gh_repo must be owner/repo" ;;
+case "$NYDUS_SNAPSHOTTER_REPO" in
+  ""|*[!A-Za-z0-9._/-]*|*/*/*) die "nydus_snapshotter_repo must be owner/repo" ;;
 esac
-case "$GH_REPO" in
+case "$NYDUS_SNAPSHOTTER_REPO" in
   */*) ;;
-  *) die "gh_repo must be owner/repo" ;;
+  *) die "nydus_snapshotter_repo must be owner/repo" ;;
 esac
-if [ "$RESOLVER_VERSION" != "latest" ]; then
-  case "$RESOLVER_VERSION" in
+if [ "$NYDUS_SNAPSHOTTER_VERSION" != "latest" ]; then
+  case "$NYDUS_SNAPSHOTTER_VERSION" in
     v[A-Za-z0-9._-]*) ;;
-    *) die "resolver_version must be latest or a v* release tag" ;;
+    *) die "nydus_snapshotter_version must be latest or a v* release tag" ;;
   esac
 fi
 
@@ -296,42 +273,18 @@ fallback_direct() {
   log "P2P unavailable: $*; using direct registry so RKE2 can start"
   write_direct_template
   if [ "$REAL_ROOT" = "1" ] && [ "${SKIP_SYSTEMD:-0}" != "1" ] && command -v systemctl >/dev/null 2>&1; then
-    systemctl disable --now dfdaemon-bootstrap.service dfdaemon-bootstrap-boot.service dfdaemon-bootstrap-switch.timer nydus-resolver.service nydus-snapshotter-bootstrap.service nydus-updater.timer >/dev/null 2>&1 || true
+    systemctl disable --now dfdaemon-bootstrap.service dfdaemon-bootstrap-boot.service dfdaemon-bootstrap-switch.timer nydus-snapshotter-bootstrap.service nydus-updater.timer >/dev/null 2>&1 || true
   fi
   log "existing certificate/config files, if any, were preserved; P2P services are not enabled"
   exit 0
 }
 
-# The nydus-resolver binary is required by the host snapshotter when nydus is
-# enabled. Its config is supplied through the bootstrap payload; missing
-# config falls back to the direct registry so RKE2 can still start.
-RESOLVER_ARCH="${RESOLVER_ARCH:-$(uname -m)}"
-case "$RESOLVER_ARCH" in
+# The patched release currently publishes an amd64 asset only. Fall back to
+# the direct registry so a non-amd64 node can still start RKE2.
+NYDUS_SNAPSHOTTER_ARCH="${NYDUS_SNAPSHOTTER_ARCH:-$(uname -m)}"
+case "$NYDUS_SNAPSHOTTER_ARCH" in
   amd64|x86_64) ;;
-  *) fallback_direct "nydus-resolver has no ${RESOLVER_ARCH} asset yet" ;;
-esac
-if [ -z "$RESOLVER_UPSTREAM" ] || [ -z "$RESOLVER_LISTEN" ]; then
-  fallback_direct "nydus-resolver config is missing RESOLVER_UPSTREAM or RESOLVER_LISTEN"
-fi
-
-SYSTEM_CA_FILE="${SYSTEM_CA_FILE:-}"
-if [ -z "$SYSTEM_CA_FILE" ]; then
-  for candidate in \
-    /etc/ssl/certs/ca-certificates.crt \
-    /etc/pki/tls/certs/ca-bundle.crt \
-    /etc/ssl/ca-bundle.pem \
-    /etc/ssl/cert.pem; do
-    if [ -s "$candidate" ]; then
-      SYSTEM_CA_FILE="$candidate"
-      break
-    fi
-  done
-fi
-if [ -z "$SYSTEM_CA_FILE" ] || [ ! -s "$SYSTEM_CA_FILE" ]; then
-  fallback_direct "system CA bundle not found for the resolver"
-fi
-case "$SYSTEM_CA_FILE" in
-  *'"'*|*'\'*|*'$'*|*'`'*) die "system CA path contains unsupported characters" ;;
+  *) fallback_direct "nydus-snapshotter has no ${NYDUS_SNAPSHOTTER_ARCH} release asset" ;;
 esac
 
 tcp_check() {
@@ -368,8 +321,6 @@ preflight
 mkdir -p \
   "${ROOT}${CERT_DIR}" \
   "${ROOT}${NYDUS_DIR}" \
-  "${ROOT}${RESOLVER_CONFIG%/*}" \
-  "${ROOT}${RESOLVER_CA_DIR}" \
   "$BIN_DIR" \
   "$SERVICE_DIR" \
   "$RKE2_CONTAINERD_DIR" \
@@ -423,6 +374,10 @@ root = "/var/lib/containerd-nydus"
 address = "/run/containerd-nydus/containerd-nydus-grpc.sock"
 daemon_mode = "multiple"
 
+# The patched snapshotter reads containerd's certs.d directly
+# (/var/lib/rancher/rke2/agent/etc/containerd/certs.d, then
+# /etc/containerd/certs.d), so it honors the same hosts.toml mirrors and
+# headers that containerd used for the pull. No resolver or CA is installed.
 [daemon]
   nydusd_config = "/etc/nydus/nydusd-config.json"
   nydusd_path = "/usr/local/bin/nydusd"
@@ -476,14 +431,6 @@ write_file "${ROOT}${NYDUS_DIR}/nydusd-config.json" 0644 <<'JSON'
   }
 }
 JSON
-
-write_file "${ROOT}${RESOLVER_CONFIG}" 0644 <<EOF
-listen: "$RESOLVER_LISTEN"
-upstream: "$RESOLVER_UPSTREAM"
-ca_key: "$RESOLVER_CA_KEY"
-ca_bundle: "$RESOLVER_CA_BUNDLE"
-system_ca_file: "$SYSTEM_CA_FILE"
-EOF
 
 CONTAINERD_MAJOR="${CONTAINERD_MAJOR:-$(detect_containerd_major)}"
 mkdir -p "$RKE2_CONTAINERD_DIR"
@@ -684,49 +631,18 @@ Unit=dfdaemon-bootstrap-switch.service
 WantedBy=timers.target
 UNIT
 
-write_file "${SERVICE_DIR}/nydus-resolver.service" 0644 <<'UNIT'
-[Unit]
-Description=Nydus resolver HTTPS forward proxy
-Documentation=https://d7y.io
-After=network-online.target
-Wants=network-online.target
-Before=nydus-snapshotter-bootstrap.service rke2-server.service rke2-agent.service
-ConditionPathExists=/etc/nydus-resolver/config.yaml
-
-[Service]
-Type=simple
-Environment=PATH=/usr/local/bin:/usr/local/sbin:/usr/sbin:/usr/bin:/sbin:/bin
-ExecStart=/usr/local/bin/nydus-resolver --config /etc/nydus-resolver/config.yaml
-Restart=always
-RestartSec=5
-NoNewPrivileges=yes
-PrivateTmp=yes
-ProtectSystem=strict
-ProtectHome=yes
-ReadWritePaths=/var/lib/nydus-resolver
-CapabilityBoundingSet=
-AmbientCapabilities=
-RestrictAddressFamilies=AF_INET AF_INET6
-
-[Install]
-WantedBy=multi-user.target
-UNIT
-
 write_file "${SERVICE_DIR}/nydus-snapshotter-bootstrap.service" 0644 <<'UNIT'
 [Unit]
 Description=Dragonfly host nydus snapshotter
 Documentation=https://d7y.io
-After=network-online.target nydus-resolver.service
-Wants=network-online.target nydus-resolver.service
+After=network-online.target
+Wants=network-online.target
 Before=rke2-server.service rke2-agent.service
 ConditionPathExists=/etc/nydus/config.toml
 
 [Service]
 Type=simple
 Environment=PATH=/usr/local/bin:/usr/local/sbin:/usr/sbin:/usr/bin:/sbin:/bin
-Environment=HTTPS_PROXY=http://127.0.0.1:3999
-Environment=NO_PROXY=127.0.0.1,localhost,::1,10.0.0.0/8,172.16.0.0/12,192.168.0.0/16,.svc,.cluster.local
-Environment=SSL_CERT_FILE=/var/lib/nydus-resolver/ca-bundle.pem
 ExecStart=/usr/local/bin/containerd-nydus-grpc --config /etc/nydus/config.toml --nydusd /usr/local/bin/nydusd --nydusd-config /etc/nydus/nydusd-config.json
 ExecStartPost=/bin/sh -c 'i=0; while [ ! -S /run/containerd-nydus/containerd-nydus-grpc.sock ]; do i=$((i + 1)); [ "$i" -ge 60 ] && exit 1; sleep 1; done'
 Restart=always
@@ -739,9 +655,10 @@ LimitNOFILE=1048576
 WantedBy=multi-user.target
 UNIT
 
-# Host-only updater: keeps the pinned nydus binaries current and restarts the
-# host unit when anything changed. nydus-resolver is installed from the GitHub
-# release by p2p-install.sh, not by this static-store updater.
+# Host-only updater: keeps the pinned static nydus binaries current and
+# restarts the host unit when anything changed. The patched nydus-snapshotter
+# binary comes from its GitHub release and is updated by rerunning this
+# script, not by the static-store updater. It never touches Kubernetes.
 {
   printf 'STATIC_URL=%q\n' "$STATIC_URL"
   printf 'NYDUS_VERSION=%q\n' "$NYDUS_VERSION"
@@ -766,7 +683,7 @@ bin_dir="/usr/local/bin"
 tmp="$(mktemp -d)"
 trap 'rm -rf "$tmp"' EXIT
 # Fetch every asset first so a partial update never mixes versions.
-for binary in containerd-nydus-grpc nydusd nydus-image nydus-overlayfs; do
+for binary in nydusd nydus-image nydus-overlayfs; do
   fetched=0
   for url in "${STATIC_URL%/}/nydus/${NYDUS_VERSION}/${binary}" "${STATIC_URL%/}/bin/${binary}"; do
     if curl -fsSL --retry 3 --connect-timeout 10 --max-time 300 -o "$tmp/$binary" "$url" && [ -s "$tmp/$binary" ]; then
@@ -781,7 +698,7 @@ for binary in containerd-nydus-grpc nydusd nydus-image nydus-overlayfs; do
 done
 
 changed=0
-for binary in containerd-nydus-grpc nydusd nydus-image nydus-overlayfs; do
+for binary in nydusd nydus-image nydus-overlayfs; do
   if [ -x "${bin_dir}/${binary}" ] && cmp -s "$tmp/$binary" "${bin_dir}/${binary}"; then
     continue
   fi
@@ -831,7 +748,7 @@ WantedBy=timers.target
 UNIT
 
 if [ "${SKIP_DOWNLOAD:-0}" = "1" ]; then
-  log "SKIP_DOWNLOAD=1: skipping binary downloads (pinned nydus ${NYDUS_VERSION})"
+  log "SKIP_DOWNLOAD=1: skipping binary downloads (nydus ${NYDUS_VERSION}, snapshotter ${NYDUS_SNAPSHOTTER_VERSION})"
 else
   command -v curl >/dev/null 2>&1 || fallback_direct "curl is required to download binaries"
   for binary in $NYDUS_BINARIES dfdaemon; do
@@ -840,13 +757,13 @@ else
     chmod 0755 "$tmp"
     mv -f "$tmp" "${BIN_DIR}/${binary}"
   done
-  resolver_tmp="${BIN_DIR}/.${RESOLVER_BINARY}.tmp.$$"
-  if ! download_resolver_asset "$resolver_tmp"; then
-    rm -f "$resolver_tmp" "${resolver_tmp}.sha256"
-    fallback_direct "nydus-resolver release asset ${RESOLVER_ASSET} (${RESOLVER_VERSION}) is unavailable from ${GH_REPO}"
+  snapshotter_tmp="${BIN_DIR}/.${NYDUS_SNAPSHOTTER_BINARY}.tmp.$$"
+  if ! download_nydus_snapshotter_asset "$snapshotter_tmp"; then
+    rm -f "$snapshotter_tmp" "${snapshotter_tmp}.sha256"
+    fallback_direct "nydus-snapshotter release asset ${NYDUS_SNAPSHOTTER_ASSET} (${NYDUS_SNAPSHOTTER_VERSION}) is unavailable from ${NYDUS_SNAPSHOTTER_REPO}"
   fi
-  chmod 0755 "$resolver_tmp"
-  mv -f "$resolver_tmp" "${BIN_DIR}/${RESOLVER_BINARY}"
+  chmod 0755 "$snapshotter_tmp"
+  mv -f "$snapshotter_tmp" "${BIN_DIR}/${NYDUS_SNAPSHOTTER_BINARY}"
 fi
 
 if [ "${SKIP_DOWNLOAD:-0}" != "1" ]; then
@@ -855,8 +772,8 @@ if [ "${SKIP_DOWNLOAD:-0}" != "1" ]; then
       fallback_direct "${binary} is not executable"
     fi
   done
-  if [ ! -x "${BIN_DIR}/${RESOLVER_BINARY}" ]; then
-    fallback_direct "nydus-resolver is not executable after install"
+  if [ ! -x "${BIN_DIR}/${NYDUS_SNAPSHOTTER_BINARY}" ]; then
+    fallback_direct "nydus-snapshotter is not executable after install"
   fi
 fi
 
@@ -875,16 +792,13 @@ fi
 if [ "$REAL_ROOT" = "1" ] && [ "${SKIP_SYSTEMD:-0}" != "1" ]; then
   command -v systemctl >/dev/null 2>&1 || fallback_direct "systemctl is required"
   systemctl daemon-reload || fallback_direct "systemctl daemon-reload failed"
-  systemctl enable dfdaemon-bootstrap.service dfdaemon-bootstrap-boot.service nydus-resolver.service nydus-snapshotter-bootstrap.service nydus-updater.timer dfdaemon-bootstrap-switch.timer || \
+  systemctl enable dfdaemon-bootstrap.service dfdaemon-bootstrap-boot.service nydus-snapshotter-bootstrap.service nydus-updater.timer dfdaemon-bootstrap-switch.timer || \
     fallback_direct "failed to enable bootstrap services"
-  systemctl restart nydus-resolver.service || \
-    fallback_direct "nydus resolver failed to start"
   systemctl restart dfdaemon-bootstrap.service nydus-snapshotter-bootstrap.service || \
     fallback_direct "failed to start bootstrap services"
   systemctl start nydus-updater.timer dfdaemon-bootstrap-switch.timer || \
     fallback_direct "failed to start host timers"
   sleep 2
-  systemctl is-active --quiet nydus-resolver.service || fallback_direct "nydus resolver is not active"
   systemctl is-active --quiet dfdaemon-bootstrap.service || fallback_direct "dfdaemon bootstrap failed to start"
   systemctl is-active --quiet nydus-snapshotter-bootstrap.service || fallback_direct "nydus bootstrap failed to start"
 fi
@@ -893,6 +807,6 @@ log "certificates written to ${CERT_DIR}"
 log "dfget.yaml written with scheduler cluster ID ${SCHEDULER_CLUSTER_ID}"
 log "dynconfig written with scheduler ${SCHEDULER_HOST}:${SCHEDULER_PORT}"
 log "nydus ${NYDUS_VERSION} configuration written to ${NYDUS_DIR}"
-log "nydus-resolver config written to ${RESOLVER_CONFIG} (CA bundle ${RESOLVER_CA_BUNDLE})"
+log "nydus-snapshotter ${NYDUS_SNAPSHOTTER_VERSION} installed from ${NYDUS_SNAPSHOTTER_REPO}"
 log "containerd nydus configuration written to ${CONTAINERD_CONFIG_PATH}"
 log "host bootstrap services, nydus updater, and dfdaemon switch installed in ${SERVICE_DIR}"

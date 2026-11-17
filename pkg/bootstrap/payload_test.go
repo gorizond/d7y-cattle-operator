@@ -91,53 +91,6 @@ func TestEncodeSmartProxyURL(t *testing.T) {
 	}
 }
 
-func TestEncodeResolverConfig(t *testing.T) {
-	payload := testPayload()
-	payload.ResolverUpstream = "https://proxy.example.test"
-	payload.ResolverListen = "127.0.0.1:3999"
-	encoded, err := Encode(payload)
-	if err != nil {
-		t.Fatalf("Encode() error = %v", err)
-	}
-	raw, err := base64.URLEncoding.DecodeString(encoded)
-	if err != nil {
-		t.Fatalf("decode payload: %v", err)
-	}
-	env := string(raw)
-	for _, line := range []string{
-		"RESOLVER_UPSTREAM=https://proxy.example.test\n",
-		"RESOLVER_LISTEN=127.0.0.1:3999\n",
-	} {
-		if !strings.Contains(env, line) {
-			t.Errorf("payload = %q, want %q", env, line)
-		}
-	}
-}
-
-func TestEncodeResolverRequiresListen(t *testing.T) {
-	payload := testPayload()
-	payload.ResolverUpstream = "https://proxy.example.test"
-	if _, err := Encode(payload); err == nil {
-		t.Fatal("Encode() error = nil, want resolver_listen error")
-	}
-}
-
-func TestEncodeResolverDisabledWithoutUpstream(t *testing.T) {
-	payload := testPayload()
-	payload.ResolverListen = "127.0.0.1:3999"
-	encoded, err := Encode(payload)
-	if err != nil {
-		t.Fatalf("Encode() error = %v", err)
-	}
-	raw, err := base64.URLEncoding.DecodeString(encoded)
-	if err != nil {
-		t.Fatalf("decode payload: %v", err)
-	}
-	if strings.Contains(string(raw), "RESOLVER_") {
-		t.Errorf("resolver fields emitted without upstream: %q", raw)
-	}
-}
-
 func TestEncodeRejectsInvalid(t *testing.T) {
 	cases := map[string]Payload{
 		"manager without https":  {ManagerGRPC: "http://manager", StaticURL: "http://static", SchedulerClusterID: "2", CACert: []byte("ca"), ClientCert: []byte("cert"), ClientKey: []byte("key")},
@@ -148,9 +101,6 @@ func TestEncodeRejectsInvalid(t *testing.T) {
 		"missing scheduler host": {ManagerGRPC: "https://manager", StaticURL: "http://static", SchedulerClusterID: "2", CACert: []byte("ca"), ClientCert: []byte("cert"), ClientKey: []byte("key")},
 		"invalid scheduler host": {ManagerGRPC: "https://manager", StaticURL: "http://static", SchedulerHost: "bad_host", SchedulerClusterID: "2", CACert: []byte("ca"), ClientCert: []byte("cert"), ClientKey: []byte("key")},
 		"invalid smart proxy":    {ManagerGRPC: "https://manager", StaticURL: "http://static", SmartProxyURL: "ftp://proxy", SchedulerHost: "scheduler.example.com", SchedulerClusterID: "2", CACert: []byte("ca"), ClientCert: []byte("cert"), ClientKey: []byte("key")},
-		"resolver http":          {ManagerGRPC: "https://manager", StaticURL: "http://static", ResolverUpstream: "http://proxy.example.test", ResolverListen: "127.0.0.1:3999", SchedulerHost: "scheduler.example.com", SchedulerClusterID: "2", CACert: []byte("ca"), ClientCert: []byte("cert"), ClientKey: []byte("key")},
-		"resolver public listen": {ManagerGRPC: "https://manager", StaticURL: "http://static", ResolverUpstream: "https://proxy.example.test", ResolverListen: "0.0.0.0:3999", SchedulerHost: "scheduler.example.com", SchedulerClusterID: "2", CACert: []byte("ca"), ClientCert: []byte("cert"), ClientKey: []byte("key")},
-		"resolver quoted":        {ManagerGRPC: "https://manager", StaticURL: "http://static", ResolverUpstream: "https://proxy.example.test/?q=\"x\"", ResolverListen: "127.0.0.1:3999", SchedulerHost: "scheduler.example.com", SchedulerClusterID: "2", CACert: []byte("ca"), ClientCert: []byte("cert"), ClientKey: []byte("key")},
 	}
 	for name, payload := range cases {
 		t.Run(name, func(t *testing.T) {
