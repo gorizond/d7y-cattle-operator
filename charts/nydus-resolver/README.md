@@ -94,6 +94,11 @@ settings until restarted.
 - Leaf certificates are issued per CONNECT host, cached for about 23 hours,
   and include the host as a DNS SAN. TLS is terminated with HTTP/1.1 ALPN.
 
+The resolver container runs as UID 65532 with a read-only root filesystem and
+all capabilities dropped. A small init container runs as root only to create
+and chown the hostPath CA directory; it also has no privilege escalation and
+drops all capabilities.
+
 ## Verification
 
 ```bash
