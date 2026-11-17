@@ -37,6 +37,16 @@ spec:
       tolerations:
         {{- toYaml . | nindent 8 }}
       {{- end }}
+      {{- with .Values.proxy.hostAliases }}
+      hostAliases:
+        {{- range . }}
+        - ip: {{ .ip | quote }}
+          hostnames:
+            {{- range .hostnames }}
+            - {{ . | quote }}
+            {{- end }}
+        {{- end }}
+      {{- end }}
       containers:
         - name: registry-proxy
           image: "{{ .Values.image.repository }}:{{ .Values.image.tag }}"

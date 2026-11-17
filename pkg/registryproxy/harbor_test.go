@@ -14,8 +14,11 @@ type fakeHarbor struct {
 	registries []HarborRegistry
 	projects   []HarborProject
 	webhooks   []string
-	robots     []HarborRobot
-	posts      map[string]int
+	// webhookAddress/webhookAuth mirror the nydus-convert policy target.
+	webhookAddress string
+	webhookAuth    string
+	robots         []HarborRobot
+	posts          map[string]int
 }
 
 func (f *fakeHarbor) handler() http.Handler {
@@ -47,14 +50,23 @@ func (f *fakeHarbor) handler() http.Handler {
 			w.WriteHeader(http.StatusCreated)
 		case r.Method == http.MethodGet && r.URL.Path == "/api/v2.0/projects/dockerio/webhook/policies":
 			var items []map[string]any
-			for _, name := range f.webhooks {
-				items = append(items, map[string]any{"id": 1, "name": name})
+			for i, name := range f.webhooks {
+				item := map[string]any{"id": i + 1, "name": name}
+				if f.webhookAddress != "" {
+					item["targets"] = []map[string]any{{"address": f.webhookAddress, "auth_header": f.webhookAuth}}
+				}
+				items = append(items, item)
 			}
 			_ = json.NewEncoder(w).Encode(items)
 		case r.Method == http.MethodPost && r.URL.Path == "/api/v2.0/projects/dockerio/webhook/policies":
 			f.posts["webhook"]++
 			f.webhooks = append(f.webhooks, "nydus-convert")
+			f.setWebhookTarget(r)
 			w.WriteHeader(http.StatusCreated)
+		case r.Method == http.MethodPut && r.URL.Path == "/api/v2.0/projects/dockerio/webhook/policies/1":
+			f.posts["webhook_update"]++
+			f.setWebhookTarget(r)
+			w.WriteHeader(http.StatusOK)
 		case r.Method == http.MethodGet && r.URL.Path == "/api/v2.0/robots":
 			_ = json.NewEncoder(w).Encode(f.robots)
 		case r.Method == http.MethodPost && r.URL.Path == "/api/v2.0/robots":
@@ -67,6 +79,20 @@ func (f *fakeHarbor) handler() http.Handler {
 			http.NotFound(w, r)
 		}
 	})
+}
+
+func (f *fakeHarbor) setWebhookTarget(r *http.Request) {
+	var body struct {
+		Targets []struct {
+			Address    string `json:"address"`
+			AuthHeader string `json:"auth_header"`
+		} `json:"targets"`
+	}
+	_ = json.NewDecoder(r.Body).Decode(&body)
+	if len(body.Targets) > 0 {
+		f.webhookAddress = body.Targets[0].Address
+		f.webhookAuth = body.Targets[0].AuthHeader
+	}
 }
 
 func TestProvisionerCreatesRegistryProjectMirrorAndWebhook(t *testing.T) {
@@ -89,6 +115,33 @@ func TestProvisionerCreatesRegistryProjectMirrorAndWebhook(t *testing.T) {
 	defer fake.mu.Unlock()
 	if fake.posts["registry"] != 1 || fake.posts["project"] != 2 || fake.posts["webhook"] != 1 {
 		t.Errorf("Harbor POST counts = %v, want one registry, two projects, one webhook", fake.posts)
+	}
+}
+
+func TestEnsureWebhookUpdatesChangedTarget(t *testing.T) {
+	fake := &fakeHarbor{
+		webhooks:       []string{"nydus-convert"},
+		webhookAddress: "https://old.example.com/api/convert",
+		webhookAuth:    "Bearer old",
+	}
+	server := httptest.NewServer(fake.handler())
+	defer server.Close()
+	client := &HarborClient{BaseURL: server.URL}
+	address := "http://c1-registry-proxy.dragonfly-system.svc:8080/api/convert"
+
+	if err := client.EnsureWebhook(context.Background(), "dockerio", address, "shared"); err != nil {
+		t.Fatalf("EnsureWebhook(update) error = %v", err)
+	}
+	if err := client.EnsureWebhook(context.Background(), "dockerio", address, "shared"); err != nil {
+		t.Fatalf("EnsureWebhook(idempotent) error = %v", err)
+	}
+	fake.mu.Lock()
+	defer fake.mu.Unlock()
+	if fake.posts["webhook"] != 0 || fake.posts["webhook_update"] != 1 {
+		t.Errorf("webhook POST/PUT = %d/%d, want 0/1", fake.posts["webhook"], fake.posts["webhook_update"])
+	}
+	if fake.webhookAddress != address || fake.webhookAuth != "Bearer shared" {
+		t.Errorf("policy target = %q/%q", fake.webhookAddress, fake.webhookAuth)
 	}
 }
 

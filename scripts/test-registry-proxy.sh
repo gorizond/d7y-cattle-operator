@@ -15,16 +15,35 @@ helm lint "$chart" >/dev/null || fail "registry-proxy chart lint failed"
 helm template registry-proxy "$chart" --namespace dragonfly-system \
   --set ingress.enabled=true --set ingress.host=proxy.example.com \
   --set ingress.path=/proxy --set ingress.tlsSecret=poligon-harbor-tls \
-  --set proxy.basePath=/proxy >"$tmp/proxy.yaml"
+  --set proxy.basePath=/proxy \
+  --set webhook.address=http://c1-registry-proxy.dragonfly-system.svc:8080/api/convert \
+  --set proxy.hostAliases[0].ip=10.43.0.10 \
+  --set proxy.hostAliases[0].hostnames[0]=harbor.koldun.negash.ru >"$tmp/proxy.yaml"
+
+helm template registry-proxy "$chart" --namespace dragonfly-system \
+  --show-only templates/networkpolicy.yaml >"$tmp/netpol.yaml"
 
 grep -q 'kind: Deployment' "$tmp/proxy.yaml" || fail "proxy Deployment is missing"
 grep -q 'kind: Service' "$tmp/proxy.yaml" || fail "proxy Service is missing"
 grep -q 'kind: NetworkPolicy' "$tmp/proxy.yaml" || fail "proxy NetworkPolicy is missing"
+grep -q 'kubernetes.io/metadata.name: kube-system' "$tmp/netpol.yaml" || fail "NetworkPolicy DNS/Traefik peer is missing"
+grep -A3 'kubernetes.io/metadata.name: kube-system' "$tmp/netpol.yaml" | grep -q 'port: 443' || \
+  fail "NetworkPolicy kube-system egress does not allow TCP 443"
+grep -A4 'kubernetes.io/metadata.name: harbor' "$tmp/netpol.yaml" | grep -q 'port: 80' || \
+  fail "NetworkPolicy harbor egress does not allow TCP 80"
+grep -A4 'kubernetes.io/metadata.name: harbor' "$tmp/netpol.yaml" | grep -q 'port: 443' || \
+  fail "NetworkPolicy harbor egress does not allow TCP 443"
+grep -A3 'cidr: 0.0.0.0/0' "$tmp/netpol.yaml" | grep -q 'port: 443' || \
+  fail "NetworkPolicy external Harbor egress does not allow TCP 443"
 grep -q 'kind: Ingress' "$tmp/proxy.yaml" || fail "proxy Ingress is missing"
 grep -q 'host: "proxy.example.com"' "$tmp/proxy.yaml" || fail "proxy Ingress host is missing"
 grep -q 'path: /proxy' "$tmp/proxy.yaml" || fail "proxy Ingress path is missing"
 grep -q 'secretName: poligon-harbor-tls' "$tmp/proxy.yaml" || fail "proxy Ingress TLS Secret is missing"
 grep -q 'base_path: "/proxy"' "$tmp/proxy.yaml" || fail "proxy config base_path is missing"
+grep -q 'address: "http://c1-registry-proxy.dragonfly-system.svc:8080/api/convert"' "$tmp/proxy.yaml" || \
+  fail "proxy config webhook address is missing"
+grep -q 'ip: "10.43.0.10"' "$tmp/proxy.yaml" || fail "proxy hostAliases IP is missing"
+grep -q -- '- "harbor.koldun.negash.ru"' "$tmp/proxy.yaml" || fail "proxy hostAliases hostname is missing"
 grep -q 'command:' "$tmp/proxy.yaml" || fail "proxy command is missing"
 grep -q '/registry-proxy' "$tmp/proxy.yaml" || fail "proxy command does not use /registry-proxy"
 grep -q 'containerPort: 8080' "$tmp/proxy.yaml" || fail "proxy service port is missing"

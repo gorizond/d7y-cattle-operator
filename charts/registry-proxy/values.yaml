@@ -7,7 +7,7 @@ serviceAccount:
 image:
   # Same image as the operator: it contains /registry-proxy.
   repository: ghcr.io/gorizond/d7y-cattle-operator
-  tag: v0.1.23
+  tag: v0.1.24
   pullPolicy: IfNotPresent
 
 command:
@@ -32,9 +32,18 @@ registry:
 proxy:
   publicURL: ""
   basePath: /proxy
+  # Extra /etc/hosts entries for the proxy pod, for example a same-cluster
+  # Harbor reachable only through the Traefik ClusterIP.
+  hostAliases: []
+  # - ip: 10.43.0.10
+  #   hostnames:
+  #     - harbor.koldun.negash.ru
 
 webhook:
   secretName: registry-proxy-webhook
+  # Harbor PUSH_ARTIFACT policy target. Empty falls back to
+  # proxy.publicURL + /api/convert.
+  address: ""
 
 conversion:
   platform: linux/amd64

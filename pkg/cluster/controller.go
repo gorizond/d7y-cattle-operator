@@ -60,6 +60,7 @@ type Options struct {
 	ProxyRegistries             []string
 	ProxyBasePath               string
 	ProxyTLSSecret              string
+	ProxyHostAliases            []helmop.HostAlias
 	ExtrasIngressController     string
 	ExtrasIngressClassName      string
 	ExtrasIngressGRPCEnabled    bool
@@ -436,6 +437,9 @@ func (c *Controller) helmopCluster(cluster *provv1.Cluster) helmop.Cluster {
 		ProxyWebhookSecretName: helmop.RegistryProxyWebhookSecretName(cluster.Name),
 		ProxyRobotSecretName:   helmop.RegistryProxyRobotSecretName(cluster.Name),
 		ProxyPublicURL:         proxyPublicURL(c.opts.ProxyDomain, c.opts.ProxyBasePath),
+		ProxyBasePath:          c.opts.ProxyBasePath,
+		ProxyTLSSecret:         c.opts.ProxyTLSSecret,
+		ProxyHostAliases:       c.opts.ProxyHostAliases,
 		ProxyRegistries:        c.opts.ProxyRegistries,
 		ManagerGRPCDomain:      c.opts.ManagerGRPCDomain,
 		ManagerGRPCPort:        c.opts.ManagerGRPCPort,

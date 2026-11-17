@@ -8,6 +8,7 @@ import (
 	"io"
 	"net/http"
 	"net/url"
+	"strconv"
 	"strings"
 	"sync"
 )
@@ -160,33 +161,48 @@ func (h *HarborClient) EnsureProject(ctx context.Context, name string, registryI
 	return HarborProject{}, fmt.Errorf("harbor project %q not found after create", name)
 }
 
-// EnsureWebhook creates the PUSH_ARTIFACT policy once.
+// EnsureWebhook creates the nydus-convert PUSH_ARTIFACT policy, updating an
+// existing policy when its target address or auth header changed.
 func (h *HarborClient) EnsureWebhook(ctx context.Context, project, address, secret string) error {
 	path := "/api/v2.0/projects/" + url.PathEscape(project) + "/webhook/policies"
-	var list []struct {
-		ID   int    `json:"id"`
-		Name string `json:"name"`
-	}
-	if _, err := h.do(ctx, http.MethodGet, path, nil, &list); err != nil {
-		return err
-	}
-	for _, item := range list {
-		if item.Name == "nydus-convert" {
-			return nil
-		}
-	}
-	status, err := h.do(ctx, http.MethodPost, path, map[string]any{
+	authHeader := "Bearer " + secret
+	body := map[string]any{
 		"name":        "nydus-convert",
 		"enabled":     true,
 		"event_types": []string{"PUSH_ARTIFACT"},
 		"targets": []map[string]any{{
 			"type":             "http",
 			"address":          address,
-			"auth_header":      "Bearer " + secret,
+			"auth_header":      authHeader,
 			"skip_cert_verify": false,
 			"payload_format":   "Default",
 		}},
-	}, nil)
+	}
+	var list []struct {
+		ID      int    `json:"id"`
+		Name    string `json:"name"`
+		Targets []struct {
+			Address    string `json:"address"`
+			AuthHeader string `json:"auth_header"`
+		} `json:"targets"`
+	}
+	if _, err := h.do(ctx, http.MethodGet, path, nil, &list); err != nil {
+		return err
+	}
+	for _, item := range list {
+		if item.Name != "nydus-convert" {
+			continue
+		}
+		if len(item.Targets) == 1 && item.Targets[0].Address == address &&
+			item.Targets[0].AuthHeader == authHeader {
+			return nil
+		}
+		if _, err := h.do(ctx, http.MethodPut, path+"/"+strconv.Itoa(item.ID), body, nil); err != nil {
+			return err
+		}
+		return nil
+	}
+	status, err := h.do(ctx, http.MethodPost, path, body, nil)
 	if err != nil && status != http.StatusConflict {
 		return err
 	}

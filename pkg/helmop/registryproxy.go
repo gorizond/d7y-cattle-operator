@@ -1,6 +1,7 @@
 package helmop
 
 import (
+	"fmt"
 	"net/url"
 	"strings"
 
@@ -23,6 +24,17 @@ func RegistryProxy(c Cluster) *fleetv1alpha1.HelmOp {
 	if ingressPath == "" {
 		ingressPath = "/"
 	}
+	hostAliases := make([]any, 0, len(c.ProxyHostAliases))
+	for _, alias := range c.ProxyHostAliases {
+		hostAliases = append(hostAliases, map[string]any{"ip": alias.IP, "hostnames": alias.Hostnames})
+	}
+	// Same-cluster Harbor reaches the proxy over the Service; an external
+	// Harbor keeps the chart default (proxy.publicURL + /api/convert).
+	webhookAddress := ""
+	if c.HarborManaged {
+		webhookAddress = fmt.Sprintf("http://%s.%s.svc:%d/api/convert",
+			RegistryProxyName(c.Name), TargetNamespace, RegistryProxyPort)
+	}
 	values := map[string]any{
 		"command": []any{"/registry-proxy"},
 		"ingress": map[string]any{
@@ -42,11 +54,13 @@ func RegistryProxy(c Cluster) *fleetv1alpha1.HelmOp {
 			"allowlist": c.ProxyRegistries,
 		},
 		"proxy": map[string]any{
-			"publicURL": c.ProxyPublicURL,
-			"basePath":  c.ProxyBasePath,
+			"publicURL":   c.ProxyPublicURL,
+			"basePath":    c.ProxyBasePath,
+			"hostAliases": hostAliases,
 		},
 		"webhook": map[string]any{
 			"secretName": c.ProxyWebhookSecretName,
+			"address":    webhookAddress,
 		},
 		"conversion": map[string]any{
 			"platform":   "linux/amd64",
