@@ -13,12 +13,16 @@ WORK="$(mktemp -d)"
 trap 'rm -rf "$WORK"' EXIT
 
 payload() {
-  local ca cert key env host
+  local ca cert key env host mirror
   host="${1:-scheduler.example.test}"
+  mirror="${2:-}"
   ca="$(printf 'dummy-ca\n' | base64 | tr -d '\n')"
   cert="$(printf 'dummy-cert\n' | base64 | tr -d '\n')"
   key="$(printf 'dummy-key\n' | base64 | tr -d '\n')"
   env="$(printf 'MANAGER_GRPC=https://manager-grpc.example.test:65003\nSTATIC_URL=http://static.example.test\nSCHEDULER_HOST=%s\nSCHEDULER_CLUSTER_ID=2\nCA_CRT_B64=%s\nCLIENT_CRT_B64=%s\nCLIENT_KEY_B64=%s\n' "$host" "$ca" "$cert" "$key")"
+  if [ -n "$mirror" ]; then
+    env="${env}"$'\n'"NYDUS_MIRROR_URL=${mirror}"
+  fi
   printf '%s' "$env" | base64 | tr -d '\n' | tr '+/' '-_'
 }
 
@@ -98,6 +102,7 @@ assert_contains "${ROOT_ONE}/etc/nydus/config.toml" 'enable_referrer_detect = tr
 assert_contains "${ROOT_ONE}/etc/nydus/config.toml" 'enable_index_detect = true'
 assert_contains "${ROOT_ONE}/etc/nydus/config.toml" 'containerd/certs.d'
 assert_not_contains "${ROOT_ONE}/etc/nydus/config.toml" 'enable_tarfs'
+assert_not_contains "${ROOT_ONE}/etc/nydus/config.toml" 'mirrors_config'
 assert_contains "${ROOT_ONE}/etc/nydus/nydusd-config.json" '"type": "registry"'
 assert_contains "${ROOT_ONE}/etc/nydus/nydusd-config.json" '"url": "http://127.0.0.1:4001"'
 assert_contains "${ROOT_ONE}/etc/nydus/nydusd-config.json" '"fallback": true'
@@ -212,7 +217,7 @@ assert_contains "$INSTALL" 'fallback_direct'
 assert_contains "$INSTALL" 'SCHEDULER_PORT=443'
 assert_contains "$INSTALL" 'NYDUS_VERSION="${NYDUS_VERSION:-v0.16.0}"'
 assert_contains "$INSTALL" 'NYDUS_SNAPSHOTTER_REPO="${NYDUS_SNAPSHOTTER_REPO:-gorizond/nydus-snapshotter}"'
-assert_contains "$INSTALL" 'NYDUS_SNAPSHOTTER_VERSION="${NYDUS_SNAPSHOTTER_VERSION:-v0.16.0-p2p.1}"'
+assert_contains "$INSTALL" 'NYDUS_SNAPSHOTTER_VERSION="${NYDUS_SNAPSHOTTER_VERSION:-v0.16.0-p2p.2}"'
 assert_contains "$INSTALL" 'NYDUS_SNAPSHOTTER_ASSET="${NYDUS_SNAPSHOTTER_ASSET:-nydus-snapshotter-linux-amd64}"'
 assert_contains "$INSTALL" "'%s/download/%s/%s'"
 assert_contains "$INSTALL" "'%s/latest/download/%s'"
@@ -246,6 +251,38 @@ if [ -f "${ROOT_TWO}/var/lib/rancher/rke2/agent/etc/containerd/config-v3.toml.tm
   echo "p2p-static self-test: v2 install must not overwrite the RKE2 config-v3 template" >&2
   exit 1
 fi
+
+ROOT_MIRROR="${WORK}/root-mirror"
+MIRROR_CFG="$(payload scheduler.example.test https://proxy.example.test/docker.io/)"
+P2P_ROOT="$ROOT_MIRROR" SKIP_DOWNLOAD=1 SKIP_MODULES=1 SKIP_SYSTEMD=1 SKIP_PREFLIGHT=1 CONTAINERD_MAJOR=1 \
+  bash "$INSTALL" "$MIRROR_CFG" > "${WORK}/mirror.log" 2>&1
+for mirror_host in docker.io index.docker.io _default; do
+  MIRROR_FILE="${ROOT_MIRROR}/etc/nydus/mirrors/${mirror_host}/hosts.toml"
+  assert_file "$MIRROR_FILE"
+  assert_contains "$MIRROR_FILE" 'server = "https://proxy.example.test/docker.io"'
+  assert_contains "$MIRROR_FILE" '[host."https://proxy.example.test/docker.io"]'
+  assert_count "$MIRROR_FILE" 'server =' 1
+  assert_not_contains "$MIRROR_FILE" 'dummy-'
+done
+assert_contains "${ROOT_MIRROR}/etc/nydus/config.toml" '[remote.mirrors_config]'
+assert_contains "${ROOT_MIRROR}/etc/nydus/config.toml" 'dir = "/etc/nydus/mirrors"'
+assert_contains "${ROOT_MIRROR}/etc/nydus/config.toml" 'enable_index_detect = true'
+assert_contains "${ROOT_MIRROR}/etc/nydus/config.toml" 'containerd/certs.d'
+assert_not_contains "${ROOT_MIRROR}/etc/nydus/nydusd-config.json" '127.0.0.1:4001'
+assert_not_contains "${ROOT_MIRROR}/etc/nydus/nydusd-config.json" '"proxy"'
+assert_not_contains "${ROOT_MIRROR}/etc/nydus/nydusd-config.json" 'use_http'
+assert_contains "${ROOT_MIRROR}/etc/nydus/nydusd-config.json" '"type": "registry"'
+assert_contains "${ROOT_MIRROR}/etc/nydus/nydusd-config.json" '"type": "blobcache"'
+assert_contains "${ROOT_MIRROR}/etc/nydus/nydusd-config.json" '"prefetch_all": true'
+assert_not_contains "${WORK}/mirror.log" 'dummy-key'
+
+ROOT_BAD_MIRROR="${WORK}/root-bad-mirror"
+if P2P_ROOT="$ROOT_BAD_MIRROR" SKIP_DOWNLOAD=1 SKIP_MODULES=1 SKIP_SYSTEMD=1 SKIP_PREFLIGHT=1 CONTAINERD_MAJOR=1 \
+  bash "$INSTALL" "$(payload scheduler.example.test ftp://proxy.example.test/docker.io)" > "${WORK}/bad-mirror.log" 2>&1; then
+  echo "p2p-static self-test: invalid nydus mirror URL was accepted" >&2
+  exit 1
+fi
+assert_contains "${WORK}/bad-mirror.log" 'nydus_mirror_url must use http:// or https://'
 
 ROOT_FALLBACK="${WORK}/root-fallback"
 FALLBACK_CFG="$(payload scheduler.unreachable.invalid)"

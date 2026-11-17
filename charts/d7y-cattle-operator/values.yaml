@@ -34,6 +34,12 @@ nginx:
   # Base URL of the static asset server (http or https).
   staticURL: ""
 
+nydus:
+  # HTTPS mirror path for nydus blobs served by the registry proxy, for example
+  # https://proxy.example.test/docker.io. Empty keeps the dfdaemon proxy
+  # fallback in the generated nydusd backend. No domain is hardcoded.
+  mirrorURL: ""
+
 # Scheduler DNS and internal Service identities. The public LB IP is resolved at
 # reconcile time from d7y-scheduler.<cluster-id>.<domain>; the service IP is
 # pinned as the non-headless scheduler client Service ClusterIP. The resolved

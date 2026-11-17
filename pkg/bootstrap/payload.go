@@ -17,6 +17,7 @@ type Payload struct {
 	ManagerGRPC        string
 	StaticURL          string
 	SmartProxyURL      string
+	NydusMirrorURL     string
 	SchedulerHost      string
 	SchedulerClusterID string
 	CACert             []byte
@@ -73,6 +74,16 @@ func Env(p Payload) (string, error) {
 			return "", fmt.Errorf("bootstrap: smart_proxy_url must be an absolute http(s) URL")
 		}
 	}
+	mirror := strings.TrimSpace(p.NydusMirrorURL)
+	if mirror != "" {
+		parsed, err := url.Parse(mirror)
+		if err != nil || (parsed.Scheme != "http" && parsed.Scheme != "https") || parsed.Host == "" ||
+			parsed.Path == "" || parsed.Path == "/" || parsed.User != nil ||
+			parsed.RawQuery != "" || parsed.Fragment != "" {
+			return "", fmt.Errorf("bootstrap: nydus_mirror_url must be an absolute http(s) URL with a mirror path")
+		}
+		mirror = strings.TrimRight(mirror, "/")
+	}
 	host := strings.TrimSpace(p.SchedulerHost)
 	if host == "" || !validDNSName(host) {
 		return "", fmt.Errorf("bootstrap: scheduler_host must be a DNS name")
@@ -90,6 +101,9 @@ func Env(p Payload) (string, error) {
 	fmt.Fprintf(&builder, "STATIC_URL=%s\n", strings.TrimRight(strings.TrimSpace(p.StaticURL), "/"))
 	if smartProxy != "" {
 		fmt.Fprintf(&builder, "SMART_PROXY_URL=%s\n", strings.TrimRight(smartProxy, "/"))
+	}
+	if mirror != "" {
+		fmt.Fprintf(&builder, "NYDUS_MIRROR_URL=%s\n", mirror)
 	}
 	fmt.Fprintf(&builder, "SCHEDULER_HOST=%s\n", host)
 	fmt.Fprintf(&builder, "SCHEDULER_CLUSTER_ID=%d\n", id)

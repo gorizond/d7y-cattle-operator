@@ -91,6 +91,22 @@ func TestEncodeSmartProxyURL(t *testing.T) {
 	}
 }
 
+func TestEncodeNydusMirrorURL(t *testing.T) {
+	payload := testPayload()
+	payload.NydusMirrorURL = "https://proxy.example.com/docker.io/"
+	encoded, err := Encode(payload)
+	if err != nil {
+		t.Fatalf("Encode() error = %v", err)
+	}
+	raw, err := base64.URLEncoding.DecodeString(encoded)
+	if err != nil {
+		t.Fatalf("decode payload: %v", err)
+	}
+	if !strings.Contains(string(raw), "NYDUS_MIRROR_URL=https://proxy.example.com/docker.io\n") {
+		t.Errorf("payload = %q, want NYDUS_MIRROR_URL with the mirror path", raw)
+	}
+}
+
 func TestEncodeRejectsInvalid(t *testing.T) {
 	cases := map[string]Payload{
 		"manager without https":  {ManagerGRPC: "http://manager", StaticURL: "http://static", SchedulerClusterID: "2", CACert: []byte("ca"), ClientCert: []byte("cert"), ClientKey: []byte("key")},
@@ -101,6 +117,7 @@ func TestEncodeRejectsInvalid(t *testing.T) {
 		"missing scheduler host": {ManagerGRPC: "https://manager", StaticURL: "http://static", SchedulerClusterID: "2", CACert: []byte("ca"), ClientCert: []byte("cert"), ClientKey: []byte("key")},
 		"invalid scheduler host": {ManagerGRPC: "https://manager", StaticURL: "http://static", SchedulerHost: "bad_host", SchedulerClusterID: "2", CACert: []byte("ca"), ClientCert: []byte("cert"), ClientKey: []byte("key")},
 		"invalid smart proxy":    {ManagerGRPC: "https://manager", StaticURL: "http://static", SmartProxyURL: "ftp://proxy", SchedulerHost: "scheduler.example.com", SchedulerClusterID: "2", CACert: []byte("ca"), ClientCert: []byte("cert"), ClientKey: []byte("key")},
+		"invalid nydus mirror":   {ManagerGRPC: "https://manager", StaticURL: "http://static", NydusMirrorURL: "https://proxy.example.com", SchedulerHost: "scheduler.example.com", SchedulerClusterID: "2", CACert: []byte("ca"), ClientCert: []byte("cert"), ClientKey: []byte("key")},
 	}
 	for name, payload := range cases {
 		t.Run(name, func(t *testing.T) {

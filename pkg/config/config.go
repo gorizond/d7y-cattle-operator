@@ -62,6 +62,7 @@ type Config struct {
 	P2PDomain                   string
 	ClusterIDFallback           string
 	NginxStaticURL              string
+	NydusMirrorURL              string
 	MTLSSecretName              string
 	ManagerAPICredentialsSecret string
 	DragonflyChartRepo          string
@@ -133,6 +134,7 @@ func Load(args []string) (*Config, error) {
 	fs.StringVar(&cfg.P2PDomain, "p2p-domain", envOr("P2P_DOMAIN", ""), "base domain for the per-cluster scheduler alias d7y-scheduler.<cluster>.<domain>")
 	fs.StringVar(&cfg.ClusterIDFallback, "p2p-cluster-id", envOr("P2P_CLUSTER_ID", ""), "fallback cluster ID when provisioning Cluster status.clusterName is empty")
 	fs.StringVar(&cfg.NginxStaticURL, "nginx-static-url", envOr("NGINX_STATIC_URL", ""), "base URL of the static asset server (http or https)")
+	fs.StringVar(&cfg.NydusMirrorURL, "nydus-mirror-url", envOr("NYDUS_MIRROR_URL", ""), "optional HTTPS mirror path for nydus blobs (for example https://proxy.example.test/docker.io)")
 	fs.StringVar(&cfg.MTLSSecretName, "mtls-secret-name", envOr("MTLS_SECRET_NAME", DefaultMTLSSecretName), "name of the mTLS Secret")
 	fs.StringVar(&cfg.ManagerAPICredentialsSecret, "manager-api-credentials-secret", envOr("MANAGER_API_CREDENTIALS_SECRET", ""), "name of the Secret holding manager API credentials")
 	fs.StringVar(&cfg.DragonflyChartRepo, "dragonfly-chart-repo", envOr("DRAGONFLY_CHART_REPO", DefaultDragonflyChartRepo), "Helm repository URL of the Dragonfly chart")
@@ -215,6 +217,11 @@ func (c *Config) Validate() error {
 		add("--nginx-static-url is required")
 	} else if err := validateURL(c.NginxStaticURL, "http", "https"); err != nil {
 		add("--nginx-static-url: %v", err)
+	}
+	if c.NydusMirrorURL != "" {
+		if err := validateNydusMirrorURL(c.NydusMirrorURL); err != nil {
+			add("--nydus-mirror-url: %v", err)
+		}
 	}
 	if c.ManagerGRPCPort < 1 || c.ManagerGRPCPort > 65535 {
 		add("--manager-grpc-port: %d is outside 1-65535", c.ManagerGRPCPort)
@@ -408,6 +415,25 @@ func validateURL(raw string, allowedSchemes ...string) error {
 		}
 	}
 	return fmt.Errorf("unsupported scheme %q (allowed: %s)", u.Scheme, strings.Join(allowedSchemes, ", "))
+}
+
+// validateNydusMirrorURL requires an absolute http(s) URL with the registry
+// mirror path, for example https://proxy.example.test/docker.io.
+func validateNydusMirrorURL(raw string) error {
+	if err := validateURL(raw, "http", "https"); err != nil {
+		return err
+	}
+	u, err := url.Parse(raw)
+	if err != nil {
+		return fmt.Errorf("invalid URL: %w", err)
+	}
+	if u.User != nil || u.RawQuery != "" || u.Fragment != "" {
+		return errors.New("must not contain credentials, a query, or a fragment")
+	}
+	if u.Path == "" || u.Path == "/" {
+		return errors.New("must include the registry mirror path (for example /docker.io)")
+	}
+	return nil
 }
 
 func envOr(key, fallback string) string {
