@@ -137,6 +137,31 @@ drop-in; on 1.x it writes an overlayfs template. It does not enable the
 `127.0.0.1:4001` nydus proxy in that path. Existing certificate/config files
 are left in place for a later retry.
 
+### Nydus on Harbor: confirmed settings
+
+Confirmed on poligon (live). Workloads use direct Harbor references of the form
+`harbor.../mirror/<registry>/<repo>:<tag>`; the node-wide nydus snapshotter
+resolves them, so no `runtimeClass` is needed.
+
+Two switches are required:
+
+- containerd 2.x drop-in: `use_local_image_pull = false`. RKE2's default `true`
+  bypasses the standard CRI unpack path; the nydus snapshotter needs CRI labels
+  (`cri.image-ref`, `cri.manifest-digest`) and layer annotations to detect nydus
+  meta/index, and detection silently fails without them.
+- nydusd dfdaemon proxy branch: `"use_http": true`. dfdaemon MITMs CONNECT with a
+  self-signed cert (`CN=rcgen`), nydusd fails TLS verification and falls back to
+  direct Harbor; plain HTTP to `127.0.0.1:4001` avoids the MITM.
+
+Measured effect (cold python start, then warm):
+
+| path                | cold   | warm   |
+|---------------------|--------|--------|
+| direct (no dfdaemon)| 11.2 s | 11.4 s |
+| via dfdaemon        | 5.0 s  | 2.9 s  |
+
+Caveat: cross-node P2P for RAFS and zran is not yet confirmed.
+
 ## Harbor admin Secret
 
 Harbor is deployed by the operator, not by this chart. Before enabling

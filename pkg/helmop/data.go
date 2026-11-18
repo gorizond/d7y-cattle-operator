@@ -38,11 +38,19 @@ func Data(c Cluster) *fleetv1alpha1.HelmOp {
 			"host":      map[string]any{"schedulerClusterID": c.SchedulerClusterID},
 			"scheduler": tlsPaths(),
 			"upload":    uploadConfig(4100, c.P2PDataTLS),
-			"proxy":     map[string]any{"ip": "127.0.0.1", "server": map[string]any{"port": 4101}},
-			"metrics":   map[string]any{"ip": "127.0.0.1", "server": map[string]any{"port": 4102}},
-			"health":    map[string]any{"ip": "127.0.0.1", "server": map[string]any{"port": 4103}},
-			"stats":     map[string]any{"ip": "127.0.0.1", "server": map[string]any{"port": 4104}},
-			"storage":   map[string]any{"server": map[string]any{"tcpPort": 4105, "quicPort": 4106}},
+			"download":  map[string]any{"server": map[string]any{"requestRateLimit": 500}},
+			"proxy": map[string]any{
+				"ip":     "127.0.0.1",
+				"server": map[string]any{"port": 4101, "requestRateLimit": 500},
+				// Always schedule blob pulls through the seed client: the live
+				// poligon-data client needed 500 rps and "always" to stop
+				// falling back to the origin.
+				"rules": map[string]any{"blobs/sha256.*": map[string]any{"schedulingPolicy": "always"}},
+			},
+			"metrics": map[string]any{"ip": "127.0.0.1", "server": map[string]any{"port": 4102}},
+			"health":  map[string]any{"ip": "127.0.0.1", "server": map[string]any{"port": 4103}},
+			"stats":   map[string]any{"ip": "127.0.0.1", "server": map[string]any{"port": 4104}},
+			"storage": map[string]any{"server": map[string]any{"tcpPort": 4105, "quicPort": 4106}},
 		},
 		"extraVolumes":      volumes(c.MTLSSecretName, logVolume()),
 		"extraVolumeMounts": volumeMounts(logVolumeMount("/var/log/dragonfly/dfdaemon/")),
@@ -64,11 +72,19 @@ func Data(c Cluster) *fleetv1alpha1.HelmOp {
 			"host":      map[string]any{"schedulerClusterID": c.SchedulerClusterID},
 			"scheduler": tlsPaths(),
 			"upload":    uploadConfig(4000, c.P2PDataTLS),
-			"proxy":     map[string]any{"ip": "127.0.0.1", "server": map[string]any{"port": 4001}},
-			"metrics":   map[string]any{"ip": "127.0.0.1", "server": map[string]any{"port": 4002}},
-			"health":    map[string]any{"ip": "127.0.0.1", "server": map[string]any{"port": 4003}},
-			"stats":     map[string]any{"ip": "127.0.0.1", "server": map[string]any{"port": 4004}},
-			"storage":   map[string]any{"server": map[string]any{"tcpPort": 4005, "quicPort": 4006}},
+			"download":  map[string]any{"server": map[string]any{"requestRateLimit": 500}},
+			"proxy": map[string]any{
+				"ip":     "127.0.0.1",
+				"server": map[string]any{"port": 4001, "requestRateLimit": 500},
+				// Always schedule blob pulls through the node client: the live
+				// poligon-data client needed 500 rps and "always" to stop
+				// falling back to the origin.
+				"rules": map[string]any{"blobs/sha256.*": map[string]any{"schedulingPolicy": "always"}},
+			},
+			"metrics": map[string]any{"ip": "127.0.0.1", "server": map[string]any{"port": 4002}},
+			"health":  map[string]any{"ip": "127.0.0.1", "server": map[string]any{"port": 4003}},
+			"stats":   map[string]any{"ip": "127.0.0.1", "server": map[string]any{"port": 4004}},
+			"storage": map[string]any{"server": map[string]any{"tcpPort": 4005, "quicPort": 4006}},
 		},
 		"extraVolumes": volumes(c.MTLSSecretName,
 			map[string]any{
