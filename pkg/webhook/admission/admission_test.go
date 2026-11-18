@@ -209,3 +209,53 @@ func TestPatchPodRewritesAnyRegistryAndDockerHub(t *testing.T) {
 		t.Errorf("missing patch paths: %v", want)
 	}
 }
+
+func TestPatchPodCredentialsOnlyForProxy(t *testing.T) {
+	rewriter := New(Config{
+		ProxyDomain:        "proxy.example.com",
+		ImagePullSecret:    "proxy-pull",
+		ServiceAccountName: "proxy-sa",
+	})
+	tests := []struct {
+		name      string
+		image     string
+		wantPatch bool
+	}{
+		{"harbor is skipped", "harbor.example.com/library/nginx:1", false},
+		{"proxy self gets credentials", "proxy.example.com/registry.gitlab.com/org/app:1", true},
+		{"rewritten registry gets credentials", "quay.io/org/app:1", true},
+	}
+	for _, test := range tests {
+		t.Run(test.name, func(t *testing.T) {
+			pod := &corev1.Pod{Spec: corev1.PodSpec{
+				Containers: []corev1.Container{{Name: "app", Image: test.image}},
+			}}
+			patch, err := rewriter.PatchPod(pod)
+			if err != nil {
+				t.Fatal(err)
+			}
+			if !test.wantPatch {
+				if len(patch) != 0 {
+					t.Errorf("patch = %s, want no patch for %s", patch, test.image)
+				}
+				return
+			}
+			var operations []patchOperation
+			if err := json.Unmarshal(patch, &operations); err != nil {
+				t.Fatal(err)
+			}
+			foundSecret, foundSA := false, false
+			for _, operation := range operations {
+				switch operation.Path {
+				case "/spec/imagePullSecrets":
+					foundSecret = true
+				case "/spec/serviceAccountName":
+					foundSA = true
+				}
+			}
+			if !foundSecret || !foundSA {
+				t.Errorf("patch = %s, want imagePullSecrets and serviceAccountName", patch)
+			}
+		})
+	}
+}

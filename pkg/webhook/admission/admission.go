@@ -87,8 +87,11 @@ func (r *Rewriter) PatchPod(pod *corev1.Pod) ([]byte, error) {
 
 	rewrite := func(path string, image *string) {
 		registry, _ := imageRegistry(*image)
-		if isProxyOrHarbor(registry, r.config.ProxyDomain) {
+		if isProxyRegistry(registry, r.config.ProxyDomain) {
 			usesProxy = true
+			return
+		}
+		if isHarborRegistry(registry) {
 			return
 		}
 		if rewritten, changed := r.RewriteImage(*image); changed {
@@ -189,7 +192,8 @@ func hasPullSecret(pod *corev1.Pod, name string) bool {
 }
 
 // imageRegistry returns the explicit registry host of an image reference.
-// Unqualified references (implicit Docker Hub) are not rewritten.
+// Unqualified references (implicit Docker Hub) return false; RewriteImage
+// normalizes them to docker.io before rewriting.
 func imageRegistry(image string) (string, bool) {
 	name := image
 	if digest := strings.IndexByte(name, '@'); digest >= 0 {
@@ -230,12 +234,14 @@ func normalizeImage(image string) string {
 	return "docker.io/library/" + name + digest
 }
 
-func isProxyOrHarbor(registry, proxyDomain string) bool {
-	if registry == "" {
-		return false
-	}
-	if registry == proxyDomain {
-		return true
-	}
+func isProxyRegistry(registry, proxyDomain string) bool {
+	return registry != "" && registry == proxyDomain
+}
+
+func isHarborRegistry(registry string) bool {
 	return registry == "harbor" || strings.HasPrefix(registry, "harbor.") || strings.HasPrefix(registry, "harbor-")
+}
+
+func isProxyOrHarbor(registry, proxyDomain string) bool {
+	return isProxyRegistry(registry, proxyDomain) || isHarborRegistry(registry)
 }
