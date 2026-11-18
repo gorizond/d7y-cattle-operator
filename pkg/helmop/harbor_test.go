@@ -92,8 +92,8 @@ func TestRegistryProxyHelmOp(t *testing.T) {
 	if op.Spec.Helm.Chart != "registry-proxy" || op.Spec.Helm.Version != "0.1.11" {
 		t.Errorf("chart = %s %s", op.Spec.Helm.Chart, op.Spec.Helm.Version)
 	}
-	if len(op.Spec.DependsOn) != 1 || op.Spec.DependsOn[0].Name != "c1-harbor" {
-		t.Errorf("dependsOn = %+v, want c1-harbor", op.Spec.DependsOn)
+	if len(op.Spec.DependsOn) != 0 {
+		t.Errorf("dependsOn = %+v, want none (independent toggles)", op.Spec.DependsOn)
 	}
 	if len(op.Spec.DownstreamResources) != 2 ||
 		op.Spec.DownstreamResources[0].Name != "c1-harbor-admin" ||

@@ -43,6 +43,9 @@ grep -q 'nydus-updater' "$tmp/p2p-static.yaml" || fail "p2p-static script is mis
 grep -q 'use_local_image_pull' "$tmp/p2p-static.yaml" || fail "p2p-static script is missing the global nydus drop-in"
 grep -q 'enable_referrer_detect = true' "$tmp/p2p-static.yaml" || fail "p2p-static script is missing enable_referrer_detect"
 grep -q 'enable_index_detect = true' "$tmp/p2p-static.yaml" || fail "p2p-static script is missing enable_index_detect"
+if grep -q '"auth"' "$tmp/p2p-static.yaml"; then
+  fail "p2p-static must not embed registry credentials (network-only or node keychain)"
+fi
 grep -q '"fs_prefetch": {' "$tmp/p2p-static.yaml" || fail "p2p-static script is missing nydusd fs_prefetch"
 grep -q '"threads_count": 8' "$tmp/p2p-static.yaml" || fail "p2p-static script is missing nydusd prefetch threads"
 grep -q '"type": "blobcache"' "$tmp/p2p-static.yaml" || fail "p2p-static script is missing nydusd blobcache"

@@ -38,7 +38,7 @@ const (
 	DefaultRegistryProxyChartName        = "registry-proxy"
 	DefaultRegistryProxyChartVersion     = "0.1.11"
 	DefaultProxyHarborAdminSecret        = "harbor-admin"
-	DefaultProxyRegistries               = "docker.io"
+	DefaultProxyRegistries               = "docker.io,registry.gitlab.com,ghcr.io"
 	DefaultProxyBasePath                 = ""
 	DefaultExtrasIngressController       = "nginx"
 	DefaultExtrasIngressClassName        = ""

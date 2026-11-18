@@ -99,3 +99,57 @@ func TestConfigRejectsInvalid(t *testing.T) {
 		})
 	}
 }
+
+func TestConfigSelfRegistry(t *testing.T) {
+	cfg := testConfig(t)
+	if !cfg.SelfRegistry("proxy.example.com") {
+		t.Error("SelfRegistry(proxy.example.com) = false")
+	}
+	if cfg.SelfRegistry("docker.io") {
+		t.Error("SelfRegistry(docker.io) = true")
+	}
+}
+
+func TestConfigBasicAuthAndUpstreamCredentials(t *testing.T) {
+	dir := t.TempDir()
+	passwordFile := filepath.Join(dir, "password")
+	if err := os.WriteFile(passwordFile, []byte("s3cret\n"), 0600); err != nil {
+		t.Fatal(err)
+	}
+	credentialsFile := filepath.Join(dir, "credentials.yaml")
+	if err := os.WriteFile(credentialsFile, []byte("registry.gitlab.com:\n  access_key: robot\n  access_secret: token\n"), 0600); err != nil {
+		t.Fatal(err)
+	}
+	cfg, err := Load(writeConfig(t, testConfigYAML+`
+auth:
+  mode: basic
+  username: robot
+  password_file: `+passwordFile+`
+upstream:
+  credentials_file: `+credentialsFile+`
+`))
+	if err != nil {
+		t.Fatalf("Load() error = %v", err)
+	}
+	password, err := cfg.AuthPassword()
+	if err != nil || password != "s3cret" {
+		t.Errorf("AuthPassword() = %q, %v", password, err)
+	}
+	credentials, err := LoadUpstreamCredentials(cfg.Upstream.CredentialsFile)
+	if err != nil {
+		t.Fatalf("LoadUpstreamCredentials() error = %v", err)
+	}
+	if got := credentials["registry.gitlab.com"]; got.AccessKey != "robot" || got.AccessSecret != "token" {
+		t.Errorf("credentials = %+v", got)
+	}
+
+	if _, err := Load(writeConfig(t, testConfigYAML+"auth:\n  mode: token\n")); err == nil {
+		t.Error("invalid auth.mode was accepted")
+	}
+	if _, err := Load(writeConfig(t, testConfigYAML+"auth:\n  mode: basic\n  username: robot\n")); err == nil {
+		t.Error("basic auth without a password file was accepted")
+	}
+	if _, err := LoadUpstreamCredentials(filepath.Join(dir, "missing.yaml")); err == nil {
+		t.Error("missing credentials file was accepted")
+	}
+}

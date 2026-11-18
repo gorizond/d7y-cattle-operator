@@ -6,6 +6,7 @@ import (
 	"log/slog"
 	"strings"
 	"sync"
+	"sync/atomic"
 	"time"
 )
 
@@ -45,6 +46,10 @@ type Manager struct {
 	queue   chan Job
 	work    func(context.Context, Job) error
 	started bool
+
+	enqueued  atomic.Uint64
+	succeeded atomic.Uint64
+	failed    atomic.Uint64
 }
 
 // NewManager creates an in-memory job manager. work is called by Start.
@@ -80,6 +85,7 @@ func (m *Manager) Enqueue(job Job) bool {
 		existing.UpdatedAt = time.Now().UTC()
 		select {
 		case m.queue <- job:
+			m.enqueued.Add(1)
 			return true
 		default:
 			return false
@@ -88,6 +94,7 @@ func (m *Manager) Enqueue(job Job) bool {
 	m.jobs[key] = &JobState{State: "pending", UpdatedAt: time.Now().UTC()}
 	select {
 	case m.queue <- job:
+		m.enqueued.Add(1)
 		return true
 	default:
 		delete(m.jobs, key)
@@ -126,6 +133,7 @@ func (m *Manager) run(ctx context.Context, job Job) {
 		}
 		if err == nil {
 			m.setState(key, "ready", attempt, "")
+			m.succeeded.Add(1)
 			return
 		}
 		slog.Error("registry proxy job failed",
@@ -139,6 +147,12 @@ func (m *Manager) run(ctx context.Context, job Job) {
 		m.setState(key, "converting", attempt, err.Error())
 	}
 	m.setState(key, "failed", 3, err.Error())
+	m.failed.Add(1)
+}
+
+// Metrics returns the accepted, succeeded, and failed job counters.
+func (m *Manager) Metrics() (enqueued, succeeded, failed uint64) {
+	return m.enqueued.Load(), m.succeeded.Load(), m.failed.Load()
 }
 
 func (m *Manager) setState(key, state string, attempts int, lastError string) {

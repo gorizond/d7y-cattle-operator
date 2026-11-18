@@ -71,14 +71,12 @@ func RegistryProxy(c Cluster) *fleetv1alpha1.HelmOp {
 		},
 		"service": map[string]any{"port": RegistryProxyPort},
 	}
-	var dependsOn []string
-	if c.HarborManaged {
-		dependsOn = append(dependsOn, HarborName(c.Name))
-	}
 	if strings.TrimSpace(c.ProxyPublicURL) == "" {
 		values["ingress"].(map[string]any)["enabled"] = false
 	}
-	op := newHelmOp(RegistryProxyName(c.Name), c, c.RegistryProxyChart, "registry-proxy", values, dependsOn)
+	// Harbor is an independent, replaceable component: the proxy HelmOp has
+	// no dependsOn on it. Use harbor-url/proxy.domain for external endpoints.
+	op := newHelmOp(RegistryProxyName(c.Name), c, c.RegistryProxyChart, "registry-proxy", values, nil)
 	op.Spec.DownstreamResources = []fleetv1alpha1.DownstreamResource{
 		{Kind: "Secret", Name: c.HarborAdminSecret},
 		{Kind: "Secret", Name: c.ProxyWebhookSecretName},

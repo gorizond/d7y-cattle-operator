@@ -137,8 +137,12 @@ func initialize(ctx context.Context, cfg *registryproxy.Config, bootstrap *boots
 		adminUsername = "admin"
 	}
 	webhookSecret := readOptional(webhookSecretDir, "secret")
+	credentials, err := registryproxy.LoadUpstreamCredentials(cfg.Upstream.CredentialsFile)
+	if err != nil {
+		return err
+	}
 	base := cfg.RegistryURL()
-	harbor := &registryproxy.HarborClient{BaseURL: base, Username: adminUsername, Password: adminPassword}
+	harbor := &registryproxy.HarborClient{BaseURL: base, Username: adminUsername, Password: adminPassword, Credentials: credentials}
 	namespace := os.Getenv("POD_NAMESPACE")
 	if namespace == "" {
 		namespace = "dragonfly-system"
@@ -156,6 +160,9 @@ func initialize(ctx context.Context, cfg *registryproxy.Config, bootstrap *boots
 	sourceProjects := make([]string, 0, len(cfg.Registry.Allowlist))
 	for _, registry := range cfg.Registry.Allowlist {
 		sourceProjects = append(sourceProjects, cfg.ProjectName(registry))
+		// Pre-provision only the configured allowlist (bounded, never an
+		// arbitrary request registry) so the system robot can be granted
+		// per-project permissions. Read-path Ensure stays lazy and cached.
 		if err := provisioner.Ensure(bootstrapCtx, registry); err != nil {
 			return fmt.Errorf("provision Harbor for %s: %w", registry, err)
 		}
@@ -182,9 +189,16 @@ func initialize(ctx context.Context, cfg *registryproxy.Config, bootstrap *boots
 		_, err = converter.Convert(ctx, job.Registry, job.Repository, job.TagOrReference(), sourceDigest)
 		return err
 	})
-	backend := &registryproxy.HarborBackend{Source: source, Mirror: mirror, MirrorProject: cfg.Mirror.Project, Provisioner: provisioner}
+	backend := &registryproxy.HarborBackend{Source: source, Mirror: mirror, MirrorProject: cfg.Mirror.Project, Provisioner: provisioner, Jobs: manager}
 	webhook := &registryproxy.Webhook{Secret: webhookSecret, Manager: manager, Config: cfg}
 	server := &registryproxy.Server{Config: cfg, Backend: backend, Convert: webhook, Manager: manager}
+	if cfg.Auth.Mode == "basic" {
+		server.AuthUsername = cfg.Auth.Username
+		server.AuthPassword, err = cfg.AuthPassword()
+		if err != nil {
+			return err
+		}
+	}
 	manager.Start(ctx)
 	bootstrap.set(server.Handler())
 	slog.Info("registry-proxy bootstrap complete")

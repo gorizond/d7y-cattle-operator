@@ -3,6 +3,7 @@ package registryproxy
 import (
 	"context"
 	"encoding/json"
+	"fmt"
 	"net/http"
 	"net/http/httptest"
 	"strconv"
@@ -21,6 +22,9 @@ type fakeHarbor struct {
 	webhookAuth    string
 	robots         []HarborRobot
 	posts          map[string]int
+	// lastRegistryBody is the raw create body (checks that private upstream
+	// credentials reach Harbor without appearing in logs).
+	lastRegistryBody map[string]any
 }
 
 func (f *fakeHarbor) handler() http.Handler {
@@ -34,8 +38,10 @@ func (f *fakeHarbor) handler() http.Handler {
 		case r.Method == http.MethodGet && r.URL.Path == "/api/v2.0/registries":
 			_ = json.NewEncoder(w).Encode(f.registries)
 		case r.Method == http.MethodPost && r.URL.Path == "/api/v2.0/registries":
-			var item HarborRegistry
-			_ = json.NewDecoder(r.Body).Decode(&item)
+			var body map[string]any
+			_ = json.NewDecoder(r.Body).Decode(&body)
+			f.lastRegistryBody = body
+			item := HarborRegistry{Name: fmt.Sprint(body["name"]), Type: fmt.Sprint(body["type"]), URL: fmt.Sprint(body["url"])}
 			f.posts["registry"]++
 			item.ID = len(f.registries) + 1
 			f.registries = append(f.registries, item)
@@ -50,7 +56,8 @@ func (f *fakeHarbor) handler() http.Handler {
 			f.posts["project"]++
 			f.projects = append(f.projects, HarborProject{ProjectID: len(f.projects) + 1, Name: item.ProjectName})
 			w.WriteHeader(http.StatusCreated)
-		case r.Method == http.MethodGet && r.URL.Path == "/api/v2.0/projects/dockerio/webhook/policies":
+		case r.Method == http.MethodGet && strings.HasPrefix(r.URL.Path, "/api/v2.0/projects/") &&
+			strings.HasSuffix(r.URL.Path, "/webhook/policies"):
 			var items []map[string]any
 			for i, name := range f.webhooks {
 				item := map[string]any{"id": i + 1, "name": name}
@@ -60,12 +67,14 @@ func (f *fakeHarbor) handler() http.Handler {
 				items = append(items, item)
 			}
 			_ = json.NewEncoder(w).Encode(items)
-		case r.Method == http.MethodPost && r.URL.Path == "/api/v2.0/projects/dockerio/webhook/policies":
+		case r.Method == http.MethodPost && strings.HasPrefix(r.URL.Path, "/api/v2.0/projects/") &&
+			strings.HasSuffix(r.URL.Path, "/webhook/policies"):
 			f.posts["webhook"]++
 			f.webhooks = append(f.webhooks, "nydus-convert")
 			f.setWebhookTarget(r)
 			w.WriteHeader(http.StatusCreated)
-		case r.Method == http.MethodPut && r.URL.Path == "/api/v2.0/projects/dockerio/webhook/policies/1":
+		case r.Method == http.MethodPut && strings.HasPrefix(r.URL.Path, "/api/v2.0/projects/") &&
+			strings.Contains(r.URL.Path, "/webhook/policies/"):
 			f.posts["webhook_update"]++
 			f.setWebhookTarget(r)
 			w.WriteHeader(http.StatusOK)
@@ -270,5 +279,28 @@ func TestEnsureProjectMapsDots(t *testing.T) {
 	}
 	if got := ProjectName("ghcr.io"); got != "ghcrio" {
 		t.Errorf("ProjectName(ghcr.io) = %q", got)
+	}
+}
+
+func TestEnsureRegistrySendsPrivateUpstreamCredentials(t *testing.T) {
+	fake := &fakeHarbor{}
+	server := httptest.NewServer(fake.handler())
+	defer server.Close()
+	client := &HarborClient{
+		BaseURL: server.URL,
+		Credentials: map[string]HarborCredential{
+			"registry.gitlab.com": {AccessKey: "robot", AccessSecret: "s3cret"},
+		},
+	}
+	if _, err := client.EnsureRegistry(context.Background(), "registry.gitlab.com"); err != nil {
+		t.Fatalf("EnsureRegistry() error = %v", err)
+	}
+	fake.mu.Lock()
+	defer fake.mu.Unlock()
+	if fake.lastRegistryBody["access_key"] != "robot" || fake.lastRegistryBody["access_secret"] != "s3cret" {
+		t.Errorf("registry body = %v", fake.lastRegistryBody)
+	}
+	if fake.lastRegistryBody["name"] != "registry.gitlab.com" {
+		t.Errorf("registry name = %v", fake.lastRegistryBody["name"])
 	}
 }

@@ -20,6 +20,16 @@ type HarborClient struct {
 	Username string
 	Password string
 	Client   *http.Client
+	// Credentials holds optional upstream registry credentials (access_key /
+	// access_secret). They are mounted from a Secret and never logged.
+	Credentials map[string]HarborCredential
+}
+
+// HarborCredential is a private upstream registry login for a Harbor registry
+// endpoint.
+type HarborCredential struct {
+	AccessKey    string `yaml:"access_key"`
+	AccessSecret string `yaml:"access_secret"`
 }
 
 type HarborRegistry struct {
@@ -105,9 +115,14 @@ func (h *HarborClient) EnsureRegistry(ctx context.Context, host string) (HarborR
 		}
 	}
 	spec := registrySpec(host)
-	status, err := h.do(ctx, http.MethodPost, "/api/v2.0/registries", map[string]any{
+	body := map[string]any{
 		"name": spec.Name, "type": spec.Type, "url": spec.URL, "insecure": false,
-	}, nil)
+	}
+	if credential, ok := h.Credentials[host]; ok && credential.AccessKey != "" {
+		body["access_key"] = credential.AccessKey
+		body["access_secret"] = credential.AccessSecret
+	}
+	status, err := h.do(ctx, http.MethodPost, "/api/v2.0/registries", body, nil)
 	if err == nil && (status == http.StatusCreated || status == http.StatusOK) {
 		return h.getRegistry(ctx, host)
 	}
