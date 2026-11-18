@@ -151,6 +151,16 @@ func TestDataHelmOp(t *testing.T) {
 		if _, ok := config["manager"]; ok {
 			t.Errorf("%s config contains manager.addr; data must use dynconfig", component)
 		}
+		if got := valueAt(t, config, "download", "server", "requestRateLimit"); got != 500 {
+			t.Errorf("%s download.server.requestRateLimit = %v, want 500", component, got)
+		}
+		if got := valueAt(t, config, "proxy", "server", "requestRateLimit"); got != 500 {
+			t.Errorf("%s proxy.server.requestRateLimit = %v, want 500", component, got)
+		}
+		rules := nested(t, config, "proxy", "rules", "blobs/sha256.*")
+		if rules["schedulingPolicy"] != "always" {
+			t.Errorf("%s proxy rule schedulingPolicy = %v, want always", component, rules["schedulingPolicy"])
+		}
 	}
 }
 
