@@ -9,17 +9,18 @@ import (
 )
 
 const (
-	conditionRolesResolved       condition.Cond = "d7y.io/RolesResolved"
-	conditionKeyDBReady          condition.Cond = "d7y.io/KeyDBReady"
-	conditionControlReady        condition.Cond = "d7y.io/ControlReady"
-	conditionDataReady           condition.Cond = "d7y.io/DataReady"
-	conditionHarborReady         condition.Cond = "d7y.io/HarborReady"
-	conditionRegistryProxyReady  condition.Cond = "d7y.io/RegistryProxyReady"
-	conditionHarborDomainMissing condition.Cond = "d7y.io/HarborDomainMissing"
-	conditionRegistered          condition.Cond = "d7y.io/Registered"
-	conditionRegistrationFailed  condition.Cond = "d7y.io/RegistrationFailed"
-	conditionRetrying            condition.Cond = "d7y.io/Retrying"
-	conditionIDMismatch          condition.Cond = "d7y.io/IdMismatch"
+	conditionRolesResolved         condition.Cond = "d7y.io/RolesResolved"
+	conditionKeyDBReady            condition.Cond = "d7y.io/KeyDBReady"
+	conditionControlReady          condition.Cond = "d7y.io/ControlReady"
+	conditionDataReady             condition.Cond = "d7y.io/DataReady"
+	conditionHarborReady           condition.Cond = "d7y.io/HarborReady"
+	conditionRegistryProxyReady    condition.Cond = "d7y.io/RegistryProxyReady"
+	conditionAdmissionWebhookReady condition.Cond = "d7y.io/AdmissionWebhookReady"
+	conditionHarborDomainMissing   condition.Cond = "d7y.io/HarborDomainMissing"
+	conditionRegistered            condition.Cond = "d7y.io/Registered"
+	conditionRegistrationFailed    condition.Cond = "d7y.io/RegistrationFailed"
+	conditionRetrying              condition.Cond = "d7y.io/Retrying"
+	conditionIDMismatch            condition.Cond = "d7y.io/IdMismatch"
 )
 
 // statusBuilder accumulates all condition changes for one reconcile pass and
@@ -83,6 +84,7 @@ func (s *statusBuilder) managedDisabled(reason, message string) {
 	s.set(conditionKeyDBReady, false, reason, message)
 	s.set(conditionHarborReady, false, reason, message)
 	s.set(conditionRegistryProxyReady, false, reason, message)
+	s.set(conditionAdmissionWebhookReady, false, reason, message)
 	s.set(conditionHarborDomainMissing, false, reason, message)
 	s.seedUnavailable(reason, message)
 	s.seedDisabled()
@@ -98,7 +100,7 @@ func hasManagedStatus(cluster *provv1.Cluster) bool {
 		switch condition.Cond(cond.Type) {
 		case conditionRolesResolved, conditionKeyDBReady, conditionControlReady,
 			conditionDataReady, conditionHarborReady, conditionRegistryProxyReady,
-			conditionHarborDomainMissing, conditionRegistered,
+			conditionAdmissionWebhookReady, conditionHarborDomainMissing, conditionRegistered,
 			conditionRegistrationFailed, conditionRetrying, conditionIDMismatch:
 			return true
 		}

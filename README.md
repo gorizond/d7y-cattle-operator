@@ -37,6 +37,10 @@ Live envtest/pilot verification remains deferred.
 - Deploys Harbor on `p2p.dragonfly.io/harbor: "true"` and the external
   stateless registry proxy on `p2p.dragonfly.io/proxy: "true"`. Harbor uses the
   existing `<cluster>-keydb`; the proxy has no PVC.
+- Deploys the opt-in Pod image-rewriting webhook on
+  `p2p.dragonfly.io/admission: "true"` (`<cluster>-admission-webhook`). It
+  rewrites allowlisted images to `<proxy.domain>/<registry>/<repo>:<tag>`,
+  preserves `@sha256`, and is independent of Harbor/proxy/seed.
 - Manages the manager Ingresses, the public scheduler TCP front, and optional
   VPAs through the separate `<cluster>-extras` HelmOp and the
   `dragonfly-extras` chart. The operator has no Ingress, IngressRouteTCP, or
@@ -142,6 +146,12 @@ annotations add the Dragonfly releases:
 | `seed: "true"` + scheduler ID | KeyDB, `<cluster>-control`, `<cluster>-data`, `<cluster>-extras` (VPAs) |
 | manager + seed | manager, control, data, extras |
 | `seed: "true"` without scheduler ID | KeyDB + extras (KeyDB VPA); `SchedulerClusterIDMissing` event, no seed releases |
+| `proxy: "true"` | `<cluster>-registry-proxy` only (external `harbor-url` allowed) |
+| `admission: "true"` | `<cluster>-admission-webhook` only (uses operator `proxy.domain`) |
+
+The `harbor`, `proxy`, `admission`, and `seed` annotations are independent:
+any combination is valid, nothing is auto-installed, and removing one toggle
+deletes only its own HelmOp.
 
 ### Pilot data resource sizing
 
@@ -185,6 +195,7 @@ only when the value, reason, or message changes:
 | `d7y.io/DataReady` | The seedClient/client HelmOp was applied (`seed: "true"`). |
 | `d7y.io/HarborReady` | The Harbor HelmOp was applied or an external `harbor-url` is configured. |
 | `d7y.io/RegistryProxyReady` | The independent registry proxy HelmOp was applied. |
+| `d7y.io/AdmissionWebhookReady` | The independent admission webhook HelmOp was applied and Ready. |
 | `d7y.io/HarborDomainMissing` | `harbor: "true"` is set but `harbor-domain` is missing or invalid. |
 | `d7y.io/Registered` | Scheduler and seed-peer records were ensured and linked in the manager. |
 | `d7y.io/RegistrationFailed` | Registration failed permanently; `d7y.io/Retrying` marks transient failures. |

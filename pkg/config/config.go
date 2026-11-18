@@ -37,6 +37,10 @@ const (
 	DefaultRegistryProxyChartRepo        = "https://gorizond.github.io/d7y-cattle-operator"
 	DefaultRegistryProxyChartName        = "registry-proxy"
 	DefaultRegistryProxyChartVersion     = "0.1.11"
+	DefaultAdmissionChartRepo            = "https://gorizond.github.io/d7y-cattle-operator"
+	DefaultAdmissionChartName            = "admission-webhook"
+	DefaultAdmissionChartVersion         = "0.1.0"
+	DefaultAdmissionNetworkOnly          = true
 	DefaultProxyHarborAdminSecret        = "harbor-admin"
 	DefaultProxyRegistries               = "docker.io"
 	DefaultProxyBasePath                 = ""
@@ -80,6 +84,12 @@ type Config struct {
 	RegistryProxyChartRepo      string
 	RegistryProxyChartName      string
 	RegistryProxyChartVersion   string
+	AdmissionChartRepo          string
+	AdmissionChartName          string
+	AdmissionChartVersion       string
+	AdmissionImagePullSecret    string
+	AdmissionServiceAccount     string
+	AdmissionNetworkOnly        bool
 	ProxyDomain                 string
 	ProxyHarborURL              string
 	ProxyHarborAdminSecret      string
@@ -124,6 +134,10 @@ func Load(args []string) (*Config, error) {
 	if err != nil {
 		return nil, err
 	}
+	defaultAdmissionNetworkOnly, err := envBool("ADMISSION_NETWORK_ONLY", DefaultAdmissionNetworkOnly)
+	if err != nil {
+		return nil, err
+	}
 
 	cfg := &Config{}
 	proxyHostAliases := envOr("PROXY_HOST_ALIASES", "")
@@ -152,6 +166,12 @@ func Load(args []string) (*Config, error) {
 	fs.StringVar(&cfg.RegistryProxyChartRepo, "registry-proxy-chart-repo", envOr("REGISTRY_PROXY_CHART_REPO", DefaultRegistryProxyChartRepo), "Helm repository URL of the registry-proxy chart")
 	fs.StringVar(&cfg.RegistryProxyChartName, "registry-proxy-chart-name", envOr("REGISTRY_PROXY_CHART_NAME", DefaultRegistryProxyChartName), "registry-proxy chart name")
 	fs.StringVar(&cfg.RegistryProxyChartVersion, "registry-proxy-chart-version", envOr("REGISTRY_PROXY_CHART_VERSION", DefaultRegistryProxyChartVersion), "registry-proxy chart version")
+	fs.StringVar(&cfg.AdmissionChartRepo, "admission-chart-repo", envOr("ADMISSION_CHART_REPO", DefaultAdmissionChartRepo), "Helm repository URL of the admission-webhook chart")
+	fs.StringVar(&cfg.AdmissionChartName, "admission-chart-name", envOr("ADMISSION_CHART_NAME", DefaultAdmissionChartName), "admission-webhook chart name")
+	fs.StringVar(&cfg.AdmissionChartVersion, "admission-chart-version", envOr("ADMISSION_CHART_VERSION", DefaultAdmissionChartVersion), "admission-webhook chart version")
+	fs.StringVar(&cfg.AdmissionImagePullSecret, "admission-image-pull-secret", envOr("ADMISSION_IMAGE_PULL_SECRET", ""), "Secret injected as imagePullSecrets by the admission webhook (empty: network-only)")
+	fs.StringVar(&cfg.AdmissionServiceAccount, "admission-service-account", envOr("ADMISSION_SERVICE_ACCOUNT", ""), "serviceAccountName injected by the admission webhook")
+	fs.BoolVar(&cfg.AdmissionNetworkOnly, "admission-network-only", defaultAdmissionNetworkOnly, "disable credential injection in the admission webhook")
 	fs.StringVar(&cfg.ProxyDomain, "proxy-domain", envOr("PROXY_DOMAIN", ""), "public registry proxy domain (DNS name, no scheme)")
 	fs.StringVar(&cfg.ProxyHarborURL, "proxy-harbor-url", envOr("PROXY_HARBOR_URL", ""), "existing/external Harbor base URL for the proxy")
 	fs.StringVar(&cfg.ProxyHarborAdminSecret, "proxy-harbor-admin-secret", envOr("PROXY_HARBOR_ADMIN_SECRET", DefaultProxyHarborAdminSecret), "name of the Harbor admin Secret in the operator namespace")
@@ -300,6 +320,29 @@ func (c *Config) Validate() error {
 	}
 	if !chartVersionPattern.MatchString(c.RegistryProxyChartVersion) {
 		add("--registry-proxy-chart-version: %q is not a valid chart version", c.RegistryProxyChartVersion)
+	}
+	if c.AdmissionChartRepo == "" {
+		add("--admission-chart-repo is required")
+	} else if err := validateURL(c.AdmissionChartRepo, "http", "https"); err != nil {
+		add("--admission-chart-repo: %v", err)
+	}
+	if c.AdmissionChartName == "" {
+		add("--admission-chart-name is required")
+	} else if msgs := validation.IsDNS1123Label(c.AdmissionChartName); len(msgs) > 0 {
+		add("--admission-chart-name: %s", strings.Join(msgs, "; "))
+	}
+	if !chartVersionPattern.MatchString(c.AdmissionChartVersion) {
+		add("--admission-chart-version: %q is not a valid chart version", c.AdmissionChartVersion)
+	}
+	if c.AdmissionImagePullSecret != "" {
+		if msgs := validation.IsDNS1123Subdomain(c.AdmissionImagePullSecret); len(msgs) > 0 {
+			add("--admission-image-pull-secret: %s", strings.Join(msgs, "; "))
+		}
+	}
+	if c.AdmissionServiceAccount != "" {
+		if msgs := validation.IsDNS1123Subdomain(c.AdmissionServiceAccount); len(msgs) > 0 {
+			add("--admission-service-account: %s", strings.Join(msgs, "; "))
+		}
 	}
 	if c.ProxyDomain != "" {
 		if msgs := validation.IsDNS1123Subdomain(c.ProxyDomain); len(msgs) > 0 {

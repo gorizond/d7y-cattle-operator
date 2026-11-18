@@ -76,6 +76,18 @@ spec:
               value: {{ .Values.registryProxy.chart.name | quote }}
             - name: REGISTRY_PROXY_CHART_VERSION
               value: {{ .Values.registryProxy.chart.version | quote }}
+            - name: ADMISSION_CHART_REPO
+              value: {{ .Values.admission.chart.repo | quote }}
+            - name: ADMISSION_CHART_NAME
+              value: {{ .Values.admission.chart.name | quote }}
+            - name: ADMISSION_CHART_VERSION
+              value: {{ .Values.admission.chart.version | quote }}
+            - name: ADMISSION_IMAGE_PULL_SECRET
+              value: {{ .Values.admission.imagePullSecret | quote }}
+            - name: ADMISSION_SERVICE_ACCOUNT
+              value: {{ .Values.admission.serviceAccountName | quote }}
+            - name: ADMISSION_NETWORK_ONLY
+              value: {{ .Values.admission.networkOnly | quote }}
             - name: PROXY_DOMAIN
               value: {{ .Values.proxy.domain | quote }}
             - name: PROXY_HARBOR_URL
