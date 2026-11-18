@@ -34,6 +34,19 @@ type Config struct {
 		SecretName string `yaml:"secret_name"`
 		Address    string `yaml:"address"`
 	} `yaml:"webhook"`
+	Auth struct {
+		// Mode is "basic" for client Basic auth or "" / "network-only" to rely
+		// on the network boundary (NetworkPolicy/TLS).
+		Mode         string `yaml:"mode"`
+		Username     string `yaml:"username"`
+		PasswordFile string `yaml:"password_file"`
+	} `yaml:"auth"`
+	Upstream struct {
+		// CredentialsFile is an optional YAML map of registry host to
+		// {access_key, access_secret} for private upstreams. It is mounted
+		// from a Secret; the credentials never enter this ConfigMap.
+		CredentialsFile string `yaml:"credentials_file"`
+	} `yaml:"upstream"`
 	Conversion struct {
 		Platform   string `yaml:"platform"`
 		Nydusify   string `yaml:"nydusify"`
@@ -87,6 +100,18 @@ func applyEnv(cfg *Config) {
 	}
 	if value := os.Getenv("REGISTRY_ALLOWLIST"); value != "" {
 		cfg.Registry.Allowlist = splitCSV(value)
+	}
+	if value := os.Getenv("PROXY_AUTH_MODE"); value != "" {
+		cfg.Auth.Mode = value
+	}
+	if value := os.Getenv("PROXY_AUTH_USERNAME"); value != "" {
+		cfg.Auth.Username = value
+	}
+	if value := os.Getenv("PROXY_AUTH_PASSWORD_FILE"); value != "" {
+		cfg.Auth.PasswordFile = value
+	}
+	if value := os.Getenv("UPSTREAM_CREDENTIALS_FILE"); value != "" {
+		cfg.Upstream.CredentialsFile = value
 	}
 	if value := os.Getenv("CONVERSION_NYDUSIFY"); value != "" {
 		cfg.Conversion.Nydusify = value
@@ -161,6 +186,18 @@ func (c *Config) Validate() error {
 	if c.Webhook.SecretName == "" {
 		return fmt.Errorf("webhook.secret_name is required")
 	}
+	switch c.Auth.Mode {
+	case "", "network-only":
+	case "basic":
+		if c.Auth.Username == "" || c.Auth.PasswordFile == "" {
+			return fmt.Errorf("auth.username and auth.password_file are required for basic auth")
+		}
+	default:
+		return fmt.Errorf("auth.mode must be empty, network-only, or basic")
+	}
+	if c.Upstream.CredentialsFile != "" && !strings.HasPrefix(c.Upstream.CredentialsFile, "/") {
+		return fmt.Errorf("upstream.credentials_file must be an absolute path")
+	}
 	if c.Conversion.Nydusify == "" || !strings.HasPrefix(c.Conversion.Nydusify, "/") {
 		return fmt.Errorf("conversion.nydusify must be an absolute binary path")
 	}
@@ -203,6 +240,58 @@ func ProjectName(registry string) string {
 // BasePath returns the normalized public path prefix.
 func (c *Config) BasePath() string {
 	return strings.TrimRight(c.Proxy.BasePath, "/")
+}
+
+// SelfRegistry reports whether registry names the proxy's own public host.
+// dfdaemon can add ?ns=<proxy host> for admission-rewritten refs; that hint
+// must not shadow the direct-ref registry segment.
+func (c *Config) SelfRegistry(registry string) bool {
+	if c == nil || c.Proxy.PublicURL == "" || registry == "" {
+		return false
+	}
+	parsed, err := url.Parse(c.Proxy.PublicURL)
+	if err != nil || parsed.Hostname() == "" {
+		return false
+	}
+	return normalizeRegistryAlias(registry) == normalizeRegistryAlias(parsed.Hostname())
+}
+
+// AuthPassword reads the mounted Basic-auth password file.
+func (c *Config) AuthPassword() (string, error) {
+	if c.Auth.PasswordFile == "" {
+		return "", nil
+	}
+	raw, err := os.ReadFile(c.Auth.PasswordFile)
+	if err != nil {
+		return "", fmt.Errorf("read auth.password_file: %w", err)
+	}
+	return strings.TrimSpace(string(raw)), nil
+}
+
+// LoadUpstreamCredentials reads the optional Secret-mounted private upstream
+// credentials. The file is a YAML map of registry host to access_key /
+// access_secret; empty path means no private upstreams.
+func LoadUpstreamCredentials(path string) (map[string]HarborCredential, error) {
+	if path == "" {
+		return nil, nil
+	}
+	raw, err := os.ReadFile(path)
+	if err != nil {
+		return nil, fmt.Errorf("read upstream.credentials_file: %w", err)
+	}
+	var file map[string]HarborCredential
+	if err := yaml.Unmarshal(raw, &file); err != nil {
+		return nil, fmt.Errorf("parse upstream.credentials_file: %w", err)
+	}
+	credentials := make(map[string]HarborCredential, len(file))
+	for host, credential := range file {
+		host = normalizeRegistryAlias(host)
+		if host == "" || credential.AccessKey == "" {
+			continue
+		}
+		credentials[host] = credential
+	}
+	return credentials, nil
 }
 
 // RegistryURL returns the configured Harbor base URL without a trailing slash.

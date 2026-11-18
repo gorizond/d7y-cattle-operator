@@ -42,7 +42,7 @@ const (
 	DefaultAdmissionChartVersion         = "0.1.0"
 	DefaultAdmissionNetworkOnly          = true
 	DefaultProxyHarborAdminSecret        = "harbor-admin"
-	DefaultProxyRegistries               = "docker.io"
+	DefaultProxyRegistries               = "docker.io,registry.gitlab.com,ghcr.io"
 	DefaultProxyBasePath                 = ""
 	DefaultExtrasIngressController       = "nginx"
 	DefaultExtrasIngressClassName        = ""

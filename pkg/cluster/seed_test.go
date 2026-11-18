@@ -56,7 +56,7 @@ func TestReconcileSeedCreatesHelmOps(t *testing.T) {
 	}
 }
 
-func TestReconcileSeedMirrorUsesExternalProxy(t *testing.T) {
+func TestReconcileSeedMirrorIsDefaultOnly(t *testing.T) {
 	controller, store, _ := newTestController(t)
 	controller.opts.ProxyHarborURL = "https://external.example.com"
 	cluster := testSeedCluster("42")
@@ -69,18 +69,18 @@ func TestReconcileSeedMirrorUsesExternalProxy(t *testing.T) {
 	if mirror == nil {
 		t.Fatal("mirror HelmOp was not created")
 	}
-	if got := dependsOn(mirror); len(got) != 2 || got[0] != "c1-data" || got[1] != "c1-registry-proxy" {
-		t.Errorf("mirror dependsOn = %v, want data+registry-proxy", got)
+	if got := dependsOn(mirror); len(got) != 1 || got[0] != "c1-data" {
+		t.Errorf("mirror dependsOn = %v, want data only", got)
 	}
 	values := helmValues(t, mirror)
-	if got := valueAtPath(t, values, "proxy", "enabled"); got != true {
-		t.Errorf("mirror proxy.enabled = %v, want true", got)
+	if _, ok := values["proxy"]; ok {
+		t.Errorf("mirror values contain proxy: %v", values["proxy"])
 	}
-	if got := valueAtPath(t, values, "proxy", "url"); got != "https://proxy.example.com/proxy" {
-		t.Errorf("mirror proxy.url = %v", got)
+	if got := valueAtPath(t, values, "port"); got != int64(4001) {
+		t.Errorf("mirror port = %v, want 4001", got)
 	}
 	if !store.has("fleet-default/c1-registry-proxy") {
-		t.Error("proxy HelmOp was not created before the mirror")
+		t.Error("proxy HelmOp was not created independently of the mirror")
 	}
 }
 

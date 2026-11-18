@@ -5,17 +5,14 @@ image:
   tag: "1.36"
   pullPolicy: IfNotPresent
 
-# Local dfdaemon proxy port used by the _default mirror.
+# Local dfdaemon proxy port. The only hosts file is certs.d/_default/hosts.toml:
+# dfdaemon 1.5.14 infers the upstream registry from containerd's ?ns=. No
+# per-registry files or X-Dragonfly-Registry headers are written.
 port: 4001
 
-# External smart registry proxy. When enabled, the allowlisted registries send
-# X-Dragonfly-Registry to <url>/<registry>; the in-cluster proxy Service is not
-# used. Keep disabled for clusters without the proxy role.
-proxy:
-  enabled: false
-  url: ""
-  registries:
-    - docker.io
+# Reconcile interval for copying the ConfigMap into the containerd certs.d
+# directory (ConfigMap volume updates propagate; this loop picks them up).
+reconcileSeconds: 60
 
 # RKE2 containerd hosts.toml directory.
 hostPath: /var/lib/rancher/rke2/agent/etc/containerd/certs.d

@@ -11,38 +11,3 @@ data:
     server = "http://127.0.0.1:{{ .Values.port }}"
     [host."http://127.0.0.1:{{ .Values.port }}"]
       capabilities = ["pull", "resolve"]
-{{- if and .Values.proxy.enabled .Values.proxy.url }}
-{{- range .Values.proxy.registries }}
-  {{ . }}: |
-    server = "http://127.0.0.1:{{ $.Values.port }}"
-    [host."http://127.0.0.1:{{ $.Values.port }}"]
-      capabilities = ["pull", "resolve"]
-      [host."http://127.0.0.1:{{ $.Values.port }}".header]
-        X-Dragonfly-Registry = ["{{ $.Values.proxy.url }}/{{ . }}"]
-{{- if eq . "docker.io" }}
-  index.docker.io: |
-    server = "http://127.0.0.1:{{ $.Values.port }}"
-    [host."http://127.0.0.1:{{ $.Values.port }}"]
-      capabilities = ["pull", "resolve"]
-      [host."http://127.0.0.1:{{ $.Values.port }}".header]
-        X-Dragonfly-Registry = ["{{ $.Values.proxy.url }}/docker.io"]
-{{- end }}
-{{- end }}
-{{- else }}
-  docker.io: |
-    server = "https://registry-1.docker.io"
-    [host."http://127.0.0.1:{{ .Values.port }}"]
-      capabilities = ["pull", "resolve"]
-      [host."http://127.0.0.1:{{ .Values.port }}".header]
-        X-Dragonfly-Registry = ["https://registry-1.docker.io"]
-    [host."https://registry-1.docker.io"]
-      capabilities = ["pull", "resolve"]
-  index.docker.io: |
-    server = "https://registry-1.docker.io"
-    [host."http://127.0.0.1:{{ .Values.port }}"]
-      capabilities = ["pull", "resolve"]
-      [host."http://127.0.0.1:{{ .Values.port }}".header]
-        X-Dragonfly-Registry = ["https://registry-1.docker.io"]
-    [host."https://registry-1.docker.io"]
-      capabilities = ["pull", "resolve"]
-{{- end }}

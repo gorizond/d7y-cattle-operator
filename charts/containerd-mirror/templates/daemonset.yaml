@@ -34,13 +34,17 @@ spec:
           args:
             - |
               set -eu
-              # Steady state writes only the supported hosts files. Remove
-              # legacy registry dirs with the one-time cleanup migration.
-              mkdir -p /host-certs/_default /host-certs/docker.io /host-certs/index.docker.io
-              cp /config/_default /host-certs/_default/hosts.toml
-              cp /config/docker.io /host-certs/docker.io/hosts.toml
-              cp /config/index.docker.io /host-certs/index.docker.io/hosts.toml
-              exec sleep infinity
+              # Only certs.d/_default is managed. dfdaemon 1.5.14 infers the
+              # upstream registry from containerd's ?ns=; per-registry files
+              # with X-Dragonfly-Registry are obsolete. Remove the two legacy
+              # files written by older chart versions and reconcile the
+              # ConfigMap copy periodically.
+              while true; do
+                mkdir -p /host-certs/_default
+                cp /config/_default /host-certs/_default/hosts.toml
+                rm -rf /host-certs/docker.io /host-certs/index.docker.io
+                sleep {{ .Values.reconcileSeconds | default 60 }}
+              done
           volumeMounts:
             - name: config
               mountPath: /config

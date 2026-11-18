@@ -28,6 +28,8 @@ mirror:
 registry:
   allowlist:
     - docker.io
+    - registry.gitlab.com
+    - ghcr.io
 
 proxy:
   publicURL: ""
