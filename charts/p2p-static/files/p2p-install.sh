@@ -483,6 +483,9 @@ if [ -n "${NYDUS_MIRROR_URL:-}" ]; then
 }
 JSON
 else
+  # dfdaemon MITMs CONNECT with a self-signed cert (CN=rcgen); nydusd fails TLS
+  # verification and falls back to direct Harbor. Plain HTTP to 127.0.0.1:4001
+  # avoids the MITM.
   write_file "${ROOT}${NYDUS_DIR}/nydusd-config.json" 0644 <<'JSON'
 {
   "device": {
@@ -493,7 +496,7 @@ else
           "url": "http://127.0.0.1:4001",
           "fallback": true,
           "check_interval": 5,
-          "use_http": false
+          "use_http": true
         },
         "timeout": 5,
         "connect_timeout": 5,
@@ -532,7 +535,11 @@ if [ "$CONTAINERD_MAJOR" = "2" ]; then
 # node uses nydus; there is no in-cluster DaemonSet.
 [plugins.'io.containerd.cri.v1.images']
   snapshotter = 'nydus'
-  use_local_image_pull = true
+  # RKE2 defaults this to true, which bypasses the standard CRI unpack path.
+  # The nydus snapshotter needs CRI labels (cri.image-ref/cri.manifest-digest)
+  # and layer annotations to detect nydus meta/index; with true detection
+  # silently fails.
+  use_local_image_pull = false
   disable_snapshot_annotations = false
   discard_unpacked_layers = false
 

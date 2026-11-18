@@ -106,6 +106,7 @@ assert_not_contains "${ROOT_ONE}/etc/nydus/config.toml" 'mirrors_config'
 assert_contains "${ROOT_ONE}/etc/nydus/nydusd-config.json" '"type": "registry"'
 assert_contains "${ROOT_ONE}/etc/nydus/nydusd-config.json" '"url": "http://127.0.0.1:4001"'
 assert_contains "${ROOT_ONE}/etc/nydus/nydusd-config.json" '"fallback": true'
+assert_contains "${ROOT_ONE}/etc/nydus/nydusd-config.json" '"use_http": true'
 assert_contains "${ROOT_ONE}/etc/nydus/nydusd-config.json" '"connect_timeout": 5'
 assert_contains "${ROOT_ONE}/etc/nydus/nydusd-config.json" '"type": "blobcache"'
 assert_contains "${ROOT_ONE}/etc/nydus/nydusd-config.json" '"fs_prefetch": {'
@@ -242,7 +243,7 @@ P2P_ROOT="$ROOT_TWO" SKIP_DOWNLOAD=1 SKIP_MODULES=1 SKIP_SYSTEMD=1 SKIP_PREFLIGH
 V3_DROPIN="${ROOT_TWO}/var/lib/rancher/rke2/agent/etc/containerd/config-v3.toml.d/90-nydus.toml"
 assert_file "$V3_DROPIN"
 assert_contains "$V3_DROPIN" "snapshotter = 'nydus'"
-assert_contains "$V3_DROPIN" 'use_local_image_pull = true'
+assert_contains "$V3_DROPIN" 'use_local_image_pull = false'
 assert_contains "$V3_DROPIN" 'disable_snapshot_annotations = false'
 assert_contains "$V3_DROPIN" 'discard_unpacked_layers = false'
 assert_contains "$V3_DROPIN" '[proxy_plugins.nydus]'
