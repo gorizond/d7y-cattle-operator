@@ -157,9 +157,27 @@ func TestDataHelmOp(t *testing.T) {
 		if got := valueAt(t, config, "proxy", "server", "requestRateLimit"); got != 500 {
 			t.Errorf("%s proxy.server.requestRateLimit = %v, want 500", component, got)
 		}
-		rules := nested(t, config, "proxy", "rules", "blobs/sha256.*")
-		if rules["schedulingPolicy"] != "always" {
-			t.Errorf("%s proxy rule schedulingPolicy = %v, want always", component, rules["schedulingPolicy"])
+		rules, ok := valueAt(t, config, "proxy", "rules").([]map[string]any)
+		if !ok {
+			t.Fatalf("%s proxy.rules = %v, want a list (dfdaemon rejects a map)", component, valueAt(t, config, "proxy", "rules"))
+		}
+		if len(rules) != 2 {
+			t.Errorf("%s proxy.rules = %v, want blobs and manifests rules", component, rules)
+		}
+		for _, regex := range []string{"blobs/sha256.*", "manifests/sha256.*"} {
+			found := false
+			for _, rule := range rules {
+				if rule["regex"] != regex {
+					continue
+				}
+				found = true
+				if rule["schedulingPolicy"] != "always" {
+					t.Errorf("%s proxy rule %q schedulingPolicy = %v, want always", component, regex, rule["schedulingPolicy"])
+				}
+			}
+			if !found {
+				t.Errorf("%s proxy.rules is missing regex %q", component, regex)
+			}
 		}
 	}
 }
