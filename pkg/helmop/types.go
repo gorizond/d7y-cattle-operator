@@ -56,6 +56,10 @@ const (
 	RegistryProxyChartRepo    = "https://gorizond.github.io/d7y-cattle-operator"
 	RegistryProxyChartName    = "registry-proxy"
 	RegistryProxyChartVersion = "0.1.11"
+
+	AdmissionChartRepo    = "https://gorizond.github.io/d7y-cattle-operator"
+	AdmissionChartName    = "admission-webhook"
+	AdmissionChartVersion = "0.1.0"
 )
 
 // HelmOpGVR identifies Fleet HelmOps for the resource client.
@@ -86,6 +90,7 @@ type Cluster struct {
 	MirrorChart        Chart
 	HarborChart        Chart
 	RegistryProxyChart Chart
+	AdmissionChart     Chart
 
 	// HarborDomain is the Harbor ingress/externalURL host. HarborURL selects
 	// an existing/external Harbor; HarborManaged is true only when the operator
@@ -99,7 +104,9 @@ type Cluster struct {
 	HarborIngressClass string
 
 	// ProxyEnabled is the independent p2p.dragonfly.io/proxy role.
-	ProxyEnabled           bool
+	ProxyEnabled bool
+	// ProxyDomain is the public proxy host used by the admission rewrite.
+	ProxyDomain            string
 	ProxyPublicURL         string
 	ProxyBasePath          string
 	ProxyTLSSecret         string
@@ -107,6 +114,11 @@ type Cluster struct {
 	ProxyRegistries        []string
 	ProxyWebhookSecretName string
 	ProxyRobotSecretName   string
+	// AdmissionEnabled is the independent p2p.dragonfly.io/admission role.
+	AdmissionEnabled         bool
+	AdmissionImagePullSecret string
+	AdmissionServiceAccount  string
+	AdmissionNetworkOnly     bool
 
 	ManagerGRPCDomain  string
 	ManagerGRPCPort    int
@@ -159,6 +171,9 @@ func HarborName(cluster string) string { return objectName(cluster, "harbor") }
 
 // RegistryProxyName returns the registry-proxy HelmOp and release name.
 func RegistryProxyName(cluster string) string { return objectName(cluster, "registry-proxy") }
+
+// AdmissionName returns the admission-webhook HelmOp and release name.
+func AdmissionName(cluster string) string { return objectName(cluster, "admission-webhook") }
 
 // HarborAdminSecretName is the per-cluster downstream admin Secret.
 func HarborAdminSecretName(cluster string) string { return objectName(cluster, "harbor-admin") }

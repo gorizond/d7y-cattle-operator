@@ -2,6 +2,8 @@ package registryproxy
 
 import (
 	"context"
+	"crypto/subtle"
+	"errors"
 	"fmt"
 	"io"
 	"net/http"
@@ -24,6 +26,15 @@ type Backend interface {
 // detached from it.
 const backendTimeout = 2 * time.Minute
 
+// ErrConverting tells the client that the mirror copy/conversion job is still
+// running. The server answers 503 with Retry-After; a later retry sees the
+// nydus index.
+var ErrConverting = errors.New("registry mirror conversion in progress")
+
+// conversionRetryDelay throttles automatic retries after a failed conversion
+// while still serving the source OCI manifest.
+const conversionRetryDelay = time.Minute
+
 // backendContext detaches the upstream call from the client request. dfdaemon
 // cancels cold pulls early; the Harbor fetch should still complete and warm
 // the cache instead of returning "context canceled".
@@ -38,6 +49,7 @@ type HarborBackend struct {
 	Mirror        Registry
 	MirrorProject string
 	Provisioner   *Provisioner
+	Jobs          *Manager
 }
 
 func (b *HarborBackend) ensure(ctx context.Context, registry string) error {
@@ -64,7 +76,41 @@ func (b *HarborBackend) GetManifest(ctx context.Context, registry, repo, ref str
 			return manifest, nil
 		}
 	}
-	return b.Source.GetManifest(ctx, sourceRepo(registry, repo), ref)
+	manifest, err := b.Source.GetManifest(ctx, sourceRepo(registry, repo), ref)
+	if err != nil {
+		return Manifest{}, err
+	}
+	// Copy-on-read: the first pull of a tag starts the mirror copy and nydus
+	// conversion. While it runs, answer 503/Retry-After instead of returning a
+	// plain OCI manifest that nydus would skip. Digest refs cannot get a nydus
+	// index under the same reference, so they keep the source OCI manifest.
+	if b.Jobs != nil && !strings.HasPrefix(ref, "sha256:") {
+		job := Job{
+			Registry:   registry,
+			Repository: repo,
+			Reference:  ref,
+			Tag:        ref,
+			Digest:     manifest.Digest,
+			Trigger:    "pull",
+		}
+		if state, ok := b.Jobs.State(job.Key()); ok {
+			switch state.State {
+			case "failed":
+				// Conversion already failed: serve the original OCI manifest
+				// and retry in the background at most once per cooldown.
+				if time.Since(state.UpdatedAt) >= conversionRetryDelay {
+					b.Jobs.Enqueue(job)
+				}
+				return manifest, nil
+			case "pending", "converting":
+				return Manifest{}, ErrConverting
+			}
+		}
+		if b.Jobs.Enqueue(job) {
+			return Manifest{}, ErrConverting
+		}
+	}
+	return manifest, nil
 }
 
 func (b *HarborBackend) GetBlob(ctx context.Context, registry, repo, digest, rangeHeader string) (io.ReadCloser, int64, string, error) {
@@ -98,16 +144,40 @@ func (b *HarborBackend) Referrers(ctx context.Context, registry, repo, digest st
 // Server exposes the read-only OCI API, health/readiness, metrics, and the
 // Harbor webhook handler.
 type Server struct {
-	Config   *Config
-	Backend  Backend
-	Convert  http.Handler
-	Manager  *Manager
-	requests atomic.Uint64
-	errors   atomic.Uint64
+	Config  *Config
+	Backend Backend
+	Convert http.Handler
+	Manager *Manager
+	// AuthUsername/AuthPassword enable optional Basic auth on /v2 reads.
+	// Empty values mean network-only (no client auth).
+	AuthUsername string
+	AuthPassword string
+	requests     atomic.Uint64
+	errors       atomic.Uint64
 }
 
 func (s *Server) Handler() http.Handler {
-	return http.HandlerFunc(s.serve)
+	handler := http.HandlerFunc(s.serve)
+	if s.AuthUsername == "" && s.AuthPassword == "" {
+		return handler
+	}
+	return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		requestPath := stripBasePath(r.URL.Path, s.Config.BasePath())
+		// Health probes stay open; /api/convert has its own Bearer secret.
+		if strings.HasPrefix(requestPath, "/v2") {
+			user, password, ok := r.BasicAuth()
+			if !ok || !equalConstantTime(user, s.AuthUsername) || !equalConstantTime(password, s.AuthPassword) {
+				w.Header().Set("WWW-Authenticate", `Basic realm="registry"`)
+				http.Error(w, "unauthorized", http.StatusUnauthorized)
+				return
+			}
+		}
+		handler.ServeHTTP(w, r)
+	})
+}
+
+func equalConstantTime(value, expected string) bool {
+	return subtle.ConstantTimeCompare([]byte(value), []byte(expected)) == 1
 }
 
 func (s *Server) serve(w http.ResponseWriter, r *http.Request) {
@@ -197,7 +267,10 @@ func (s *Server) route(requestPath string, r *http.Request) (string, string, boo
 	if !ok {
 		return "", "", false
 	}
-	if registry := queryRegistry(r); registry != "" {
+	// ?ns is the dfdaemon/containerd hint: the whole /v2 path is the
+	// repository. A hint naming the proxy itself is not an upstream; fall
+	// through to the direct-ref route instead of rejecting the pull.
+	if registry := queryRegistry(r); registry != "" && !s.selfRegistry(registry) {
 		return registry, rest, true
 	}
 	trimmed := strings.Trim(requestPath, "/")
@@ -205,7 +278,24 @@ func (s *Server) route(requestPath string, r *http.Request) (string, string, boo
 	if len(parts) == 2 && (parts[1] == "v2" || strings.HasPrefix(parts[1], "v2/")) {
 		return normalizeRegistryAlias(parts[0]), rest, true
 	}
-	return headerRegistry(r), rest, true
+	if registry := headerRegistry(r); registry != "" && !s.selfRegistry(registry) {
+		return registry, rest, true
+	}
+	// Direct ref: /v2/<registry>/<repo>/... (admission-rewritten image). Only
+	// an allowlisted first segment counts as a registry; anything else stays
+	// unresolved and gets 403, never a guessed Harbor project.
+	if repoPath, ok := strings.CutPrefix(rest, "/v2/"); ok {
+		first, remaining, found := strings.Cut(repoPath, "/")
+		registry := normalizeRegistryAlias(first)
+		if found && registry != "" && s.Config.Allowlisted(registry) {
+			return registry, "/v2/" + remaining, true
+		}
+	}
+	return "", rest, true
+}
+
+func (s *Server) selfRegistry(registry string) bool {
+	return s.Config != nil && s.Config.SelfRegistry(registry)
 }
 
 func ociRest(raw string) (string, bool) {
@@ -340,6 +430,11 @@ func (s *Server) referrers(w http.ResponseWriter, r *http.Request, registry, rep
 
 func (s *Server) writeError(w http.ResponseWriter, err error) {
 	s.errors.Add(1)
+	if errors.Is(err, ErrConverting) {
+		w.Header().Set("Retry-After", "5")
+		http.Error(w, err.Error(), http.StatusServiceUnavailable)
+		return
+	}
 	if IsNotFound(err) {
 		http.Error(w, err.Error(), http.StatusNotFound)
 		return
@@ -357,5 +452,9 @@ func (s *Server) metrics(w http.ResponseWriter) {
 	fmt.Fprintf(w, "registry_proxy_errors_total %d\n", s.errors.Load())
 	if s.Manager != nil {
 		fmt.Fprintf(w, "registry_proxy_jobs_pending %d\n", s.Manager.Pending())
+		enqueued, succeeded, failed := s.Manager.Metrics()
+		fmt.Fprintf(w, "registry_proxy_jobs_enqueued_total %d\n", enqueued)
+		fmt.Fprintf(w, "registry_proxy_jobs_succeeded_total %d\n", succeeded)
+		fmt.Fprintf(w, "registry_proxy_jobs_failed_total %d\n", failed)
 	}
 }

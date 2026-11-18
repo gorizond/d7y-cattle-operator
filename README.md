@@ -37,6 +37,10 @@ Live envtest/pilot verification remains deferred.
 - Deploys Harbor on `p2p.dragonfly.io/harbor: "true"` and the external
   stateless registry proxy on `p2p.dragonfly.io/proxy: "true"`. Harbor uses the
   existing `<cluster>-keydb`; the proxy has no PVC.
+- Deploys the opt-in Pod image-rewriting webhook on
+  `p2p.dragonfly.io/admission: "true"` (`<cluster>-admission-webhook`). It
+  rewrites allowlisted images to `<proxy.domain>/<registry>/<repo>:<tag>`,
+  preserves `@sha256`, and is independent of Harbor/proxy/seed.
 - Manages the manager Ingresses, the public scheduler TCP front, and optional
   VPAs through the separate `<cluster>-extras` HelmOp and the
   `dragonfly-extras` chart. The operator has no Ingress, IngressRouteTCP, or
@@ -142,6 +146,12 @@ annotations add the Dragonfly releases:
 | `seed: "true"` + scheduler ID | KeyDB, `<cluster>-control`, `<cluster>-data`, `<cluster>-extras` (VPAs) |
 | manager + seed | manager, control, data, extras |
 | `seed: "true"` without scheduler ID | KeyDB + extras (KeyDB VPA); `SchedulerClusterIDMissing` event, no seed releases |
+| `proxy: "true"` | `<cluster>-registry-proxy` only (external `harbor-url` allowed) |
+| `admission: "true"` | `<cluster>-admission-webhook` only (uses operator `proxy.domain`) |
+
+The `harbor`, `proxy`, `admission`, and `seed` annotations are independent:
+any combination is valid, nothing is auto-installed, and removing one toggle
+deletes only its own HelmOp.
 
 ### Pilot data resource sizing
 
@@ -185,6 +195,7 @@ only when the value, reason, or message changes:
 | `d7y.io/DataReady` | The seedClient/client HelmOp was applied (`seed: "true"`). |
 | `d7y.io/HarborReady` | The Harbor HelmOp was applied or an external `harbor-url` is configured. |
 | `d7y.io/RegistryProxyReady` | The independent registry proxy HelmOp was applied. |
+| `d7y.io/AdmissionWebhookReady` | The independent admission webhook HelmOp was applied and Ready. |
 | `d7y.io/HarborDomainMissing` | `harbor: "true"` is set but `harbor-domain` is missing or invalid. |
 | `d7y.io/Registered` | Scheduler and seed-peer records were ensured and linked in the manager. |
 | `d7y.io/RegistrationFailed` | Registration failed permanently; `d7y.io/Retrying` marks transient failures. |
@@ -460,15 +471,38 @@ Scaling (future): multiple proxy replicas need a shared KeyDB/Redis-backed
 Manager for job state and deduplication. The current KeyDB is multi-master but
 has no PVC/HA, so state durability is a separate decision; v1 stays in-memory.
 
-The proxy resolves the upstream registry from `?ns=<registry>` first, then
-from the path prefix `/<registry>/v2/...`, then from `X-Dragonfly-Registry`.
-Docker aliases (`registry-1.docker.io`, `index.docker.io`) are canonicalized
-to `docker.io` before the allowlist and Harbor project mapping.
-The `containerd-mirror` chart sends allowlisted registries to the external
-`<proxy>/<registry>` through `X-Dragonfly-Registry`; `SMART_PROXY_URL` in the
-bootstrap payload is optional and fail-open. Target clusters do not need an
-in-cluster proxy mirror; the proxy Service/Deployment is the separate
-`<cluster>-registry-proxy` HelmOp.
+The proxy accepts the OCI direct-ref route
+`/v2/<registry>/<repo>/manifests|blobs|referrers` (the first path segment is
+the allowlisted registry, as produced by the admission rewrite) and keeps
+`?ns=<registry>` / `X-Dragonfly-Registry` for containerd/dfdaemon. A `?ns`
+hint naming the proxy itself is ignored so the direct-ref segment wins.
+Paths without a known registry are rejected with 403; the proxy never guesses
+a registry or creates a Harbor project outside the allowlist
+(`docker.io`, `registry.gitlab.com`, `ghcr.io`). Docker aliases
+(`registry-1.docker.io`, `index.docker.io`) are canonicalized to `docker.io`
+before the allowlist and Harbor project mapping.
+
+On the first manifest request for a tag the proxy starts the copy and nydus
+conversion job and answers `503` with `Retry-After` while it runs; after the
+job completes the same tag returns the nydus OCI index. Digest references
+cannot carry a same-digest nydus index and keep the source OCI manifest. Blob
+requests never copy the image: they read the `mirror` project first and fall
+back to the Harbor proxy project, so a multi-arch copy still walks every index
+child once in the background job.
+
+Target clusters do not need an in-cluster proxy mirror; the proxy
+Service/Deployment is the separate `<cluster>-registry-proxy` HelmOp.
+`SMART_PROXY_URL` in the bootstrap payload is optional and fail-open.
+
+Client auth is optional: when `auth.mode` is `basic` the proxy checks
+`Authorization: Basic` on `/v2` reads using `auth.username` and a password
+mounted at `auth.password_file` (a Secret); health probes stay open and
+`/api/convert` keeps its Bearer webhook secret. Empty mode means network-only
+(NetworkPolicy/TLS): no credentials are required from dfdaemon or containerd.
+Private upstream registries use an optional Secret-mounted
+`upstream.credentials_file` mapping registry host to `access_key` /
+`access_secret`; the proxy passes them to Harbor when it creates the registry
+endpoint. Credentials are never written to the ConfigMap or logs.
 
 The proxy's `harbor.url` must be HTTPS; nydusify converts through the Harbor
 registry and the proxy does not enable plain-HTTP conversion.
@@ -512,8 +546,15 @@ no domain is hardcoded. Leaving it empty preserves the existing dfdaemon proxy
 fallback and the direct-registry behavior. Dragonfly and the containerd mirror
 are unchanged.
 
-The registry proxy still canonicalizes Docker aliases (`registry-1.docker.io`,
-`index.docker.io` -> `docker.io`) before its allowlist and Harbor mapping.
+The `containerd-mirror` chart is created only for seed clusters
+(`p2p.dragonfly.io/seed: "true"`) and writes only
+`certs.d/_default/hosts.toml` pointing at dfdaemon
+`127.0.0.1:4001`. There are no per-registry `docker.io`/`index.docker.io`
+files and no `X-Dragonfly-Registry` headers: dfdaemon 1.5.14 infers the
+upstream registry from containerd's `?ns=` and passes it to the proxy. The
+DaemonSet reconciles the `_default` file periodically and removes the legacy
+per-registry files written by older chart versions; non-seed clusters get no
+`_default` from the operator.
 
 ## Cluster annotations
 

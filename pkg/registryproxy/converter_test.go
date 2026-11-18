@@ -4,11 +4,13 @@ import (
 	"context"
 	"encoding/base64"
 	"encoding/json"
+	"fmt"
 	"os"
 	"os/exec"
 	"path/filepath"
 	"strings"
 	"testing"
+	"time"
 )
 
 func TestConverterVerifiesAndMovesIndex(t *testing.T) {
@@ -103,7 +105,9 @@ func TestConverterCommandBuildsNydusifyArgs(t *testing.T) {
 }
 
 func TestWriteDockerConfigDoesNotExposeSecrets(t *testing.T) {
-	dir, err := writeDockerConfig("harbor.example.com", "robot$proxy", "s3cret")
+	username := fmt.Sprintf("test-user-%d", time.Now().UnixNano())
+	password := fmt.Sprintf("test-pass-%d", time.Now().UnixNano())
+	dir, err := writeDockerConfig("harbor.example.com", username, password)
 	if err != nil {
 		t.Fatalf("writeDockerConfig() error = %v", err)
 	}
@@ -127,11 +131,11 @@ func TestWriteDockerConfigDoesNotExposeSecrets(t *testing.T) {
 	if err := json.Unmarshal(body, &config); err != nil {
 		t.Fatal(err)
 	}
-	want := base64.StdEncoding.EncodeToString([]byte("robot$proxy:s3cret"))
+	want := base64.StdEncoding.EncodeToString([]byte(username + ":" + password))
 	if config.Auths["harbor.example.com"].Auth != want {
 		t.Error("docker auth entry is wrong")
 	}
-	if strings.Contains(string(body), "s3cret") {
+	if strings.Contains(string(body), password) {
 		t.Error("plaintext secret leaked into docker config")
 	}
 }

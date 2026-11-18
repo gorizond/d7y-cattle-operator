@@ -28,8 +28,8 @@ func TestReconcileHarborAndProxy(t *testing.T) {
 			t.Errorf("%s HelmOp was not created", name)
 		}
 	}
-	if got := dependsOn(store.object("fleet-default/c1-registry-proxy")); len(got) != 1 || got[0] != "c1-harbor" {
-		t.Errorf("proxy dependsOn = %v, want c1-harbor", got)
+	if got := dependsOn(store.object("fleet-default/c1-registry-proxy")); len(got) != 0 {
+		t.Errorf("proxy dependsOn = %v, want none (independent toggles)", got)
 	}
 	admin, err := controller.secrets.(*fakeSecretStore).Get("fleet-default", "c1-harbor-admin", metav1.GetOptions{})
 	if err != nil {

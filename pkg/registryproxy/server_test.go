@@ -189,6 +189,7 @@ func TestServerRegistryAllowlistAndPushRejected(t *testing.T) {
 
 func TestServerHealthMetricsAndConvert(t *testing.T) {
 	server := testServer(&fakeBackend{})
+	server.Manager = NewManager(nil)
 	server.Convert = http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
 		w.WriteHeader(http.StatusAccepted)
 	})
@@ -201,8 +202,15 @@ func TestServerHealthMetricsAndConvert(t *testing.T) {
 	}
 	rec := httptest.NewRecorder()
 	server.Handler().ServeHTTP(rec, httptest.NewRequest(http.MethodGet, "/metrics", nil))
-	if !strings.Contains(rec.Body.String(), "registry_proxy_requests_total") {
-		t.Errorf("metrics = %q", rec.Body.String())
+	for _, metric := range []string{
+		"registry_proxy_requests_total",
+		"registry_proxy_jobs_enqueued_total",
+		"registry_proxy_jobs_succeeded_total",
+		"registry_proxy_jobs_failed_total",
+	} {
+		if !strings.Contains(rec.Body.String(), metric) {
+			t.Errorf("metrics missing %s: %q", metric, rec.Body.String())
+		}
 	}
 	rec = httptest.NewRecorder()
 	server.Handler().ServeHTTP(rec, httptest.NewRequest(http.MethodPost, "/api/convert", nil))
@@ -388,5 +396,230 @@ func TestHarborBackendFallsBackToSourceOnMirrorMiss(t *testing.T) {
 	data, _ := io.ReadAll(body)
 	if string(data) != "layer-data" || size != int64(len(data)) || contentRange != "" {
 		t.Errorf("blob = %q size=%d range=%q", data, size, contentRange)
+	}
+}
+
+func directServer(backend Backend) *Server {
+	return &Server{
+		Config: &Config{
+			Registry: struct {
+				Allowlist []string `yaml:"allowlist"`
+			}{Allowlist: []string{"docker.io", "registry.gitlab.com", "ghcr.io"}},
+			Proxy: struct {
+				PublicURL string `yaml:"public_url"`
+				BasePath  string `yaml:"base_path"`
+			}{PublicURL: "https://proxy.example.com"},
+		},
+		Backend: backend,
+	}
+}
+
+type recordingBackend struct {
+	registry string
+	repo     string
+	ref      string
+	rangeHdr string
+	manifest Manifest
+	blob     []byte
+}
+
+func (b *recordingBackend) GetManifest(_ context.Context, registry, repo, ref string) (Manifest, error) {
+	b.registry, b.repo, b.ref = registry, repo, ref
+	if b.manifest.Body == nil {
+		b.manifest = Manifest{Digest: "sha256:manifest", MediaType: ociManifestType, Body: []byte("manifest")}
+	}
+	return b.manifest, nil
+}
+func (b *recordingBackend) GetBlob(_ context.Context, registry, repo, digest, rangeHeader string) (io.ReadCloser, int64, string, error) {
+	b.registry, b.repo, b.ref, b.rangeHdr = registry, repo, digest, rangeHeader
+	return io.NopCloser(bytes.NewReader(b.blob)), int64(len(b.blob)), "", nil
+}
+func (b *recordingBackend) Referrers(_ context.Context, registry, repo, digest string) ([]byte, error) {
+	b.registry, b.repo, b.ref = registry, repo, digest
+	return []byte(`{"schemaVersion":2,"manifests":[]}`), nil
+}
+
+func TestServerDirectRefRoute(t *testing.T) {
+	backend := &recordingBackend{blob: []byte("blob-data")}
+	server := directServer(backend)
+
+	cases := []struct {
+		path     string
+		method   string
+		registry string
+		repo     string
+		ref      string
+	}{
+		{"/v2/registry.gitlab.com/gitlab-org/cli/manifests/v1.104.0", http.MethodGet,
+			"registry.gitlab.com", "gitlab-org/cli", "v1.104.0"},
+		{"/v2/docker.io/library/nginx/manifests/1.27", http.MethodHead,
+			"docker.io", "library/nginx", "1.27"},
+		{"/v2/ghcr.io/org/app/manifests/sha256:deadbeef", http.MethodGet,
+			"ghcr.io", "org/app", "sha256:deadbeef"},
+		{"/v2/registry.gitlab.com/gitlab-org/cli/manifests/v1.104.0?ns=proxy.example.com", http.MethodGet,
+			"registry.gitlab.com", "gitlab-org/cli", "v1.104.0"},
+		{"/v2/docker.io/library/nginx/blobs/sha256:abc", http.MethodGet,
+			"docker.io", "library/nginx", "sha256:abc"},
+	}
+	for _, tc := range cases {
+		req := httptest.NewRequest(tc.method, tc.path, nil)
+		rec := httptest.NewRecorder()
+		server.Handler().ServeHTTP(rec, req)
+		if rec.Code != http.StatusOK {
+			t.Errorf("%s = %d %q", tc.path, rec.Code, rec.Body.String())
+			continue
+		}
+		if backend.registry != tc.registry || backend.repo != tc.repo || backend.ref != tc.ref {
+			t.Errorf("%s routed to %s/%s:%s, want %s/%s:%s",
+				tc.path, backend.registry, backend.repo, backend.ref, tc.registry, tc.repo, tc.ref)
+		}
+	}
+
+	req := httptest.NewRequest(http.MethodGet, "/v2/docker.io/library/nginx/blobs/sha256:abc", nil)
+	req.Header.Set("Range", "bytes=0-2")
+	rec := httptest.NewRecorder()
+	server.Handler().ServeHTTP(rec, req)
+	if rec.Code != http.StatusOK || backend.rangeHdr != "bytes=0-2" {
+		t.Errorf("range request = %d range=%q", rec.Code, backend.rangeHdr)
+	}
+}
+
+func TestServerDirectRefRejectsAmbiguousAndUnknown(t *testing.T) {
+	server := directServer(&recordingBackend{})
+	for _, target := range []string{
+		"/v2/library/nginx/manifests/1.27",
+		"/v2/evil.example.com/repo/manifests/1.27",
+	} {
+		rec := httptest.NewRecorder()
+		server.Handler().ServeHTTP(rec, httptest.NewRequest(http.MethodGet, target, nil))
+		if rec.Code != http.StatusForbidden {
+			t.Errorf("%s = %d, want 403", target, rec.Code)
+		}
+	}
+}
+
+func TestServerConversionInProgress(t *testing.T) {
+	server := directServer(&fakeBackend{})
+	server.Backend = backendFunc(func(context.Context, string, string, string) (Manifest, error) {
+		return Manifest{}, ErrConverting
+	})
+	rec := httptest.NewRecorder()
+	server.Handler().ServeHTTP(rec, httptest.NewRequest(http.MethodGet,
+		"/v2/docker.io/library/nginx/manifests/1.27", nil))
+	if rec.Code != http.StatusServiceUnavailable || rec.Header().Get("Retry-After") != "5" {
+		t.Errorf("conversion response = %d retry=%q", rec.Code, rec.Header().Get("Retry-After"))
+	}
+}
+
+type backendFunc func(context.Context, string, string, string) (Manifest, error)
+
+func (f backendFunc) GetManifest(ctx context.Context, registry, repo, ref string) (Manifest, error) {
+	return f(ctx, registry, repo, ref)
+}
+func (f backendFunc) GetBlob(context.Context, string, string, string, string) (io.ReadCloser, int64, string, error) {
+	return nil, 0, "", nil
+}
+func (f backendFunc) Referrers(context.Context, string, string, string) ([]byte, error) {
+	return nil, nil
+}
+
+func TestServerBasicAuth(t *testing.T) {
+	server := directServer(&recordingBackend{})
+	username := fmt.Sprintf("test-user-%d", time.Now().UnixNano())
+	password := fmt.Sprintf("test-pass-%d", time.Now().UnixNano())
+	server.AuthUsername = username
+	server.AuthPassword = password
+
+	for _, target := range []string{
+		"/v2/docker.io/library/nginx/manifests/1.27",
+		"/healthz",
+	} {
+		rec := httptest.NewRecorder()
+		server.Handler().ServeHTTP(rec, httptest.NewRequest(http.MethodGet, target, nil))
+		want := http.StatusUnauthorized
+		if target == "/healthz" {
+			want = http.StatusOK
+		}
+		if rec.Code != want {
+			t.Errorf("%s anonymous = %d, want %d", target, rec.Code, want)
+		}
+	}
+
+	req := httptest.NewRequest(http.MethodGet, "/v2/docker.io/library/nginx/manifests/1.27", nil)
+	req.SetBasicAuth(username, password+"-wrong")
+	rec := httptest.NewRecorder()
+	server.Handler().ServeHTTP(rec, req)
+	if rec.Code != http.StatusUnauthorized {
+		t.Errorf("wrong password = %d, want 401", rec.Code)
+	}
+
+	req = httptest.NewRequest(http.MethodGet, "/v2/docker.io/library/nginx/manifests/1.27", nil)
+	req.SetBasicAuth(username, password)
+	rec = httptest.NewRecorder()
+	server.Handler().ServeHTTP(rec, req)
+	if rec.Code != http.StatusOK {
+		t.Errorf("valid basic auth = %d %q", rec.Code, rec.Body.String())
+	}
+
+	server.Convert = http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) { w.WriteHeader(http.StatusAccepted) })
+	rec = httptest.NewRecorder()
+	server.Handler().ServeHTTP(rec, httptest.NewRequest(http.MethodPost, "/api/convert", nil))
+	if rec.Code != http.StatusAccepted {
+		t.Errorf("/api/convert must use its own Bearer secret, got %d", rec.Code)
+	}
+}
+
+func TestServerDirectRefProvisioningIsLazyAndAllowlisted(t *testing.T) {
+	fake := &fakeHarbor{}
+	server := httptest.NewServer(fake.handler())
+	defer server.Close()
+	source := newFakeRegistry()
+	mirror := newFakeRegistry()
+	source.manifests["registrygitlabcom/gitlab-org/cli:v1.104.0"] = Manifest{
+		Digest: "sha256:source", MediaType: ociManifestType, Body: []byte(`{"schemaVersion":2}`),
+	}
+	backend := &HarborBackend{
+		Source: source, Mirror: mirror, MirrorProject: "mirror",
+		Provisioner: &Provisioner{
+			Harbor:         &HarborClient{BaseURL: server.URL},
+			MirrorProject:  "mirror",
+			WebhookAddress: "https://proxy.example.com/api/convert",
+			WebhookSecret:  "shared",
+		},
+	}
+	proxy := directServer(backend)
+
+	rec := httptest.NewRecorder()
+	proxy.Handler().ServeHTTP(rec, httptest.NewRequest(http.MethodGet,
+		"/v2/evil.example.com/repo/manifests/1.0", nil))
+	if rec.Code != http.StatusForbidden {
+		t.Errorf("unknown registry = %d, want 403", rec.Code)
+	}
+	fake.mu.Lock()
+	if len(fake.posts) != 0 {
+		t.Errorf("unknown registry created Harbor objects: %v", fake.posts)
+	}
+	fake.mu.Unlock()
+
+	rec = httptest.NewRecorder()
+	proxy.Handler().ServeHTTP(rec, httptest.NewRequest(http.MethodGet,
+		"/v2/registry.gitlab.com/gitlab-org/cli/manifests/v1.104.0", nil))
+	if rec.Code != http.StatusOK {
+		t.Fatalf("direct ref = %d %q", rec.Code, rec.Body.String())
+	}
+	fake.mu.Lock()
+	first := fake.posts["registry"] + fake.posts["project"] + fake.posts["webhook"]
+	fake.mu.Unlock()
+	if first != 4 {
+		t.Errorf("lazy provisioning posts = %v, want one registry, two projects, one webhook", fake.posts)
+	}
+
+	rec = httptest.NewRecorder()
+	proxy.Handler().ServeHTTP(rec, httptest.NewRequest(http.MethodGet,
+		"/v2/registry.gitlab.com/gitlab-org/cli/manifests/v1.104.0", nil))
+	fake.mu.Lock()
+	defer fake.mu.Unlock()
+	if got := fake.posts["registry"] + fake.posts["project"] + fake.posts["webhook"]; got != first {
+		t.Errorf("cached provisioning posts = %v, want unchanged", fake.posts)
 	}
 }

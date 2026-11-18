@@ -35,15 +35,19 @@ const (
 	// AnnotationProxy deploys the external registry proxy independently of
 	// Harbor and the seed role.
 	AnnotationProxy = "p2p.dragonfly.io/proxy"
+	// AnnotationAdmission deploys the opt-in Pod image rewriting webhook. It is
+	// independent of Harbor, the proxy, and the seed role.
+	AnnotationAdmission = "p2p.dragonfly.io/admission"
 )
 
 // Roles is the resolved role set for a Cluster.
 type Roles struct {
-	Enabled bool
-	Manager bool
-	Seed    bool
-	Harbor  bool
-	Proxy   bool
+	Enabled   bool
+	Manager   bool
+	Seed      bool
+	Harbor    bool
+	Proxy     bool
+	Admission bool
 	// HarborDomain and HarborURL are trimmed annotations. HarborDomain is the
 	// ingress/externalURL host; HarborURL selects an existing/external Harbor.
 	HarborDomain string
@@ -65,6 +69,7 @@ func ResolveRoles(cluster *provv1.Cluster) Roles {
 		Seed:         cluster.Annotations[AnnotationSeed] == "true",
 		Harbor:       cluster.Annotations[AnnotationHarbor] == "true",
 		Proxy:        cluster.Annotations[AnnotationProxy] == "true",
+		Admission:    cluster.Annotations[AnnotationAdmission] == "true",
 		HarborDomain: strings.TrimSpace(cluster.Annotations[AnnotationHarborDomain]),
 		HarborURL:    strings.TrimSpace(cluster.Annotations[AnnotationHarborURL]),
 	}

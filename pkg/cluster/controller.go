@@ -53,6 +53,7 @@ type Options struct {
 	MirrorChart                 helmop.Chart
 	HarborChart                 helmop.Chart
 	RegistryProxyChart          helmop.Chart
+	AdmissionChart              helmop.Chart
 	HarborIngressClass          string
 	ProxyDomain                 string
 	ProxyHarborURL              string
@@ -61,6 +62,9 @@ type Options struct {
 	ProxyBasePath               string
 	ProxyTLSSecret              string
 	ProxyHostAliases            []helmop.HostAlias
+	AdmissionImagePullSecret    string
+	AdmissionServiceAccount     string
+	AdmissionNetworkOnly        bool
 	ExtrasIngressController     string
 	ExtrasIngressClassName      string
 	ExtrasIngressGRPCEnabled    bool
@@ -156,7 +160,7 @@ func (c *Controller) reconcile(key string, cluster *provv1.Cluster) (result *pro
 	proxyMessage := ""
 	if proxyErr == nil && roles.Proxy {
 		var stateErr error
-		proxyReady, proxyMessage, stateErr = c.registryProxyHelmOpReady(cluster)
+		proxyReady, proxyMessage, stateErr = c.helmOpReady(cluster, helmop.RegistryProxyName(cluster.Name), "registry proxy")
 		if stateErr != nil {
 			proxyErr = stateErr
 		}
@@ -164,6 +168,21 @@ func (c *Controller) reconcile(key string, cluster *provv1.Cluster) (result *pro
 	setRegistryProxyCondition(status, roles, proxyErr, proxyReady, proxyMessage)
 	if proxyErr != nil {
 		errs = append(errs, proxyErr)
+	}
+
+	admissionErr := c.ensureAdmission(cluster, hc, roles)
+	admissionReady := false
+	admissionMessage := ""
+	if admissionErr == nil && roles.Admission {
+		var stateErr error
+		admissionReady, admissionMessage, stateErr = c.helmOpReady(cluster, helmop.AdmissionName(cluster.Name), "admission webhook")
+		if stateErr != nil {
+			admissionErr = stateErr
+		}
+	}
+	setAdmissionCondition(status, roles, admissionErr, admissionReady, admissionMessage)
+	if admissionErr != nil {
+		errs = append(errs, admissionErr)
 	}
 
 	mtlsReady := true
@@ -310,18 +329,18 @@ func setHarborCondition(status *statusBuilder, roles Roles, err error) {
 	}
 }
 
-func (c *Controller) registryProxyHelmOpReady(cluster *provv1.Cluster) (bool, string, error) {
+func (c *Controller) helmOpReady(cluster *provv1.Cluster, name, component string) (bool, string, error) {
 	obj := &unstructured.Unstructured{}
-	err := c.helmops.Get(c.ctx, cluster.Namespace, helmop.RegistryProxyName(cluster.Name), obj, metav1.GetOptions{})
+	err := c.helmops.Get(c.ctx, cluster.Namespace, name, obj, metav1.GetOptions{})
 	if apierrors.IsNotFound(err) {
-		return false, "registry proxy HelmOp is not created yet", nil
+		return false, component + " HelmOp is not created yet", nil
 	}
 	if err != nil {
-		return false, "", fmt.Errorf("get registry proxy HelmOp: %w", err)
+		return false, "", fmt.Errorf("get %s HelmOp: %w", component, err)
 	}
 	conditions, found, err := unstructured.NestedSlice(obj.Object, "status", "conditions")
 	if err != nil || !found {
-		return false, "registry proxy HelmOp Ready condition is missing", nil
+		return false, component + " HelmOp Ready condition is missing", nil
 	}
 	for _, raw := range conditions {
 		condition, ok := raw.(map[string]any)
@@ -336,11 +355,11 @@ func (c *Controller) registryProxyHelmOpReady(cluster *provv1.Cluster) (bool, st
 		}
 		message, _ := condition["message"].(string)
 		if message == "" {
-			message = "registry proxy HelmOp is not Ready"
+			message = component + " HelmOp is not Ready"
 		}
 		return false, message, nil
 	}
-	return false, "registry proxy HelmOp Ready condition is missing", nil
+	return false, component + " HelmOp Ready condition is missing", nil
 }
 
 func setRegistryProxyCondition(status *statusBuilder, roles Roles, err error, ready bool, message string) {
@@ -424,38 +443,44 @@ func (c *Controller) ensureMTLSSecret(cluster *provv1.Cluster) error {
 func (c *Controller) helmopCluster(cluster *provv1.Cluster) helmop.Cluster {
 	roles := ResolveRoles(cluster)
 	hc := helmop.Cluster{
-		Name:                   cluster.Name,
-		Namespace:              cluster.Namespace,
-		MTLSSecretName:         c.opts.MTLSSecretName,
-		Chart:                  c.opts.DragonflyChart,
-		ExtrasChart:            c.opts.ExtrasChart,
-		MirrorChart:            c.opts.MirrorChart,
-		HarborChart:            c.opts.HarborChart,
-		RegistryProxyChart:     c.opts.RegistryProxyChart,
-		HarborAdminSecret:      helmop.HarborAdminSecretName(cluster.Name),
-		HarborSecretKey:        helmop.HarborSecretKeyName(cluster.Name),
-		ProxyWebhookSecretName: helmop.RegistryProxyWebhookSecretName(cluster.Name),
-		ProxyRobotSecretName:   helmop.RegistryProxyRobotSecretName(cluster.Name),
-		ProxyPublicURL:         proxyPublicURL(c.opts.ProxyDomain, c.opts.ProxyBasePath),
-		ProxyBasePath:          c.opts.ProxyBasePath,
-		ProxyTLSSecret:         c.opts.ProxyTLSSecret,
-		ProxyHostAliases:       c.opts.ProxyHostAliases,
-		ProxyRegistries:        c.opts.ProxyRegistries,
-		ManagerGRPCDomain:      c.opts.ManagerGRPCDomain,
-		ManagerGRPCPort:        c.opts.ManagerGRPCPort,
-		ManagerAPIHost:         c.opts.ManagerAPIHost,
-		SchedulerClusterID:     schedulerClusterID(cluster),
-		SchedulerReplicas:      helmop.ReplicasOrOne(AnnotationSchedulerReplicas, cluster.Annotations[AnnotationSchedulerReplicas]),
-		SeedClientReplicas:     helmop.ReplicasOrOne(AnnotationSeedClientReplicas, cluster.Annotations[AnnotationSeedClientReplicas]),
-		Monitoring:             monitoringEnabled(cluster),
-		P2PDataTLS:             p2pDataTLSEnabled(cluster),
-		Labels:                 apply.Labels(cluster.Namespace, cluster.Name),
+		Name:                     cluster.Name,
+		Namespace:                cluster.Namespace,
+		MTLSSecretName:           c.opts.MTLSSecretName,
+		Chart:                    c.opts.DragonflyChart,
+		ExtrasChart:              c.opts.ExtrasChart,
+		MirrorChart:              c.opts.MirrorChart,
+		HarborChart:              c.opts.HarborChart,
+		RegistryProxyChart:       c.opts.RegistryProxyChart,
+		AdmissionChart:           c.opts.AdmissionChart,
+		HarborAdminSecret:        helmop.HarborAdminSecretName(cluster.Name),
+		HarborSecretKey:          helmop.HarborSecretKeyName(cluster.Name),
+		ProxyWebhookSecretName:   helmop.RegistryProxyWebhookSecretName(cluster.Name),
+		ProxyRobotSecretName:     helmop.RegistryProxyRobotSecretName(cluster.Name),
+		ProxyDomain:              c.opts.ProxyDomain,
+		ProxyPublicURL:           proxyPublicURL(c.opts.ProxyDomain, c.opts.ProxyBasePath),
+		ProxyBasePath:            c.opts.ProxyBasePath,
+		ProxyTLSSecret:           c.opts.ProxyTLSSecret,
+		ProxyHostAliases:         c.opts.ProxyHostAliases,
+		ProxyRegistries:          c.opts.ProxyRegistries,
+		AdmissionImagePullSecret: c.opts.AdmissionImagePullSecret,
+		AdmissionServiceAccount:  c.opts.AdmissionServiceAccount,
+		AdmissionNetworkOnly:     c.opts.AdmissionNetworkOnly,
+		ManagerGRPCDomain:        c.opts.ManagerGRPCDomain,
+		ManagerGRPCPort:          c.opts.ManagerGRPCPort,
+		ManagerAPIHost:           c.opts.ManagerAPIHost,
+		SchedulerClusterID:       schedulerClusterID(cluster),
+		SchedulerReplicas:        helmop.ReplicasOrOne(AnnotationSchedulerReplicas, cluster.Annotations[AnnotationSchedulerReplicas]),
+		SeedClientReplicas:       helmop.ReplicasOrOne(AnnotationSeedClientReplicas, cluster.Annotations[AnnotationSeedClientReplicas]),
+		Monitoring:               monitoringEnabled(cluster),
+		P2PDataTLS:               p2pDataTLSEnabled(cluster),
+		Labels:                   apply.Labels(cluster.Namespace, cluster.Name),
 	}
 	hc.HarborDomain = roles.HarborDomain
 	hc.HarborURL = roles.HarborURL
 	hc.HarborManaged = roles.Harbor && roles.HarborURL == ""
 	hc.HarborIngressClass = c.opts.HarborIngressClass
 	hc.ProxyEnabled = roles.Proxy
+	hc.AdmissionEnabled = roles.Admission
 	// The certificate revision is derived from the live Secret so a rotation
 	// changes pod template annotations exactly once. Missing ca.crt errors are
 	// reported by ensureMTLSSecret.
@@ -699,6 +724,7 @@ func (c *Controller) cleanupAll(cluster *provv1.Cluster) error {
 		helmop.ExtrasName(cluster.Name),
 		helmop.HarborName(cluster.Name),
 		helmop.RegistryProxyName(cluster.Name),
+		helmop.AdmissionName(cluster.Name),
 	} {
 		if err := c.deleteHelmOp(cluster, name); err != nil {
 			errs = append(errs, err)
