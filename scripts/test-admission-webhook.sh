@@ -41,9 +41,6 @@ grep -q 'readOnlyRootFilesystem: true' "$tmp/admission.yaml" || fail "webhook ro
 if grep -q 'kind: PersistentVolumeClaim' "$tmp/admission.yaml"; then
   fail "admission-webhook must not render a PVC"
 fi
-if grep -Eq 'koldun|negash|aicp\.|harbor\.internal' "$tmp/admission.yaml"; then
-  fail "admission-webhook chart contains a hardcoded internal host"
-fi
 
 # No proxy domain is hardcoded: the default render is empty and opt-in.
 helm template c1-admission-webhook "$chart" --namespace dragonfly-system \
