@@ -17,5 +17,11 @@ func Admission(c Cluster) *fleetv1alpha1.HelmOp {
 		},
 		"networkOnly": c.AdmissionNetworkOnly,
 	}
-	return newHelmOp(AdmissionName(c.Name), c, c.AdmissionChart, "admission-webhook", values, nil)
+	op := newHelmOp(AdmissionName(c.Name), c, c.AdmissionChart, "admission-webhook", values, nil)
+	// The chart ships a cluster-scoped MutatingWebhookConfiguration, which
+	// Fleet refuses inside a targetNamespace. Install without one and let
+	// namespaced resources default to TargetNamespace.
+	op.Spec.TargetNamespace = ""
+	op.Spec.DefaultNamespace = TargetNamespace
+	return op
 }
