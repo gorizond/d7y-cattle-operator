@@ -216,9 +216,16 @@ func (c *Config) Validate() error {
 }
 
 // Allowlisted reports whether the registry may create Harbor projects.
+// "*" allows any explicit registry; an empty registry is never allowed.
 func (c *Config) Allowlisted(registry string) bool {
 	registry = normalizeRegistryAlias(registry)
+	if registry == "" || registry == "*" {
+		return false
+	}
 	for _, allowed := range c.Registry.Allowlist {
+		if normalizeRegistryAlias(allowed) == "*" {
+			return true
+		}
 		if normalizeRegistryAlias(allowed) == registry {
 			return true
 		}

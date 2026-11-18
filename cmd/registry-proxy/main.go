@@ -159,10 +159,15 @@ func initialize(ctx context.Context, cfg *registryproxy.Config, bootstrap *boots
 	}
 	sourceProjects := make([]string, 0, len(cfg.Registry.Allowlist))
 	for _, registry := range cfg.Registry.Allowlist {
+		if registry == "*" {
+			// Harbor's system robot wildcard grants pull across all current
+			// and future source projects; provisioning stays request-scoped.
+			sourceProjects = append(sourceProjects, "*")
+			continue
+		}
 		sourceProjects = append(sourceProjects, cfg.ProjectName(registry))
-		// Pre-provision only the configured allowlist (bounded, never an
-		// arbitrary request registry) so the system robot can be granted
-		// per-project permissions. Read-path Ensure stays lazy and cached.
+		// Pre-provision only an explicit allowlist so the system robot can be
+		// granted per-project permissions. Read-path Ensure stays lazy/cached.
 		if err := provisioner.Ensure(bootstrapCtx, registry); err != nil {
 			return fmt.Errorf("provision Harbor for %s: %w", registry, err)
 		}
@@ -190,7 +195,7 @@ func initialize(ctx context.Context, cfg *registryproxy.Config, bootstrap *boots
 		return err
 	})
 	backend := &registryproxy.HarborBackend{Source: source, Mirror: mirror, MirrorProject: cfg.Mirror.Project, Provisioner: provisioner, Jobs: manager}
-	webhook := &registryproxy.Webhook{Secret: webhookSecret, Manager: manager, Config: cfg}
+	webhook := &registryproxy.Webhook{Secret: webhookSecret, Manager: manager, Config: cfg, Provisioner: provisioner}
 	server := &registryproxy.Server{Config: cfg, Backend: backend, Convert: webhook, Manager: manager}
 	if cfg.Auth.Mode == "basic" {
 		server.AuthUsername = cfg.Auth.Username

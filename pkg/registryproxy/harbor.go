@@ -326,8 +326,9 @@ type Provisioner struct {
 	WebhookAddress string
 	WebhookSecret  string
 
-	mu    sync.Mutex
-	cache map[string]bool
+	mu       sync.Mutex
+	cache    map[string]bool
+	projects map[string]string
 }
 
 func (p *Provisioner) Ensure(ctx context.Context, registry string) error {
@@ -345,7 +346,8 @@ func (p *Provisioner) Ensure(ctx context.Context, registry string) error {
 	if err != nil {
 		return err
 	}
-	if _, err := p.Harbor.EnsureProject(ctx, ProjectName(registry), endpoint.ID); err != nil {
+	project := ProjectName(registry)
+	if _, err := p.Harbor.EnsureProject(ctx, project, endpoint.ID); err != nil {
 		return err
 	}
 	if _, err := p.Harbor.EnsureProject(ctx, p.MirrorProject, 0); err != nil {
@@ -358,7 +360,23 @@ func (p *Provisioner) Ensure(ctx context.Context, registry string) error {
 	if p.cache == nil {
 		p.cache = map[string]bool{}
 	}
+	if p.projects == nil {
+		p.projects = map[string]string{}
+	}
 	p.cache[registry] = true
+	p.projects[project] = registry
 	p.mu.Unlock()
 	return nil
+}
+
+// RegistryForProject maps a Harbor source project back to its upstream
+// registry. The mapping is populated by Ensure, so the Harbor webhook can
+// resolve projects when the allowlist is "*".
+func (p *Provisioner) RegistryForProject(project string) string {
+	if p == nil {
+		return ""
+	}
+	p.mu.Lock()
+	defer p.mu.Unlock()
+	return p.projects[project]
 }

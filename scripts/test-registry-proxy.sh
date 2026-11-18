@@ -87,9 +87,7 @@ grep -q 'serviceAccountName:' "$tmp/proxy.yaml" || fail "proxy ServiceAccount is
 grep -q 'name: POD_NAMESPACE' "$tmp/proxy.yaml" || fail "proxy POD_NAMESPACE env is missing"
 grep -q 'optional: true' "$tmp/proxy.yaml" || fail "proxy robot/webhook Secrets must be optional"
 grep -q '/usr/local/bin/nydus-image' "$tmp/proxy.yaml" || fail "conversion nydus image path is missing"
-for registry in docker.io registry.gitlab.com ghcr.io; do
-  grep -q -- "- \"$registry\"" "$tmp/proxy.yaml" || fail "proxy allowlist is missing $registry"
-done
+grep -q -- '- "*"' "$tmp/proxy.yaml" || fail "proxy allow-any allowlist is missing"
 
 if grep -q 'kind: PersistentVolumeClaim' "$tmp/proxy.yaml"; then
   fail "registry-proxy must not render a PVC"

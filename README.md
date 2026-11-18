@@ -39,7 +39,8 @@ Live envtest/pilot verification remains deferred.
   existing `<cluster>-keydb`; the proxy has no PVC.
 - Deploys the opt-in Pod image-rewriting webhook on
   `p2p.dragonfly.io/admission: "true"` (`<cluster>-admission-webhook`). It
-  rewrites allowlisted images to `<proxy.domain>/<registry>/<repo>:<tag>`,
+  rewrites any explicit registry (and Docker Hub shorthand) to
+  `<proxy.domain>/<registry>/<repo>:<tag>`,
   preserves `@sha256`, and is independent of Harbor/proxy/seed.
 - Manages the manager Ingresses, the public scheduler TCP front, and optional
   VPAs through the separate `<cluster>-extras` HelmOp and the
@@ -473,14 +474,15 @@ has no PVC/HA, so state durability is a separate decision; v1 stays in-memory.
 
 The proxy accepts the OCI direct-ref route
 `/v2/<registry>/<repo>/manifests|blobs|referrers` (the first path segment is
-the allowlisted registry, as produced by the admission rewrite) and keeps
+the explicit registry, as produced by the admission rewrite) and keeps
 `?ns=<registry>` / `X-Dragonfly-Registry` for containerd/dfdaemon. A `?ns`
 hint naming the proxy itself is ignored so the direct-ref segment wins.
-Paths without a known registry are rejected with 403; the proxy never guesses
-a registry or creates a Harbor project outside the allowlist
-(`docker.io`, `registry.gitlab.com`, `ghcr.io`). Docker aliases
-(`registry-1.docker.io`, `index.docker.io`) are canonicalized to `docker.io`
-before the allowlist and Harbor project mapping.
+Unqualified repository paths are rejected with 403. The default allowlist is
+`*`: any explicit registry is accepted, and proxy auth (Basic or network-only)
+is the security boundary. The first segment must still look like a registry
+(dot, port, or `localhost`). Docker aliases (`registry-1.docker.io`,
+`index.docker.io`) are canonicalized to `docker.io` before Harbor project
+mapping.
 
 On the first manifest request for a tag the proxy starts the copy and nydus
 conversion job and answers `503` with `Retry-After` while it runs; after the

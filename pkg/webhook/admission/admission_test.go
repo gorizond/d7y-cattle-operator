@@ -22,12 +22,15 @@ func TestRewriteImage(t *testing.T) {
 		{"registry.gitlab.com/gitlab-org/cli:v1.104.0", "proxy.example.com/registry.gitlab.com/gitlab-org/cli:v1.104.0", true},
 		{"docker.io/library/nginx:1.27", "proxy.example.com/docker.io/library/nginx:1.27", true},
 		{"ghcr.io/gorizond/d7y:v1", "proxy.example.com/ghcr.io/gorizond/d7y:v1", true},
+		{"quay.io/org/image:v1", "proxy.example.com/quay.io/org/image:v1", true},
+		{"registry.example.org/team/app:v2", "proxy.example.com/registry.example.org/team/app:v2", true},
 		{"registry.gitlab.com/gitlab-org/cli:v1.104.0@sha256:abc", "proxy.example.com/registry.gitlab.com/gitlab-org/cli:v1.104.0@sha256:abc", true},
 		{"registry.gitlab.com/gitlab-org/cli@sha256:abc", "proxy.example.com/registry.gitlab.com/gitlab-org/cli@sha256:abc", true},
+		{"nginx:1.27", "proxy.example.com/docker.io/library/nginx:1.27", true},
+		{"library/nginx:1.27", "proxy.example.com/docker.io/library/nginx:1.27", true},
+		{"nginx@sha256:abc", "proxy.example.com/docker.io/library/nginx@sha256:abc", true},
 		{"proxy.example.com/registry.gitlab.com/gitlab-org/cli:v1", "proxy.example.com/registry.gitlab.com/gitlab-org/cli:v1", false},
 		{"harbor.example.com/library/nginx:v1", "harbor.example.com/library/nginx:v1", false},
-		{"quay.io/org/image:v1", "quay.io/org/image:v1", false},
-		{"nginx:1.27", "nginx:1.27", false},
 	}
 	for _, test := range tests {
 		got, changed := rewriter.RewriteImage(test.in)
@@ -78,7 +81,7 @@ func TestPatchPodNoop(t *testing.T) {
 	pod := &corev1.Pod{Spec: corev1.PodSpec{
 		Containers: []corev1.Container{
 			{Name: "proxy", Image: "proxy.example.com/docker.io/library/nginx:1"},
-			{Name: "quay", Image: "quay.io/org/image:1"},
+			{Name: "harbor", Image: "harbor.example.com/library/nginx:1"},
 		},
 	}}
 	patch, err := rewriter.PatchPod(pod)
@@ -173,5 +176,36 @@ func TestServeHTTPExcludedNamespace(t *testing.T) {
 	}
 	if response.Response == nil || !response.Response.Allowed || len(response.Response.Patch) != 0 {
 		t.Errorf("response = %+v, want allowed without patch", response.Response)
+	}
+}
+
+func TestPatchPodRewritesAnyRegistryAndDockerHub(t *testing.T) {
+	rewriter := New(Config{ProxyDomain: "proxy.example.com", NetworkOnly: true})
+	pod := &corev1.Pod{Spec: corev1.PodSpec{
+		Containers: []corev1.Container{
+			{Name: "quay", Image: "quay.io/org/image:v1"},
+			{Name: "hub", Image: "nginx:1.27"},
+		},
+	}}
+	patch, err := rewriter.PatchPod(pod)
+	if err != nil {
+		t.Fatal(err)
+	}
+	var operations []patchOperation
+	if err := json.Unmarshal(patch, &operations); err != nil {
+		t.Fatalf("patch is not a JSONPatch: %v", err)
+	}
+	want := map[string]string{
+		"/spec/containers/0/image": "proxy.example.com/quay.io/org/image:v1",
+		"/spec/containers/1/image": "proxy.example.com/docker.io/library/nginx:1.27",
+	}
+	for _, operation := range operations {
+		if operation.Value != want[operation.Path] {
+			t.Errorf("%s = %v, want %s", operation.Path, operation.Value, want[operation.Path])
+		}
+		delete(want, operation.Path)
+	}
+	if len(want) != 0 {
+		t.Errorf("missing patch paths: %v", want)
 	}
 }

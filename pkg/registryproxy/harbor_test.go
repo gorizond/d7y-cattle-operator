@@ -23,9 +23,10 @@ type fakeHarbor struct {
 	webhookAuth    string
 	robots         []HarborRobot
 	posts          map[string]int
-	// lastRegistryBody is the raw create body (checks that private upstream
-	// credentials reach Harbor without appearing in logs).
+	// lastRegistryBody/lastRobotBody are raw create bodies (checks that
+	// credentials and wildcard permissions reach Harbor).
 	lastRegistryBody map[string]any
+	lastRobotBody    map[string]any
 }
 
 func (f *fakeHarbor) handler() http.Handler {
@@ -82,12 +83,12 @@ func (f *fakeHarbor) handler() http.Handler {
 		case r.Method == http.MethodGet && r.URL.Path == "/api/v2.0/robots":
 			_ = json.NewEncoder(w).Encode(f.robots)
 		case r.Method == http.MethodPost && r.URL.Path == "/api/v2.0/robots":
-			var body struct {
-				Name string `json:"name"`
-			}
+			var body map[string]any
 			_ = json.NewDecoder(r.Body).Decode(&body)
+			f.lastRobotBody = body
 			f.posts["robot"]++
-			robot := HarborRobot{ID: len(f.robots) + 1, Name: "robot$" + body.Name, Secret: "robot-secret"}
+			name, _ := body["name"].(string)
+			robot := HarborRobot{ID: len(f.robots) + 1, Name: "robot$" + name, Secret: "robot-secret"}
 			f.robots = append(f.robots, robot)
 			_ = json.NewEncoder(w).Encode(robot)
 			w.WriteHeader(http.StatusCreated)
@@ -308,5 +309,25 @@ func TestEnsureRegistrySendsPrivateUpstreamCredentials(t *testing.T) {
 	}
 	if fake.lastRegistryBody["name"] != "registry.gitlab.com" {
 		t.Errorf("registry name = %v", fake.lastRegistryBody["name"])
+	}
+}
+
+func TestEnsureSystemRobotUsesWildcardPull(t *testing.T) {
+	fake := &fakeHarbor{}
+	server := httptest.NewServer(fake.handler())
+	defer server.Close()
+	if _, err := (&HarborClient{BaseURL: server.URL}).EnsureSystemRobot(
+		context.Background(), "d7y-registry-proxy", []string{"*"}, "mirror"); err != nil {
+		t.Fatalf("EnsureSystemRobot() error = %v", err)
+	}
+	fake.mu.Lock()
+	defer fake.mu.Unlock()
+	permissions, _ := fake.lastRobotBody["permissions"].([]any)
+	if len(permissions) != 2 {
+		t.Fatalf("permissions = %v", fake.lastRobotBody["permissions"])
+	}
+	first, _ := permissions[0].(map[string]any)
+	if first["kind"] != "project" || first["namespace"] != "*" {
+		t.Errorf("wildcard permission = %v", first)
 	}
 }

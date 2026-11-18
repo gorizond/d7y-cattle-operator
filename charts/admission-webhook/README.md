@@ -12,10 +12,9 @@ proxy, or the seed role.
 
 | Input | Output |
 |---|---|
-| `registry.gitlab.com/<repo>:<tag>` | `<proxy.domain>/registry.gitlab.com/<repo>:<tag>` |
-| `docker.io/<repo>:<tag>` | `<proxy.domain>/docker.io/<repo>:<tag>` |
-| `ghcr.io/<repo>:<tag>` | `<proxy.domain>/ghcr.io/<repo>:<tag>` |
-| proxy/harbor or non-allowlisted registry | unchanged |
+| any explicit registry (`registry.gitlab.com/...`, `quay.io/...`, `ghcr.io/...`) | `<proxy.domain>/<registry>/<repo>:<tag>` |
+| unqualified Docker Hub (`nginx:1.27`, `library/nginx:1.27`) | `<proxy.domain>/docker.io/library/nginx:1.27` |
+| proxy or Harbor ref | unchanged |
 
 `@sha256` digests are preserved exactly, and a second admission of an
 already-rewritten pod is a no-op. `kube-system`, `fleet-system`, `cattle-*`,
@@ -54,7 +53,6 @@ the Service and reuses the Secret across upgrades; `caBundle` is wired into the
 | Key | Default | Purpose |
 |---|---|---|
 | `proxy.domain` | `""` | public proxy host from operator values; no internal host is hardcoded |
-| `registries` | `registry.gitlab.com`, `docker.io`, `ghcr.io` | rewrite allowlist |
 | `networkOnly` | `true` | disable credential injection |
 | `inject.imagePullSecret` | `""` | Secret name injected into proxy-pulling pods |
 | `inject.serviceAccountName` | `""` | serviceAccountName injected for proxy pulls |

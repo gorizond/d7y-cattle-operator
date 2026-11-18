@@ -15,19 +15,12 @@ import (
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
 )
 
-const (
-	// DefaultRegistries is the allowlist from the admission contract.
-	defaultRegistries = "registry.gitlab.com,docker.io,ghcr.io"
-
-	maxBodyBytes = 4 << 20
-)
+const maxBodyBytes = 4 << 20
 
 // Config is the rewrite/injection policy rendered by the admission chart.
 type Config struct {
 	// ProxyDomain is the public proxy host prepended to rewritten images.
 	ProxyDomain string
-	// Registries is the upstream registry allowlist (host names).
-	Registries []string
 	// ImagePullSecret is injected only when the pod pulls through the proxy.
 	// Empty disables injection (network-only mode).
 	ImagePullSecret string
@@ -43,24 +36,13 @@ type Config struct {
 // Rewriter implements the Pod CREATE mutation.
 type Rewriter struct {
 	config   Config
-	allowed  map[string]struct{}
 	excluded map[string]struct{}
 }
 
-// New builds a Rewriter. Registries defaults to the contract allowlist.
+// New builds a Rewriter. Any explicit registry and unqualified Docker Hub
+// references are rewritten; only proxy/Harbor refs are skipped.
 func New(config Config) *Rewriter {
 	config.ProxyDomain = strings.TrimSpace(strings.ToLower(config.ProxyDomain))
-	registries := config.Registries
-	if len(registries) == 0 {
-		registries = strings.Split(defaultRegistries, ",")
-	}
-	allowed := make(map[string]struct{}, len(registries))
-	for _, registry := range registries {
-		registry = normalizeRegistry(registry)
-		if registry != "" {
-			allowed[registry] = struct{}{}
-		}
-	}
 	excluded := make(map[string]struct{}, len(config.ExcludedNamespaces)+4)
 	for _, namespace := range config.ExcludedNamespaces {
 		excluded[namespace] = struct{}{}
@@ -68,22 +50,25 @@ func New(config Config) *Rewriter {
 	for _, namespace := range []string{"kube-system", "fleet-system", "kube-node-lease", "kube-public"} {
 		excluded[namespace] = struct{}{}
 	}
-	return &Rewriter{config: config, allowed: allowed, excluded: excluded}
+	return &Rewriter{config: config, excluded: excluded}
 }
 
-// RewriteImage returns the proxy image and whether it changed.
+// RewriteImage returns the proxy image and whether it changed. Explicit
+// registries are preserved as the first path segment; unqualified Docker Hub
+// references are normalized to docker.io (with the implicit library namespace).
 func (r *Rewriter) RewriteImage(image string) (string, bool) {
-	registry, ok := imageRegistry(image)
-	if !ok || r.config.ProxyDomain == "" {
+	if r.config.ProxyDomain == "" {
 		return image, false
 	}
+	registry, _ := imageRegistry(image)
 	if isProxyOrHarbor(registry, r.config.ProxyDomain) {
 		return image, false
 	}
-	if _, ok := r.allowed[registry]; !ok {
+	normalized := normalizeImage(image)
+	if normalized == "" {
 		return image, false
 	}
-	return r.config.ProxyDomain + "/" + image, true
+	return r.config.ProxyDomain + "/" + normalized, true
 }
 
 type patchOperation struct {
@@ -221,11 +206,28 @@ func imageRegistry(image string) (string, bool) {
 	return host, true
 }
 
-func normalizeRegistry(value string) string {
-	value = strings.TrimSpace(strings.ToLower(value))
-	value = strings.TrimPrefix(value, "https://")
-	value = strings.TrimPrefix(value, "http://")
-	return strings.TrimSuffix(value, "/")
+// normalizeImage expands unqualified Docker Hub references to their canonical
+// docker.io form while preserving tags and digests.
+func normalizeImage(image string) string {
+	name := strings.TrimSpace(image)
+	if name == "" {
+		return ""
+	}
+	digest := ""
+	if idx := strings.IndexByte(name, '@'); idx >= 0 {
+		digest = name[idx:]
+		name = name[:idx]
+	}
+	if name == "" {
+		return ""
+	}
+	if _, ok := imageRegistry(name); ok {
+		return name + digest
+	}
+	if strings.Contains(name, "/") {
+		return "docker.io/" + name + digest
+	}
+	return "docker.io/library/" + name + digest
 }
 
 func isProxyOrHarbor(registry, proxyDomain string) bool {

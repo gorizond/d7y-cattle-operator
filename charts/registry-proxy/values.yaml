@@ -26,10 +26,9 @@ mirror:
   project: mirror
 
 registry:
+  # "*" allows any explicit registry; auth/network is the security boundary.
   allowlist:
-    - docker.io
-    - registry.gitlab.com
-    - ghcr.io
+    - "*"
 
 proxy:
   publicURL: ""

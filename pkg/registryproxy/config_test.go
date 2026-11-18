@@ -160,3 +160,18 @@ upstream:
 		t.Error("missing credentials file was accepted")
 	}
 }
+
+func TestConfigAllowAnyRegistry(t *testing.T) {
+	cfg := testConfig(t)
+	cfg.Registry.Allowlist = []string{"*"}
+	for _, registry := range []string{"docker.io", "quay.io", "registry.example.org:5000"} {
+		if !cfg.Allowlisted(registry) {
+			t.Errorf("Allowlisted(%q) = false with *", registry)
+		}
+	}
+	for _, registry := range []string{"", "*"} {
+		if cfg.Allowlisted(registry) {
+			t.Errorf("Allowlisted(%q) = true with *", registry)
+		}
+	}
+}

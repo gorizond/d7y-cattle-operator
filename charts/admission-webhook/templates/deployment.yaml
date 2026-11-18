@@ -50,8 +50,6 @@ spec:
                   fieldPath: metadata.namespace
             - name: PROXY_DOMAIN
               value: {{ .Values.proxy.domain | quote }}
-            - name: ADMISSION_REGISTRIES
-              value: {{ join "," .Values.registries | quote }}
             - name: ADMISSION_IMAGE_PULL_SECRET
               value: {{ .Values.inject.imagePullSecret | quote }}
             - name: ADMISSION_SERVICE_ACCOUNT

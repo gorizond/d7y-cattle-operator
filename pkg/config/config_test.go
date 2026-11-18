@@ -529,3 +529,15 @@ func TestLoadInvalidManagerGRPCPortEnv(t *testing.T) {
 		t.Fatalf("Load() error = %v, want an error mentioning MANAGER_GRPC_PORT", err)
 	}
 }
+
+func TestLoadProxyRegistriesAllowAny(t *testing.T) {
+	clearEnv(t)
+	t.Setenv("PROXY_REGISTRIES", "*")
+	cfg, err := Load(requiredArgs())
+	if err != nil {
+		t.Fatalf("Load() error = %v", err)
+	}
+	if cfg.ProxyRegistries != "*" {
+		t.Errorf("ProxyRegistries = %q, want *", cfg.ProxyRegistries)
+	}
+}

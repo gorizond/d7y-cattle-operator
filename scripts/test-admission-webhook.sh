@@ -34,6 +34,9 @@ grep -q 'fleet-system' "$tmp/admission.yaml" || fail "fleet-system exclusion is 
 grep -q 'command:' "$tmp/admission.yaml" || fail "webhook command is missing"
 grep -q '/admission-webhook' "$tmp/admission.yaml" || fail "webhook command does not use /admission-webhook"
 grep -q 'proxy.example.com' "$tmp/admission.yaml" || fail "proxy.domain fixture is missing"
+if grep -q 'ADMISSION_REGISTRIES' "$tmp/admission.yaml"; then
+  fail "admission-webhook must not render a registry allowlist"
+fi
 grep -q 'value: "true"' "$tmp/admission.yaml" || fail "networkOnly default is missing"
 grep -q 'containerPort: 8443' "$tmp/admission.yaml" || fail "webhook port is missing"
 grep -q 'readOnlyRootFilesystem: true' "$tmp/admission.yaml" || fail "webhook rootfs is not read-only"

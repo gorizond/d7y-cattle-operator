@@ -41,9 +41,9 @@ NYDUS_MIRROR_URL=https://proxy.example.test/docker.io   # optional; no fallback 
 
 `SMART_PROXY_URL` is optional. When present it is validated as an
 http(s) URL and kept for the in-cluster mirror bootstrap; new VMs never make
-the proxy mandatory (the script stays fail-open). The mirror chart points
-allowlisted registries at the external proxy domain, not at a per-node proxy. The in-cluster
-`containerd-mirror` DaemonSet applies the proxy `hosts.toml` after RKE2.
+the proxy mandatory (the script stays fail-open). The in-cluster
+`containerd-mirror` DaemonSet writes only `certs.d/_default/hosts.toml` ->
+dfdaemon after RKE2; dfdaemon 1.5.14 forwards `?ns=` to the proxy.
 
 `NYDUS_MIRROR_URL` is optional and must be the HTTPS base URL of the registry
 proxy mirror path, including the registry segment (for example

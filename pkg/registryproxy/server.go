@@ -282,12 +282,13 @@ func (s *Server) route(requestPath string, r *http.Request) (string, string, boo
 		return registry, rest, true
 	}
 	// Direct ref: /v2/<registry>/<repo>/... (admission-rewritten image). Only
-	// an allowlisted first segment counts as a registry; anything else stays
-	// unresolved and gets 403, never a guessed Harbor project.
+	// a host-looking first segment counts as a registry; anything else stays
+	// unresolved and gets 403, never a guessed Harbor project. This check is
+	// independent of the allowlist ("*" allows any explicit registry).
 	if repoPath, ok := strings.CutPrefix(rest, "/v2/"); ok {
 		first, remaining, found := strings.Cut(repoPath, "/")
 		registry := normalizeRegistryAlias(first)
-		if found && registry != "" && s.Config.Allowlisted(registry) {
+		if found && looksLikeRegistry(registry) && s.Config.Allowlisted(registry) {
 			return registry, "/v2/" + remaining, true
 		}
 	}
@@ -296,6 +297,17 @@ func (s *Server) route(requestPath string, r *http.Request) (string, string, boo
 
 func (s *Server) selfRegistry(registry string) bool {
 	return s.Config != nil && s.Config.SelfRegistry(registry)
+}
+
+// looksLikeRegistry matches Docker's implicit-registry rule: an explicit
+// registry segment contains a dot or port, or is localhost. This keeps
+// unqualified repository paths from being guessed as registries when the
+// allowlist is "*".
+func looksLikeRegistry(registry string) bool {
+	if registry == "" {
+		return false
+	}
+	return registry == "localhost" || strings.ContainsAny(registry, ".:")
 }
 
 func ociRest(raw string) (string, bool) {

@@ -42,7 +42,7 @@ const (
 	DefaultAdmissionChartVersion         = "0.1.0"
 	DefaultAdmissionNetworkOnly          = true
 	DefaultProxyHarborAdminSecret        = "harbor-admin"
-	DefaultProxyRegistries               = "docker.io,registry.gitlab.com,ghcr.io"
+	DefaultProxyRegistries               = "*"
 	DefaultProxyBasePath                 = ""
 	DefaultExtrasIngressController       = "nginx"
 	DefaultExtrasIngressClassName        = ""
@@ -387,6 +387,9 @@ func (c *Config) Validate() error {
 		registry = strings.TrimSpace(registry)
 		if registry == "" {
 			add("--proxy-registries: contains an empty registry")
+			continue
+		}
+		if registry == "*" {
 			continue
 		}
 		if msgs := validation.IsDNS1123Subdomain(registry); len(msgs) > 0 {

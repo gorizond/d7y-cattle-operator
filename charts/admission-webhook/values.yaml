@@ -18,13 +18,6 @@ serviceAccount:
 proxy:
   domain: ""
 
-# Upstream registries whose images are rewritten. Other registries are left
-# untouched; proxy/harbor refs are always skipped.
-registries:
-  - registry.gitlab.com
-  - docker.io
-  - ghcr.io
-
 # Credentials for pulling from the proxy. Either inject an existing
 # imagePullSecret/serviceAccountName (secret must exist in every target
 # namespace) or run the proxy in network-only mode (no injection).

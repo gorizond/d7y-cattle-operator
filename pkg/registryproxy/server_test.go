@@ -623,3 +623,36 @@ func TestServerDirectRefProvisioningIsLazyAndAllowlisted(t *testing.T) {
 		t.Errorf("cached provisioning posts = %v, want unchanged", fake.posts)
 	}
 }
+
+func TestServerAllowAnyRegistry(t *testing.T) {
+	backend := &recordingBackend{}
+	server := directServer(backend)
+	server.Config.Registry.Allowlist = []string{"*"}
+
+	for _, tc := range []struct {
+		path     string
+		registry string
+		repo     string
+	}{
+		{"/v2/quay.io/org/image/manifests/v1", "quay.io", "org/image"},
+		{"/v2/registry.example.org/team/app/manifests/v2", "registry.example.org", "team/app"},
+	} {
+		rec := httptest.NewRecorder()
+		server.Handler().ServeHTTP(rec, httptest.NewRequest(http.MethodGet, tc.path, nil))
+		if rec.Code != http.StatusOK {
+			t.Errorf("%s = %d %q", tc.path, rec.Code, rec.Body.String())
+			continue
+		}
+		if backend.registry != tc.registry || backend.repo != tc.repo {
+			t.Errorf("%s routed to %s/%s, want %s/%s", tc.path, backend.registry, backend.repo, tc.registry, tc.repo)
+		}
+	}
+
+	// An unqualified repository path is not guessed as a registry.
+	rec := httptest.NewRecorder()
+	server.Handler().ServeHTTP(rec, httptest.NewRequest(http.MethodGet,
+		"/v2/library/nginx/manifests/1.27", nil))
+	if rec.Code != http.StatusForbidden {
+		t.Errorf("unqualified path = %d, want 403", rec.Code)
+	}
+}

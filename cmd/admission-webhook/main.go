@@ -33,7 +33,6 @@ func run() error {
 	}
 	var (
 		proxyDomain    = flag.String("proxy-domain", envOr("PROXY_DOMAIN", ""), "public registry proxy host (DNS name, no scheme)")
-		registries     = flag.String("registries", envOr("ADMISSION_REGISTRIES", "registry.gitlab.com,docker.io,ghcr.io"), "comma-separated upstream registry allowlist")
 		pullSecret     = flag.String("image-pull-secret", envOr("ADMISSION_IMAGE_PULL_SECRET", ""), "Secret injected as imagePullSecrets (empty: network-only)")
 		serviceAccount = flag.String("service-account", envOr("ADMISSION_SERVICE_ACCOUNT", ""), "serviceAccountName injected for proxy pulls")
 		networkOnly    = flag.Bool("network-only", defaultNetworkOnly, "disable credential injection; rely on network-only proxy access")
@@ -49,7 +48,6 @@ func run() error {
 
 	rewriter := admission.New(admission.Config{
 		ProxyDomain:        *proxyDomain,
-		Registries:         splitCSV(*registries),
 		ImagePullSecret:    *pullSecret,
 		ServiceAccountName: *serviceAccount,
 		NetworkOnly:        *networkOnly,
@@ -71,16 +69,6 @@ func run() error {
 
 func ok(w http.ResponseWriter, _ *http.Request) {
 	w.WriteHeader(http.StatusOK)
-}
-
-func splitCSV(raw string) []string {
-	var values []string
-	for _, item := range strings.Split(raw, ",") {
-		if item = strings.TrimSpace(item); item != "" {
-			values = append(values, item)
-		}
-	}
-	return values
 }
 
 func envOr(key, fallback string) string {
