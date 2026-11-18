@@ -1,6 +1,36 @@
 apiVersion: v1
 entries:
+  admission-webhook:
+  - apiVersion: v2
+    appVersion: 0.1.34
+    created: "2026-11-18T22:43:29.303057586Z"
+    description: Opt-in Pod image rewriter for the Dragonfly smart registry proxy
+    digest: c236a2012d04bf334ce19d914c8ff054b65581a79234b1ddc82830bfe857eb65
+    home: https://github.com/gorizond/d7y-cattle-operator
+    kubeVersion: '>=1.28.0-0'
+    name: admission-webhook
+    sources:
+    - https://github.com/gorizond/d7y-cattle-operator
+    type: application
+    urls:
+    - https://github.com/gorizond/d7y-cattle-operator/releases/download/admission-webhook-0.1.0/admission-webhook-0.1.0.tgz
+    version: 0.1.0
   containerd-mirror:
+  - apiVersion: v2
+    appVersion: 0.1.0
+    created: "2026-11-18T22:43:29.466080342Z"
+    description: Strict node-local containerd registry mirror for the Dragonfly P2P
+      stack
+    digest: 026dc2442ecbbfa1b4dbbcf43c9c981f32368548a2836599d118ba0a0745bb8a
+    home: https://github.com/gorizond/d7y-cattle-operator
+    kubeVersion: '>=1.28.0-0'
+    name: containerd-mirror
+    sources:
+    - https://github.com/gorizond/d7y-cattle-operator
+    type: application
+    urls:
+    - https://github.com/gorizond/d7y-cattle-operator/releases/download/containerd-mirror-0.1.1/containerd-mirror-0.1.1.tgz
+    version: 0.1.1
   - apiVersion: v2
     appVersion: 0.1.0
     created: "2026-11-17T02:40:11.170750263Z"
@@ -17,6 +47,20 @@ entries:
     - https://github.com/gorizond/d7y-cattle-operator/releases/download/containerd-mirror-0.1.0/containerd-mirror-0.1.0.tgz
     version: 0.1.0
   d7y-cattle-operator:
+  - apiVersion: v2
+    appVersion: 0.1.34
+    created: "2026-11-18T22:43:29.678636689Z"
+    description: Dragonfly P2P operator for Rancher-managed RKE2 clusters
+    digest: fbe55da39f8359510aeb125850f4fcbf15a6a76fe765ed920ec5ef8489337087
+    home: https://github.com/gorizond/d7y-cattle-operator
+    kubeVersion: '>=1.28.0-0'
+    name: d7y-cattle-operator
+    sources:
+    - https://github.com/gorizond/d7y-cattle-operator
+    type: application
+    urls:
+    - https://github.com/gorizond/d7y-cattle-operator/releases/download/d7y-cattle-operator-0.1.34/d7y-cattle-operator-0.1.34.tgz
+    version: 0.1.34
   - apiVersion: v2
     appVersion: 0.1.32
     created: "2026-11-17T12:59:54.144262809Z"
@@ -567,6 +611,20 @@ entries:
   p2p-static:
   - apiVersion: v2
     appVersion: 0.1.0
+    created: "2026-11-18T22:43:30.055189337Z"
+    description: Nginx static server for the Dragonfly P2P bootstrap script and binaries
+    digest: 71afa2313e84606084b4169906e9e7d6eeaa227698ef66ccc5a6079be1c681dc
+    home: https://github.com/gorizond/d7y-cattle-operator
+    kubeVersion: '>=1.28.0-0'
+    name: p2p-static
+    sources:
+    - https://github.com/gorizond/d7y-cattle-operator
+    type: application
+    urls:
+    - https://github.com/gorizond/d7y-cattle-operator/releases/download/p2p-static-0.1.1/p2p-static-0.1.1.tgz
+    version: 0.1.1
+  - apiVersion: v2
+    appVersion: 0.1.0
     created: "2026-11-14T03:14:39.803519054+01:00"
     description: Nginx static server for the Dragonfly P2P bootstrap script and binaries
     digest: fdc52e0fb7a50be215adce1e31ea14f20d5e917944f7dfd1e829095eaff88c59
@@ -580,6 +638,20 @@ entries:
     - https://github.com/gorizond/d7y-cattle-operator/releases/download/p2p-static-0.1.0/p2p-static-0.1.0.tgz
     version: 0.1.0
   registry-proxy:
+  - apiVersion: v2
+    appVersion: 0.1.34
+    created: "2026-11-18T22:43:30.282213747Z"
+    description: Smart OCI registry proxy fronting Harbor for Dragonfly/nydus clusters
+    digest: 16322dc8297b941bd7fcc453a4ff228267139405fde21b894f371292fd13f07c
+    home: https://github.com/gorizond/d7y-cattle-operator
+    kubeVersion: '>=1.28.0-0'
+    name: registry-proxy
+    sources:
+    - https://github.com/gorizond/d7y-cattle-operator
+    type: application
+    urls:
+    - https://github.com/gorizond/d7y-cattle-operator/releases/download/registry-proxy-0.1.12/registry-proxy-0.1.12.tgz
+    version: 0.1.12
   - apiVersion: v2
     appVersion: 0.1.32
     created: "2026-11-17T12:59:54.667135615Z"
@@ -720,4 +792,4 @@ entries:
     urls:
     - https://github.com/gorizond/d7y-cattle-operator/releases/download/registry-proxy-0.1.0/registry-proxy-0.1.0.tgz
     version: 0.1.0
-generated: "2026-11-17T12:59:54.667565769Z"
+generated: "2026-11-18T22:43:30.28256855Z"
