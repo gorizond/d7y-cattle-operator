@@ -12,8 +12,14 @@ func TestAdmissionHelmOp(t *testing.T) {
 
 	op := Admission(c)
 
-	if op.Name != "c1-admission-webhook" || op.Spec.TargetNamespace != TargetNamespace {
-		t.Errorf("name/target namespace = %s/%s", op.Name, op.Spec.TargetNamespace)
+	if op.Name != "c1-admission-webhook" {
+		t.Errorf("name = %s", op.Name)
+	}
+	if op.Spec.TargetNamespace != "" {
+		t.Errorf("target namespace = %q, want empty (cluster-scoped webhook)", op.Spec.TargetNamespace)
+	}
+	if op.Spec.DefaultNamespace != TargetNamespace {
+		t.Errorf("default namespace = %q, want %q", op.Spec.DefaultNamespace, TargetNamespace)
 	}
 	if op.Spec.Helm.Chart != "admission-webhook" || op.Spec.Helm.Version != "0.1.0" {
 		t.Errorf("chart = %s %s", op.Spec.Helm.Chart, op.Spec.Helm.Version)
