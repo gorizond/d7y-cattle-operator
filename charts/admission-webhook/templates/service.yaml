@@ -1,0 +1,16 @@
+apiVersion: v1
+kind: Service
+metadata:
+  name: {{ .Release.Name }}
+  namespace: {{ .Release.Namespace }}
+  labels:
+    {{- include "admission-webhook.labels" . | nindent 4 }}
+spec:
+  type: {{ .Values.service.type }}
+  selector:
+    {{- include "admission-webhook.selectorLabels" . | nindent 4 }}
+  ports:
+    - name: https
+      port: {{ .Values.service.port }}
+      targetPort: https
+      protocol: TCP

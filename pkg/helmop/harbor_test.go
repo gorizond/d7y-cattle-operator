@@ -92,8 +92,8 @@ func TestRegistryProxyHelmOp(t *testing.T) {
 	if op.Spec.Helm.Chart != "registry-proxy" || op.Spec.Helm.Version != "0.1.11" {
 		t.Errorf("chart = %s %s", op.Spec.Helm.Chart, op.Spec.Helm.Version)
 	}
-	if len(op.Spec.DependsOn) != 1 || op.Spec.DependsOn[0].Name != "c1-harbor" {
-		t.Errorf("dependsOn = %+v, want c1-harbor", op.Spec.DependsOn)
+	if len(op.Spec.DependsOn) != 0 {
+		t.Errorf("dependsOn = %+v, want none (independent toggles)", op.Spec.DependsOn)
 	}
 	if len(op.Spec.DownstreamResources) != 2 ||
 		op.Spec.DownstreamResources[0].Name != "c1-harbor-admin" ||
@@ -109,6 +109,10 @@ func TestRegistryProxyHelmOp(t *testing.T) {
 	}
 	if got := valueAt(t, values, "mirror", "project"); got != "mirror" {
 		t.Errorf("mirror.project = %v", got)
+	}
+	allowlist, ok := valueAt(t, values, "registry", "allowlist").([]string)
+	if !ok || len(allowlist) != 1 || allowlist[0] != "docker.io" {
+		t.Errorf("registry.allowlist = %v, want c.ProxyRegistries", valueAt(t, values, "registry", "allowlist"))
 	}
 	if got := valueAt(t, values, "proxy", "publicURL"); got != "https://proxy.example.com/proxy" {
 		t.Errorf("proxy.publicURL = %v", got)

@@ -1,6 +1,7 @@
 package registryproxy
 
 import (
+	"context"
 	"net/http"
 	"net/http/httptest"
 	"strings"
@@ -61,5 +62,35 @@ func TestWebhookResourceURLFallback(t *testing.T) {
 	}
 	if _, ok := manager.State("docker.io/library/busybox/sha256:def"); !ok {
 		t.Error("resource_url fallback job missing")
+	}
+}
+
+func TestWebhookWildcardMapsProvisionedProject(t *testing.T) {
+	fake := &fakeHarbor{}
+	server := httptest.NewServer(fake.handler())
+	defer server.Close()
+	provisioner := &Provisioner{
+		Harbor:         &HarborClient{BaseURL: server.URL},
+		MirrorProject:  "mirror",
+		WebhookAddress: "https://proxy.example.com/api/convert",
+		WebhookSecret:  "shared",
+	}
+	if err := provisioner.Ensure(context.Background(), "quay.io"); err != nil {
+		t.Fatalf("Ensure() error = %v", err)
+	}
+	cfg := testConfig(t)
+	cfg.Registry.Allowlist = []string{"*"}
+	manager := NewManager(nil)
+	webhook := &Webhook{Secret: "shared", Manager: manager, Config: cfg, Provisioner: provisioner}
+	body := `{"type":"PUSH_ARTIFACT","event_data":{"repository":{"repo_full_name":"quayio/org/image"},"resources":[{"digest":"sha256:def","tag":"v1"}]}}`
+	req := httptest.NewRequest(http.MethodPost, "/api/convert", strings.NewReader(body))
+	req.Header.Set("Authorization", "Bearer shared")
+	rec := httptest.NewRecorder()
+	webhook.ServeHTTP(rec, req)
+	if rec.Code != http.StatusAccepted {
+		t.Fatalf("webhook response = %d %q", rec.Code, rec.Body.String())
+	}
+	if _, ok := manager.State("quay.io/org/image/sha256:def"); !ok {
+		t.Error("wildcard project job missing")
 	}
 }

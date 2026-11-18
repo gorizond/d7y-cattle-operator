@@ -20,6 +20,16 @@ type HarborClient struct {
 	Username string
 	Password string
 	Client   *http.Client
+	// Credentials holds optional upstream registry credentials (access_key /
+	// access_secret). They are mounted from a Secret and never logged.
+	Credentials map[string]HarborCredential
+}
+
+// HarborCredential is a private upstream registry login for a Harbor registry
+// endpoint.
+type HarborCredential struct {
+	AccessKey    string `yaml:"access_key"`
+	AccessSecret string `yaml:"access_secret"`
 }
 
 type HarborRegistry struct {
@@ -105,9 +115,14 @@ func (h *HarborClient) EnsureRegistry(ctx context.Context, host string) (HarborR
 		}
 	}
 	spec := registrySpec(host)
-	status, err := h.do(ctx, http.MethodPost, "/api/v2.0/registries", map[string]any{
+	body := map[string]any{
 		"name": spec.Name, "type": spec.Type, "url": spec.URL, "insecure": false,
-	}, nil)
+	}
+	if credential, ok := h.Credentials[host]; ok && credential.AccessKey != "" {
+		body["access_key"] = credential.AccessKey
+		body["access_secret"] = credential.AccessSecret
+	}
+	status, err := h.do(ctx, http.MethodPost, "/api/v2.0/registries", body, nil)
 	if err == nil && (status == http.StatusCreated || status == http.StatusOK) {
 		return h.getRegistry(ctx, host)
 	}
@@ -311,8 +326,9 @@ type Provisioner struct {
 	WebhookAddress string
 	WebhookSecret  string
 
-	mu    sync.Mutex
-	cache map[string]bool
+	mu       sync.Mutex
+	cache    map[string]bool
+	projects map[string]string
 }
 
 func (p *Provisioner) Ensure(ctx context.Context, registry string) error {
@@ -330,7 +346,8 @@ func (p *Provisioner) Ensure(ctx context.Context, registry string) error {
 	if err != nil {
 		return err
 	}
-	if _, err := p.Harbor.EnsureProject(ctx, ProjectName(registry), endpoint.ID); err != nil {
+	project := ProjectName(registry)
+	if _, err := p.Harbor.EnsureProject(ctx, project, endpoint.ID); err != nil {
 		return err
 	}
 	if _, err := p.Harbor.EnsureProject(ctx, p.MirrorProject, 0); err != nil {
@@ -343,7 +360,23 @@ func (p *Provisioner) Ensure(ctx context.Context, registry string) error {
 	if p.cache == nil {
 		p.cache = map[string]bool{}
 	}
+	if p.projects == nil {
+		p.projects = map[string]string{}
+	}
 	p.cache[registry] = true
+	p.projects[project] = registry
 	p.mu.Unlock()
 	return nil
+}
+
+// RegistryForProject maps a Harbor source project back to its upstream
+// registry. The mapping is populated by Ensure, so the Harbor webhook can
+// resolve projects when the allowlist is "*".
+func (p *Provisioner) RegistryForProject(project string) string {
+	if p == nil {
+		return ""
+	}
+	p.mu.Lock()
+	defer p.mu.Unlock()
+	return p.projects[project]
 }

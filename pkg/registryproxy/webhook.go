@@ -27,9 +27,10 @@ type HarborEvent struct {
 // Webhook accepts Harbor PUSH_ARTIFACT events, authenticates the shared
 // secret, and enqueues a conversion/copy job without blocking Harbor.
 type Webhook struct {
-	Secret  string
-	Manager *Manager
-	Config  *Config
+	Secret      string
+	Manager     *Manager
+	Config      *Config
+	Provisioner *Provisioner
 }
 
 func (h *Webhook) ServeHTTP(w http.ResponseWriter, r *http.Request) {
@@ -144,11 +145,14 @@ func (h *Webhook) registryForProject(project string) string {
 		return ""
 	}
 	for _, registry := range h.Config.Registry.Allowlist {
+		if registry == "*" {
+			continue
+		}
 		if ProjectName(registry) == project {
 			return registry
 		}
 	}
-	return ""
+	return h.Provisioner.RegistryForProject(project)
 }
 
 func (h *Webhook) String() string {

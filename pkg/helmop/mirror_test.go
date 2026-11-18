@@ -6,26 +6,21 @@ import (
 	fleetv1alpha1 "github.com/rancher/fleet/pkg/apis/fleet.cattle.io/v1alpha1"
 )
 
-func TestMirrorHelmOpWithProxy(t *testing.T) {
+func TestMirrorHelmOpHasNoProxyValues(t *testing.T) {
 	c := testCluster()
 	c.ProxyEnabled = true
 	c.ProxyPublicURL = "https://proxy.example.com/proxy"
-	c.ProxyRegistries = []string{"docker.io"}
+	c.ProxyRegistries = []string{"docker.io", "registry.gitlab.com", "ghcr.io"}
 	op := Mirror(c)
 
-	if got := dependsOnNames(op); len(got) != 2 || got[0] != "c1-data" || got[1] != "c1-registry-proxy" {
-		t.Errorf("dependsOn = %v, want data+registry-proxy", got)
+	if got := dependsOnNames(op); len(got) != 1 || got[0] != "c1-data" {
+		t.Errorf("dependsOn = %v, want data only", got)
 	}
 	values := op.Spec.Helm.Values.Data
-	if got := valueAt(t, values, "proxy", "enabled"); got != true {
-		t.Errorf("proxy.enabled = %v", got)
-	}
-	if got := valueAt(t, values, "proxy", "url"); got != "https://proxy.example.com/proxy" {
-		t.Errorf("proxy.url = %v", got)
-	}
-	registries, ok := valueAt(t, values, "proxy", "registries").([]string)
-	if !ok || len(registries) != 1 || registries[0] != "docker.io" {
-		t.Errorf("proxy.registries = %v", registries)
+	for _, key := range []string{"proxy", "registries", "docker.io", "index.docker.io"} {
+		if containsKey(values, key) {
+			t.Errorf("mirror values contain %q; chart hosts files are static", key)
+		}
 	}
 }
 

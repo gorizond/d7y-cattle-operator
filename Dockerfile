@@ -20,7 +20,8 @@ COPY go.mod go.sum ./
 RUN go mod download
 COPY . .
 RUN CGO_ENABLED=0 go build -trimpath -ldflags="-s -w" -o /out/d7y-cattle-operator ./cmd/operator \
-    && CGO_ENABLED=0 go build -trimpath -ldflags="-s -w" -o /out/registry-proxy ./cmd/registry-proxy
+    && CGO_ENABLED=0 go build -trimpath -ldflags="-s -w" -o /out/registry-proxy ./cmd/registry-proxy \
+    && CGO_ENABLED=0 go build -trimpath -ldflags="-s -w" -o /out/admission-webhook ./cmd/admission-webhook
 
 # Test image: contains the toolchain, sources, and module cache.
 # Usage: docker run --rm d7y-cattle-operator:test go test ./...
@@ -33,6 +34,7 @@ RUN apk add --no-cache ca-certificates \
     && adduser -u 65532 -S -G nonroot -H nonroot
 COPY --from=build /out/d7y-cattle-operator /d7y-cattle-operator
 COPY --from=build /out/registry-proxy /registry-proxy
+COPY --from=build /out/admission-webhook /admission-webhook
 COPY --from=nydus /usr/local/bin/nydusify /usr/local/bin/nydusify
 COPY --from=nydus /usr/local/bin/nydus-image /usr/local/bin/nydus-image
 USER 65532:65532

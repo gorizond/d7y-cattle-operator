@@ -41,9 +41,9 @@ NYDUS_MIRROR_URL=https://proxy.example.test/docker.io   # optional; no fallback 
 
 `SMART_PROXY_URL` is optional. When present it is validated as an
 http(s) URL and kept for the in-cluster mirror bootstrap; new VMs never make
-the proxy mandatory (the script stays fail-open). The mirror chart points
-allowlisted registries at the external proxy domain, not at a per-node proxy. The in-cluster
-`containerd-mirror` DaemonSet applies the proxy `hosts.toml` after RKE2.
+the proxy mandatory (the script stays fail-open). The in-cluster
+`containerd-mirror` DaemonSet writes only `certs.d/_default/hosts.toml` ->
+dfdaemon after RKE2; dfdaemon 1.5.14 forwards `?ns=` to the proxy.
 
 `NYDUS_MIRROR_URL` is optional and must be the HTTPS base URL of the registry
 proxy mirror path, including the registry segment (for example
@@ -208,12 +208,32 @@ unavailable. The patch is amd64-only.
 
 The patched snapshotter reads containerd's `certs.d/<host>/hosts.toml` (RKE2
 path `/var/lib/rancher/rke2/agent/etc/containerd/certs.d`, then
-`/etc/containerd/certs.d`), so a `docker.io` CRI ref resolves through the same
-Dragonfly/Harbor mirror and `X-Dragonfly-Registry` header that containerd used
-for the pull. Without a certs.d override it keeps the previous `docker.io` ->
+`/etc/containerd/certs.d`). With the current seed architecture containerd has
+only `_default` -> dfdaemon; dfdaemon 1.5.14 infers the upstream registry from
+containerd's `?ns=` and the proxy receives the direct-ref path. Without a
+certs.d override it keeps the previous `docker.io` ->
 `registry-1.docker.io` behavior. No MITM proxy or local CA is installed. Index
 detection (`enable_index_detect`) is unchanged; the mirror is selected by the
 snapshotter before nydusd starts, not by a local proxy.
+
+### Registry auth for the nydus path
+
+`p2p-install.sh` writes only public mirror URLs and never writes registry
+credentials. The supported modes are:
+
+- **Network-only (default)**: the registry proxy is reachable from the node
+  network (NetworkPolicy/TLS) and requires no client auth. This is the
+  recommended mode for the proxy; no `/root/.docker/config.json` is needed.
+- **Node keychain**: if the proxy or Harbor requires auth, provision a
+  pull-only robot and place it in `/root/.docker/config.json` (mode `0600`).
+  The patched snapshotter/nydusd reads that keychain; do not add credentials
+  to `/etc/nydus` or to the bootstrap payload.
+- **Pod image pull**: pods whose images are rewritten to the proxy use a
+  namespace `imagePullSecret`/ServiceAccount with the pull-only credentials.
+  The snapshotter path is host-level and does not read pod secrets.
+
+Never print or commit robot secrets; the installer writes and the rendered
+chart contains only the public mirror URL.
 
 The other daemon binaries (`nydusd`, `nydus-image`, `nydus-overlayfs`) stay
 pinned in the static store at `NYDUS_VERSION` (`v0.16.0`). The updater prefers

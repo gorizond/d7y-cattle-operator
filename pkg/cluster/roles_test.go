@@ -57,6 +57,18 @@ func TestResolveRoles(t *testing.T) {
 			want:        Roles{Enabled: true, Proxy: true, HarborURL: "https://external.example.com"},
 		},
 		{
+			name:        "admission role is independent",
+			labels:      map[string]string{LabelEnabled: "true"},
+			annotations: map[string]string{AnnotationAdmission: "true"},
+			want:        Roles{Enabled: true, Admission: true},
+		},
+		{
+			name:        "all current toggles",
+			labels:      map[string]string{LabelEnabled: "true"},
+			annotations: map[string]string{AnnotationHarbor: "true", AnnotationHarborDomain: "harbor.example.com", AnnotationProxy: "true", AnnotationAdmission: "true", AnnotationSeed: "true"},
+			want:        Roles{Enabled: true, Harbor: true, HarborDomain: "harbor.example.com", Proxy: true, Admission: true, Seed: true},
+		},
+		{
 			name:   "both roles",
 			labels: map[string]string{LabelEnabled: "true"},
 			annotations: map[string]string{

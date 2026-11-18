@@ -34,13 +34,17 @@ spec:
           args:
             - |
               set -eu
-              # Steady state writes only the supported hosts files. Remove
-              # legacy registry dirs with the one-time cleanup migration.
-              mkdir -p /host-certs/_default /host-certs/docker.io /host-certs/index.docker.io
-              cp /config/_default /host-certs/_default/hosts.toml
-              cp /config/docker.io /host-certs/docker.io/hosts.toml
-              cp /config/index.docker.io /host-certs/index.docker.io/hosts.toml
-              exec sleep infinity
+              # _default covers every registry via dfdaemon; Docker Hub also
+              # has explicit aliases so containerd/dfdaemon keep the
+              # registry-1.docker.io upstream and Dragonfly header. Reconcile
+              # the ConfigMap copy periodically; no other registry files.
+              while true; do
+                mkdir -p /host-certs/_default /host-certs/docker.io /host-certs/index.docker.io
+                cp /config/_default /host-certs/_default/hosts.toml
+                cp /config/docker.io /host-certs/docker.io/hosts.toml
+                cp /config/index.docker.io /host-certs/index.docker.io/hosts.toml
+                sleep {{ .Values.reconcileSeconds | default 60 }}
+              done
           volumeMounts:
             - name: config
               mountPath: /config

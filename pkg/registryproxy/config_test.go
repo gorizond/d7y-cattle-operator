@@ -1,9 +1,11 @@
 package registryproxy
 
 import (
+	"fmt"
 	"os"
 	"path/filepath"
 	"testing"
+	"time"
 )
 
 const testConfigYAML = `
@@ -97,5 +99,79 @@ func TestConfigRejectsInvalid(t *testing.T) {
 				t.Fatal("Load() error = nil, want error")
 			}
 		})
+	}
+}
+
+func TestConfigSelfRegistry(t *testing.T) {
+	cfg := testConfig(t)
+	if !cfg.SelfRegistry("proxy.example.com") {
+		t.Error("SelfRegistry(proxy.example.com) = false")
+	}
+	if cfg.SelfRegistry("docker.io") {
+		t.Error("SelfRegistry(docker.io) = true")
+	}
+}
+
+func TestConfigBasicAuthAndUpstreamCredentials(t *testing.T) {
+	dir := t.TempDir()
+	password := fmt.Sprintf("test-password-%d", time.Now().UnixNano())
+	passwordFile := filepath.Join(dir, "password")
+	if err := os.WriteFile(passwordFile, []byte(password+"\n"), 0600); err != nil {
+		t.Fatal(err)
+	}
+	username := fmt.Sprintf("test-user-%d", time.Now().UnixNano())
+	accessKey := fmt.Sprintf("test-user-%d", time.Now().UnixNano())
+	accessSecret := fmt.Sprintf("test-secret-%d", time.Now().UnixNano())
+	credentialsFile := filepath.Join(dir, "credentials.yaml")
+	credentialsBody := fmt.Sprintf("registry.gitlab.com:\n  access_key: %s\n  access_secret: %s\n", accessKey, accessSecret)
+	if err := os.WriteFile(credentialsFile, []byte(credentialsBody), 0600); err != nil {
+		t.Fatal(err)
+	}
+	cfg, err := Load(writeConfig(t, testConfigYAML+`
+auth:
+  mode: basic
+  username: `+username+`
+  password_file: `+passwordFile+`
+upstream:
+  credentials_file: `+credentialsFile+`
+`))
+	if err != nil {
+		t.Fatalf("Load() error = %v", err)
+	}
+	gotPassword, err := cfg.AuthPassword()
+	if err != nil || gotPassword != password {
+		t.Errorf("AuthPassword() = %q, %v", gotPassword, err)
+	}
+	credentials, err := LoadUpstreamCredentials(cfg.Upstream.CredentialsFile)
+	if err != nil {
+		t.Fatalf("LoadUpstreamCredentials() error = %v", err)
+	}
+	if got := credentials["registry.gitlab.com"]; got.AccessKey != accessKey || got.AccessSecret != accessSecret {
+		t.Errorf("credentials = %+v", got)
+	}
+
+	if _, err := Load(writeConfig(t, testConfigYAML+"auth:\n  mode: token\n")); err == nil {
+		t.Error("invalid auth.mode was accepted")
+	}
+	if _, err := Load(writeConfig(t, testConfigYAML+"auth:\n  mode: basic\n  username: robot\n")); err == nil {
+		t.Error("basic auth without a password file was accepted")
+	}
+	if _, err := LoadUpstreamCredentials(filepath.Join(dir, "missing.yaml")); err == nil {
+		t.Error("missing credentials file was accepted")
+	}
+}
+
+func TestConfigAllowAnyRegistry(t *testing.T) {
+	cfg := testConfig(t)
+	cfg.Registry.Allowlist = []string{"*"}
+	for _, registry := range []string{"docker.io", "quay.io", "registry.example.org:5000"} {
+		if !cfg.Allowlisted(registry) {
+			t.Errorf("Allowlisted(%q) = false with *", registry)
+		}
+	}
+	for _, registry := range []string{"", "*"} {
+		if cfg.Allowlisted(registry) {
+			t.Errorf("Allowlisted(%q) = true with *", registry)
+		}
 	}
 }

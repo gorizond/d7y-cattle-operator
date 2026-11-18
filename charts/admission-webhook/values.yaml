@@ -1,0 +1,74 @@
+# HA webhook: the MutatingWebhookConfiguration defaults to failurePolicy=Fail,
+# so at least two replicas are expected.
+replicaCount: 2
+
+image:
+  # Same image as the operator: it contains /admission-webhook.
+  repository: ghcr.io/gorizond/d7y-cattle-operator
+  tag: ""
+  pullPolicy: IfNotPresent
+
+serviceAccount:
+  create: true
+  name: ""
+
+# Public proxy host. The operator sets it from its proxy.domain value; no
+# internal host is hardcoded. Images are rewritten to
+# <proxy.domain>/<registry>/<repository>:<tag>, preserving @sha256.
+proxy:
+  domain: ""
+
+# Credentials for pulling from the proxy. Either inject an existing
+# imagePullSecret/serviceAccountName (secret must exist in every target
+# namespace) or run the proxy in network-only mode (no injection).
+networkOnly: true
+inject:
+  imagePullSecret: ""
+  serviceAccountName: ""
+
+# TLS/CA. With an empty tls.secretName the chart generates a CA and a serving
+# certificate for the Service and reuses them across upgrades. Set
+# tls.secretName (and tls.caBundle) to use an external Secret instead.
+tls:
+  secretName: ""
+  caBundle: ""
+
+certDir: /etc/admission-webhook/tls
+
+failurePolicy: Fail
+timeoutSeconds: 5
+# Opt-in allowlist first: add matchExpressions/matchLabels here to restrict the
+# webhook to selected namespaces. kube-system, fleet-system, cattle-*,
+# kube-node-lease, and kube-public are always excluded (the handler also skips
+# cattle-* as a prefix).
+namespaceSelector:
+  matchExpressions:
+    - key: kubernetes.io/metadata.name
+      operator: NotIn
+      values:
+        - kube-system
+        - fleet-system
+        - kube-node-lease
+        - kube-public
+        - cattle-system
+        - cattle-monitoring-system
+        - cattle-fleet-system
+        - cattle-provisioning-capi-system
+
+service:
+  type: ClusterIP
+  port: 443
+  targetPort: 8443
+
+resources:
+  requests:
+    cpu: 50m
+    memory: 64Mi
+  limits:
+    cpu: 200m
+    memory: 128Mi
+
+nodeSelector: {}
+tolerations: []
+
+podAnnotations: {}

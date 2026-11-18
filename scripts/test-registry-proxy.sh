@@ -87,6 +87,7 @@ grep -q 'serviceAccountName:' "$tmp/proxy.yaml" || fail "proxy ServiceAccount is
 grep -q 'name: POD_NAMESPACE' "$tmp/proxy.yaml" || fail "proxy POD_NAMESPACE env is missing"
 grep -q 'optional: true' "$tmp/proxy.yaml" || fail "proxy robot/webhook Secrets must be optional"
 grep -q '/usr/local/bin/nydus-image' "$tmp/proxy.yaml" || fail "conversion nydus image path is missing"
+grep -q -- '- "*"' "$tmp/proxy.yaml" || fail "proxy allow-any allowlist is missing"
 
 if grep -q 'kind: PersistentVolumeClaim' "$tmp/proxy.yaml"; then
   fail "registry-proxy must not render a PVC"
@@ -95,10 +96,34 @@ if grep -q 'kind: DaemonSet' "$tmp/proxy.yaml"; then
   fail "registry-proxy must not render a DaemonSet"
 fi
 
-helm template c1-containerd-mirror "$root/charts/containerd-mirror" \
-  --set proxy.enabled=true --set proxy.url=https://proxy.example.com >"$tmp/mirror.yaml"
-grep -q 'X-Dragonfly-Registry = \["https://proxy.example.com/docker.io"\]' "$tmp/mirror.yaml" || \
-  fail "containerd-mirror does not point at the external proxy"
+helm template c1-containerd-mirror "$root/charts/containerd-mirror" >"$tmp/mirror.yaml"
+grep -q '^  _default: |' "$tmp/mirror.yaml" || fail "containerd-mirror _default hosts file is missing"
+grep -q '^  docker.io: |' "$tmp/mirror.yaml" || fail "containerd-mirror docker.io hosts file is missing"
+grep -q '^  index.docker.io: |' "$tmp/mirror.yaml" || fail "containerd-mirror index.docker.io hosts file is missing"
+
+_default_block="$(grep -A2 '^  _default: |' "$tmp/mirror.yaml")"
+echo "$_default_block" | grep -q 'server = "http://127.0.0.1:4001"' ||   fail "containerd-mirror _default does not point at dfdaemon"
+
+for key in docker.io index.docker.io; do
+  block="$(grep -A7 "^  ${key}: |" "$tmp/mirror.yaml")"
+  echo "$block" | grep -q 'server = "https://registry-1.docker.io"' ||     fail "containerd-mirror ${key} server is not registry-1.docker.io"
+  echo "$block" | grep -q '\[host."http://127.0.0.1:4001"\]' ||     fail "containerd-mirror ${key} dfdaemon host is missing"
+  echo "$block" | grep -q 'X-Dragonfly-Registry = \["https://registry-1.docker.io"\]' ||     fail "containerd-mirror ${key} header is not registry-1.docker.io"
+  echo "$block" | grep -q '\[host."https://registry-1.docker.io"\]' ||     fail "containerd-mirror ${key} registry-1 fallback is missing"
+done
+
+if [ "$(grep -cE '^  [A-Za-z0-9._-]+: \|$' "$tmp/mirror.yaml")" -ne 3 ]; then
+  fail "containerd-mirror must render exactly _default/docker.io/index.docker.io"
+fi
+if grep -qE '^  (registry\.gitlab\.com|ghcr\.io|quay\.io):' "$tmp/mirror.yaml"; then
+  fail "containerd-mirror must not write other per-registry files"
+fi
+grep -q 'mkdir -p /host-certs/_default /host-certs/docker.io /host-certs/index.docker.io' "$tmp/mirror.yaml" ||   fail "containerd-mirror DaemonSet dirs are incomplete"
+grep -q 'cp /config/docker.io /host-certs/docker.io/hosts.toml' "$tmp/mirror.yaml" ||   fail "containerd-mirror DaemonSet does not copy docker.io"
+grep -q 'cp /config/index.docker.io /host-certs/index.docker.io/hosts.toml' "$tmp/mirror.yaml" ||   fail "containerd-mirror DaemonSet does not copy index.docker.io"
+if grep -q 'rm -rf /host-certs/docker.io' "$tmp/mirror.yaml"; then
+  fail "containerd-mirror must not delete the Docker Hub aliases"
+fi
 if grep -q 'kind: Service' "$tmp/mirror.yaml" || grep -q 'kind: Deployment' "$tmp/mirror.yaml"; then
   fail "containerd-mirror must not render a proxy Service/Deployment"
 fi
