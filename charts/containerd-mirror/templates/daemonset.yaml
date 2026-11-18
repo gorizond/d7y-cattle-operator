@@ -34,15 +34,15 @@ spec:
           args:
             - |
               set -eu
-              # Only certs.d/_default is managed. dfdaemon 1.5.14 infers the
-              # upstream registry from containerd's ?ns=; per-registry files
-              # with X-Dragonfly-Registry are obsolete. Remove the two legacy
-              # files written by older chart versions and reconcile the
-              # ConfigMap copy periodically.
+              # _default covers every registry via dfdaemon; Docker Hub also
+              # has explicit aliases so containerd/dfdaemon keep the
+              # registry-1.docker.io upstream and Dragonfly header. Reconcile
+              # the ConfigMap copy periodically; no other registry files.
               while true; do
-                mkdir -p /host-certs/_default
+                mkdir -p /host-certs/_default /host-certs/docker.io /host-certs/index.docker.io
                 cp /config/_default /host-certs/_default/hosts.toml
-                rm -rf /host-certs/docker.io /host-certs/index.docker.io
+                cp /config/docker.io /host-certs/docker.io/hosts.toml
+                cp /config/index.docker.io /host-certs/index.docker.io/hosts.toml
                 sleep {{ .Values.reconcileSeconds | default 60 }}
               done
           volumeMounts:

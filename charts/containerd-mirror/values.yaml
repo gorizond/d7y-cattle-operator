@@ -5,9 +5,9 @@ image:
   tag: "1.36"
   pullPolicy: IfNotPresent
 
-# Local dfdaemon proxy port. The only hosts file is certs.d/_default/hosts.toml:
-# dfdaemon 1.5.14 infers the upstream registry from containerd's ?ns=. No
-# per-registry files or X-Dragonfly-Registry headers are written.
+# Local dfdaemon proxy port. certs.d/_default covers any registry via
+# dfdaemon; docker.io and index.docker.io keep explicit aliases pointing at
+# registry-1.docker.io. No proxy.registries or other per-registry files.
 port: 4001
 
 # Reconcile interval for copying the ConfigMap into the containerd certs.d

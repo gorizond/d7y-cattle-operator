@@ -19,7 +19,7 @@ func TestMirrorHelmOpHasNoProxyValues(t *testing.T) {
 	values := op.Spec.Helm.Values.Data
 	for _, key := range []string{"proxy", "registries", "docker.io", "index.docker.io"} {
 		if containsKey(values, key) {
-			t.Errorf("mirror values contain %q; the chart is _default-only", key)
+			t.Errorf("mirror values contain %q; chart hosts files are static", key)
 		}
 	}
 }

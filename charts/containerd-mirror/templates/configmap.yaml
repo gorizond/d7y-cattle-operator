@@ -11,3 +11,19 @@ data:
     server = "http://127.0.0.1:{{ .Values.port }}"
     [host."http://127.0.0.1:{{ .Values.port }}"]
       capabilities = ["pull", "resolve"]
+  docker.io: |
+    server = "https://registry-1.docker.io"
+    [host."http://127.0.0.1:{{ .Values.port }}"]
+      capabilities = ["pull", "resolve"]
+      [host."http://127.0.0.1:{{ .Values.port }}".header]
+        X-Dragonfly-Registry = ["https://registry-1.docker.io"]
+    [host."https://registry-1.docker.io"]
+      capabilities = ["pull", "resolve"]
+  index.docker.io: |
+    server = "https://registry-1.docker.io"
+    [host."http://127.0.0.1:{{ .Values.port }}"]
+      capabilities = ["pull", "resolve"]
+      [host."http://127.0.0.1:{{ .Values.port }}".header]
+        X-Dragonfly-Registry = ["https://registry-1.docker.io"]
+    [host."https://registry-1.docker.io"]
+      capabilities = ["pull", "resolve"]
