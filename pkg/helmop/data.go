@@ -45,7 +45,7 @@ func Data(c Cluster) *fleetv1alpha1.HelmOp {
 				// Always schedule blob pulls through the seed client: the live
 				// poligon-data client needed 500 rps and "always" to stop
 				// falling back to the origin.
-				"rules": map[string]any{"blobs/sha256.*": map[string]any{"schedulingPolicy": "always"}},
+				"rules": proxyRules(),
 			},
 			"metrics": map[string]any{"ip": "127.0.0.1", "server": map[string]any{"port": 4102}},
 			"health":  map[string]any{"ip": "127.0.0.1", "server": map[string]any{"port": 4103}},
@@ -79,7 +79,7 @@ func Data(c Cluster) *fleetv1alpha1.HelmOp {
 				// Always schedule blob pulls through the node client: the live
 				// poligon-data client needed 500 rps and "always" to stop
 				// falling back to the origin.
-				"rules": map[string]any{"blobs/sha256.*": map[string]any{"schedulingPolicy": "always"}},
+				"rules": proxyRules(),
 			},
 			"metrics": map[string]any{"ip": "127.0.0.1", "server": map[string]any{"port": 4002}},
 			"health":  map[string]any{"ip": "127.0.0.1", "server": map[string]any{"port": 4003}},
@@ -119,6 +119,15 @@ func Data(c Cluster) *fleetv1alpha1.HelmOp {
 	op := newHelmOp(DataName(c.Name), c, c.Chart, "data", values,
 		[]string{ControlName(c.Name), KeyDBName(c.Name), ExtrasName(c.Name)})
 	return withMTLS(op, c.MTLSSecretName)
+}
+
+// proxyRules must render as a YAML sequence: dfdaemon rejects a map form with
+// "proxy.rules: invalid type: map, expected a sequence".
+func proxyRules() []map[string]any {
+	return []map[string]any{
+		{"regex": "blobs/sha256.*", "schedulingPolicy": "always"},
+		{"regex": "manifests/sha256.*", "schedulingPolicy": "always"},
+	}
 }
 
 func uploadConfig(port int, tlsEnabled bool) map[string]any {
