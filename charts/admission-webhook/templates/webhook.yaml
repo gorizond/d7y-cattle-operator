@@ -1,0 +1,60 @@
+{{- $name := include "admission-webhook.tlsSecretName" . }}
+{{- $ca := genCA (printf "%s-ca" .Release.Name) 3650 }}
+{{- $dns := list $name (printf "%s.%s" $name .Release.Namespace) (printf "%s.%s.svc" $name .Release.Namespace) (printf "%s.%s.svc.cluster.local" $name .Release.Namespace) }}
+{{- $cert := genSignedCert (printf "%s.%s.svc" $name .Release.Namespace) (list "127.0.0.1") $dns 3650 $ca }}
+{{- $existing := lookup "v1" "Secret" .Release.Namespace $name }}
+{{- $caBundle := $ca.Cert }}
+{{- if and $existing $existing.data (index $existing.data "ca.crt") }}
+{{- $caBundle = index $existing.data "ca.crt" | b64dec }}
+{{- end }}
+{{- if .Values.tls.secretName }}
+{{- $caBundle = required "tls.caBundle is required when tls.secretName is set" .Values.tls.caBundle }}
+{{- end }}
+{{- if not .Values.tls.secretName }}
+apiVersion: v1
+kind: Secret
+metadata:
+  name: {{ $name }}
+  namespace: {{ .Release.Namespace }}
+  labels:
+    {{- include "admission-webhook.labels" . | nindent 4 }}
+type: kubernetes.io/tls
+data:
+  {{- if and $existing $existing.data (index $existing.data "tls.crt") (index $existing.data "tls.key") }}
+  ca.crt: {{ index $existing.data "ca.crt" }}
+  tls.crt: {{ index $existing.data "tls.crt" }}
+  tls.key: {{ index $existing.data "tls.key" }}
+  {{- else }}
+  ca.crt: {{ $ca.Cert | b64enc }}
+  tls.crt: {{ $cert.Cert | b64enc }}
+  tls.key: {{ $cert.Key | b64enc }}
+  {{- end }}
+---
+{{- end }}
+apiVersion: admissionregistration.k8s.io/v1
+kind: MutatingWebhookConfiguration
+metadata:
+  name: {{ .Release.Name }}
+  labels:
+    {{- include "admission-webhook.labels" . | nindent 4 }}
+webhooks:
+  - name: {{ printf "%s.pods.d7y.gorizond.io" .Release.Name }}
+    admissionReviewVersions: ["v1"]
+    sideEffects: None
+    failurePolicy: {{ .Values.failurePolicy }}
+    timeoutSeconds: {{ .Values.timeoutSeconds }}
+    rules:
+      - apiGroups: [""]
+        apiVersions: ["v1"]
+        operations: ["CREATE"]
+        resources: ["pods"]
+        scope: "Namespaced"
+    namespaceSelector:
+      {{- toYaml .Values.namespaceSelector | nindent 6 }}
+    clientConfig:
+      caBundle: {{ $caBundle | b64enc }}
+      service:
+        name: {{ .Release.Name }}
+        namespace: {{ .Release.Namespace }}
+        path: /mutate
+        port: {{ .Values.service.port }}

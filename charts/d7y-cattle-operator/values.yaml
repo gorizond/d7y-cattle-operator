@@ -94,6 +94,19 @@ registryProxy:
     name: registry-proxy
     version: 0.1.11
 
+# Opt-in admission webhook chart (p2p.dragonfly.io/admission). Independent of
+# Harbor/proxy/seed: it only needs proxy.domain and is never auto-installed.
+admission:
+  chart:
+    repo: https://gorizond.github.io/d7y-cattle-operator
+    name: admission-webhook
+    version: 0.1.0
+  # Optional credential injection for proxy pulls. With networkOnly=true (the
+  # default) no imagePullSecrets/serviceAccountName are injected.
+  networkOnly: true
+  imagePullSecret: ""
+  serviceAccountName: ""
+
 # External/existing Harbor and the public proxy endpoint. proxy.domain is the
 # operator-wide public proxy DNS name (no scheme); leave empty to disable the
 # proxy HelmOp even if a cluster has the proxy annotation.

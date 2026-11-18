@@ -30,9 +30,11 @@ helm-template:
 	helm template dragonfly-extras charts/dragonfly-extras --set ingress.enabled=true --set vpa.enabled=true --api-versions autoscaling.k8s.io/v1
 	helm template p2p-static charts/p2p-static
 	helm template registry-proxy charts/registry-proxy
+	helm template c1-admission-webhook charts/admission-webhook --set proxy.domain=proxy.example.com
 
 chart-test:
 	bash scripts/test-extras-ingress.sh
 	bash scripts/test-fork-chart-tls.sh
 	bash scripts/test-p2p-static.sh
 	bash scripts/test-registry-proxy.sh
+	bash scripts/test-admission-webhook.sh
