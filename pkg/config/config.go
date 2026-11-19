@@ -36,7 +36,7 @@ const (
 	DefaultHarborChartVersion            = "1.19.4"
 	DefaultRegistryProxyChartRepo        = "https://gorizond.github.io/d7y-cattle-operator"
 	DefaultRegistryProxyChartName        = "registry-proxy"
-	DefaultRegistryProxyChartVersion     = "0.1.22"
+	DefaultRegistryProxyChartVersion     = "0.1.23"
 	DefaultAdmissionChartRepo            = "https://gorizond.github.io/d7y-cattle-operator"
 	DefaultAdmissionChartName            = "admission-webhook"
 	DefaultAdmissionChartVersion         = "0.1.2"
@@ -62,59 +62,60 @@ var chartVersionPattern = regexp.MustCompile(`^v?[0-9]+\.[0-9]+\.[0-9]+(?:[-+][0
 
 // Config is the operator configuration derived from flags and environment variables.
 type Config struct {
-	ManagerGRPCDomain           string
-	ManagerGRPCPort             int
-	ManagerAPIURL               string
-	P2PDomain                   string
-	ClusterIDFallback           string
-	NginxStaticURL              string
-	NydusMirrorURL              string
-	OperatorImageRepository     string
-	OperatorImageTag            string
-	MTLSSecretName              string
-	ManagerAPICredentialsSecret string
-	DragonflyChartRepo          string
-	DragonflyChartName          string
-	DragonflyChartVersion       string
-	ExtrasChartRepo             string
-	ExtrasChartName             string
-	ExtrasChartVersion          string
-	MirrorChartRepo             string
-	MirrorChartName             string
-	MirrorChartVersion          string
-	HarborChartRepo             string
-	HarborChartName             string
-	HarborChartVersion          string
-	RegistryProxyChartRepo      string
-	RegistryProxyChartName      string
-	RegistryProxyChartVersion   string
-	AdmissionChartRepo          string
-	AdmissionChartName          string
-	AdmissionChartVersion       string
-	AdmissionImagePullSecret    string
-	AdmissionServiceAccount     string
-	AdmissionNetworkOnly        bool
-	ProxyDomain                 string
-	ProxyHarborURL              string
-	ProxyHarborAdminSecret      string
-	ProxyBasicAuthEnabled       bool
-	ProxyBasicAuthUsername      string
-	ProxyRegistries             string
-	ProxyBasePath               string
-	ProxyTLSSecret              string
-	ProxyHostAliases            []helmop.HostAlias
-	ExtrasIngressController     string
-	ExtrasIngressClassName      string
-	ExtrasIngressGRPCEnabled    bool
-	ExtrasIngressRESTEnabled    bool
-	ExtrasIngressTLSSecret      string
-	ExtrasTraefikTransport      bool
-	Namespace                   string
-	WebhookPort                 int
-	WebhookCertDir              string
-	WebhookServiceName          string
-	LeaderElect                 bool
-	Kubeconfig                  string
+	ManagerGRPCDomain              string
+	ManagerGRPCPort                int
+	ManagerAPIURL                  string
+	P2PDomain                      string
+	ClusterIDFallback              string
+	NginxStaticURL                 string
+	NydusMirrorURL                 string
+	OperatorImageRepository        string
+	OperatorImageTag               string
+	MTLSSecretName                 string
+	ManagerAPICredentialsSecret    string
+	DragonflyChartRepo             string
+	DragonflyChartName             string
+	DragonflyChartVersion          string
+	ExtrasChartRepo                string
+	ExtrasChartName                string
+	ExtrasChartVersion             string
+	MirrorChartRepo                string
+	MirrorChartName                string
+	MirrorChartVersion             string
+	HarborChartRepo                string
+	HarborChartName                string
+	HarborChartVersion             string
+	RegistryProxyChartRepo         string
+	RegistryProxyChartName         string
+	RegistryProxyChartVersion      string
+	AdmissionChartRepo             string
+	AdmissionChartName             string
+	AdmissionChartVersion          string
+	AdmissionImagePullSecret       string
+	AdmissionServiceAccount        string
+	AdmissionNetworkOnly           bool
+	ProxyDomain                    string
+	ProxyHarborURL                 string
+	ProxyHarborAdminSecret         string
+	ProxyBasicAuthEnabled          bool
+	ProxyBasicAuthUsername         string
+	ProxyUpstreamCredentialsSecret string
+	ProxyRegistries                string
+	ProxyBasePath                  string
+	ProxyTLSSecret                 string
+	ProxyHostAliases               []helmop.HostAlias
+	ExtrasIngressController        string
+	ExtrasIngressClassName         string
+	ExtrasIngressGRPCEnabled       bool
+	ExtrasIngressRESTEnabled       bool
+	ExtrasIngressTLSSecret         string
+	ExtrasTraefikTransport         bool
+	Namespace                      string
+	WebhookPort                    int
+	WebhookCertDir                 string
+	WebhookServiceName             string
+	LeaderElect                    bool
+	Kubeconfig                     string
 }
 
 // Load parses args (without the program name) and validates the result.
@@ -192,6 +193,7 @@ func Load(args []string) (*Config, error) {
 	fs.StringVar(&cfg.ProxyTLSSecret, "proxy-tls-secret", envOr("PROXY_TLS_SECRET", ""), "TLS Secret name for the proxy ingress (empty uses the ingress controller default)")
 	fs.BoolVar(&cfg.ProxyBasicAuthEnabled, "proxy-basic-auth-enabled", defaultProxyBasicAuthEnabled, "enable client Basic auth on registry proxy /v2 reads")
 	fs.StringVar(&cfg.ProxyBasicAuthUsername, "proxy-basic-auth-username", envOr("PROXY_BASIC_AUTH_USERNAME", DefaultProxyBasicAuthUsername), "registry proxy client Basic auth username")
+	fs.StringVar(&cfg.ProxyUpstreamCredentialsSecret, "proxy-upstream-credentials-secret", envOr("PROXY_UPSTREAM_CREDENTIALS_SECRET", ""), "Secret in the operator namespace with a credentials.yaml key for private upstream registries")
 	fs.StringVar(&proxyHostAliases, "proxy-host-aliases", proxyHostAliases, "JSON list of {ip, hostnames} entries added to the registry proxy pod /etc/hosts")
 	fs.StringVar(&cfg.ExtrasIngressController, "extras-ingress-controller", envOr("EXTRAS_INGRESS_CONTROLLER", DefaultExtrasIngressController), "extras Ingress controller: nginx or traefik")
 	fs.StringVar(&cfg.ExtrasIngressClassName, "extras-ingress-class-name", envOr("EXTRAS_INGRESS_CLASS_NAME", DefaultExtrasIngressClassName), "extras Ingress class name (empty uses the cluster default)")
@@ -412,6 +414,11 @@ func (c *Config) Validate() error {
 	}
 	if c.ProxyBasicAuthEnabled && strings.TrimSpace(c.ProxyBasicAuthUsername) == "" {
 		add("--proxy-basic-auth-username is required when --proxy-basic-auth-enabled is true")
+	}
+	if c.ProxyUpstreamCredentialsSecret != "" {
+		if msgs := validation.IsDNS1123Subdomain(c.ProxyUpstreamCredentialsSecret); len(msgs) > 0 {
+			add("--proxy-upstream-credentials-secret: %s", strings.Join(msgs, "; "))
+		}
 	}
 	switch c.ExtrasIngressController {
 	case "nginx", "traefik":

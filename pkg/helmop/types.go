@@ -360,6 +360,9 @@ type Cluster struct {
 	// ProxyBasicAuthEnabled enables client Basic auth on /v2 reads.
 	ProxyBasicAuthEnabled  bool
 	ProxyBasicAuthUsername string
+	// ProxyUpstreamCredentialsSecret is the Secret name with credentials.yaml
+	// for private upstream registries.
+	ProxyUpstreamCredentialsSecret string
 	// ProxyRobotSecretRevision rolls proxy pods when robot credentials rotate.
 	ProxyRobotSecretRevision string
 	// AdmissionEnabled is the independent p2p.dragonfly.io/admission role.

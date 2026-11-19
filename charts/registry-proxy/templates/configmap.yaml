@@ -7,6 +7,10 @@ metadata:
     {{- include "registry-proxy.labels" . | nindent 4 }}
 data:
   config.yaml: |
+    {{- $upstreamFile := "" -}}
+    {{- if .Values.upstream.credentialsSecret -}}
+    {{- $upstreamFile = .Values.upstream.credentialsFile | default "/etc/registry-proxy/secrets/upstream/credentials.yaml" -}}
+    {{- end }}
     harbor:
       url: {{ .Values.harbor.url | quote }}
       admin_secret: {{ .Values.harbor.adminSecret | quote }}
@@ -29,6 +33,10 @@ data:
     webhook:
       secret_name: {{ .Values.webhook.secretName | quote }}
       address: {{ .Values.webhook.address | quote }}
+{{- if $upstreamFile }}
+    upstream:
+      credentials_file: {{ $upstreamFile | quote }}
+{{- end }}
     conversion:
       platform: {{ .Values.conversion.platform | quote }}
       nydusify: {{ .Values.conversion.nydusify | quote }}

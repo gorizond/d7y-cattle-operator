@@ -29,7 +29,7 @@ func RegistryProxy(c Cluster) *fleetv1alpha1.HelmOp {
 	// no dependsOn on it. Use harbor-url/proxy.domain for external endpoints.
 	op := newHelmOp(RegistryProxyName(c.Name), c, c.RegistryProxyChart, "registry-proxy", values, nil)
 	op.Spec.DownstreamResources = registryProxyDownstreamResources(
-		c.HarborAdminSecret, c.ProxyWebhookSecretName, c.ProxyRobotSecretName, "")
+		c.HarborAdminSecret, c.ProxyWebhookSecretName, c.ProxyRobotSecretName, "", "")
 	return op
 }
 
@@ -45,16 +45,17 @@ func SharedRegistryProxy(c Cluster) *fleetv1alpha1.HelmOp {
 		harborURL = c.HarborURL
 	}
 	values := registryProxyValues(c, registryProxyOptions{
-		fullnameOverride:  SharedClusterNameTemplate,
-		tlsSecret:         SharedProxyTLSSecretTemplate,
-		harborAdminSecret: SharedHarborAdminSecretName(),
-		robotSecret:       SharedRegistryProxyRobotSecretName(),
-		webhookSecret:     SharedRegistryProxyWebhookSecretName(),
-		harborURL:         harborURL,
-		webhookAddress:    SharedProxyWebhookAddressTemplate,
-		hostAliases:       sharedProxyHostAliasesTemplate(c.ProxyHostAliases),
-		basicAuthEnabled:  c.ProxyBasicAuthEnabled,
-		basicAuthUsername: c.ProxyBasicAuthUsername,
+		fullnameOverride:          SharedClusterNameTemplate,
+		tlsSecret:                 SharedProxyTLSSecretTemplate,
+		harborAdminSecret:         SharedHarborAdminSecretName(),
+		robotSecret:               SharedRegistryProxyRobotSecretName(),
+		webhookSecret:             SharedRegistryProxyWebhookSecretName(),
+		harborURL:                 harborURL,
+		webhookAddress:            SharedProxyWebhookAddressTemplate,
+		hostAliases:               sharedProxyHostAliasesTemplate(c.ProxyHostAliases),
+		basicAuthEnabled:          c.ProxyBasicAuthEnabled,
+		basicAuthUsername:         c.ProxyBasicAuthUsername,
+		upstreamCredentialsSecret: c.ProxyUpstreamCredentialsSecret,
 	})
 	basicAuthSecret := ""
 	if c.ProxyBasicAuthEnabled {
@@ -63,11 +64,12 @@ func SharedRegistryProxy(c Cluster) *fleetv1alpha1.HelmOp {
 	op := newSharedHelmOp(SharedRegistryProxyName(), TargetNamespace, c, c.RegistryProxyChart,
 		"registry-proxy", values, nil, ProxySelector())
 	op.Spec.DownstreamResources = registryProxyDownstreamResources(
-		SharedHarborAdminSecretName(), SharedRegistryProxyWebhookSecretName(), SharedRegistryProxyRobotSecretName(), basicAuthSecret)
+		SharedHarborAdminSecretName(), SharedRegistryProxyWebhookSecretName(), SharedRegistryProxyRobotSecretName(),
+		basicAuthSecret, c.ProxyUpstreamCredentialsSecret)
 	return op
 }
 
-func registryProxyDownstreamResources(harborAdmin, webhook, robot, basicAuth string) []fleetv1alpha1.DownstreamResource {
+func registryProxyDownstreamResources(harborAdmin, webhook, robot, basicAuth, upstream string) []fleetv1alpha1.DownstreamResource {
 	resources := []fleetv1alpha1.DownstreamResource{
 		{Kind: "Secret", Name: harborAdmin},
 		{Kind: "Secret", Name: webhook},
@@ -75,6 +77,9 @@ func registryProxyDownstreamResources(harborAdmin, webhook, robot, basicAuth str
 	}
 	if basicAuth != "" {
 		resources = append(resources, fleetv1alpha1.DownstreamResource{Kind: "Secret", Name: basicAuth})
+	}
+	if upstream != "" {
+		resources = append(resources, fleetv1alpha1.DownstreamResource{Kind: "Secret", Name: upstream})
 	}
 	return resources
 }
@@ -149,16 +154,17 @@ func hostAliasesYAML(aliases []HostAlias) string {
 }
 
 type registryProxyOptions struct {
-	fullnameOverride  string
-	tlsSecret         string
-	harborAdminSecret string
-	robotSecret       string
-	webhookSecret     string
-	harborURL         string
-	webhookAddress    string
-	hostAliases       any
-	basicAuthEnabled  bool
-	basicAuthUsername string
+	fullnameOverride          string
+	tlsSecret                 string
+	harborAdminSecret         string
+	robotSecret               string
+	webhookSecret             string
+	harborURL                 string
+	webhookAddress            string
+	hostAliases               any
+	basicAuthEnabled          bool
+	basicAuthUsername         string
+	upstreamCredentialsSecret string
 }
 
 func registryProxyValues(c Cluster, opts registryProxyOptions) map[string]any {
@@ -218,6 +224,12 @@ func registryProxyValues(c Cluster, opts registryProxyOptions) map[string]any {
 		auth["mode"] = "basic"
 		auth["username"] = opts.basicAuthUsername
 		auth["passwordSecret"] = SharedRegistryProxyBasicAuthSecretName()
+	}
+	if opts.upstreamCredentialsSecret != "" {
+		values["upstream"] = map[string]any{
+			"credentialsSecret": opts.upstreamCredentialsSecret,
+			"credentialsFile":   "/etc/registry-proxy/secrets/upstream/credentials.yaml",
+		}
 	}
 	if c.ProxyRobotSecretRevision != "" {
 		values["podAnnotations"] = map[string]any{

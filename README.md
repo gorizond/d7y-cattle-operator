@@ -729,14 +729,30 @@ the per-cluster `<cluster>-registry-proxy` name.
 `SMART_PROXY_URL` in the bootstrap payload is optional and fail-open.
 
 Client auth is optional: when `auth.mode` is `basic` the proxy checks
-`Authorization: Basic` on `/v2` reads using `auth.username` and a password
-mounted at `auth.password_file` (a Secret); health probes stay open and
-`/api/convert` keeps its Bearer webhook secret. Empty mode means network-only
+`Authorization: Basic` on every registry API read, in both `/v2` and
+`/<registry>/v2` forms, using `auth.username` and a password mounted at
+`auth.password_file` (a Secret); health probes stay open and `/api/convert`
+keeps its Bearer webhook secret. Empty mode means network-only
 (NetworkPolicy/TLS): no credentials are required from dfdaemon or containerd.
-Private upstream registries use an optional Secret-mounted
-`upstream.credentials_file` mapping registry host to `access_key` /
-`access_secret`; the proxy passes them to Harbor when it creates the registry
-endpoint. Credentials are never written to the ConfigMap or logs.
+Private upstream registries are optional and disabled by default. Set
+`PROXY_UPSTREAM_CREDENTIALS_SECRET` to a Secret in the operator namespace with a
+`credentials.yaml` key:
+
+```yaml
+registry.gitlab.com:
+  access_key: <user>
+  access_secret: <token>
+```
+
+The file is keyed by exact normalized registry host. A path-prefix key such as
+`registry.gitlab.com/group/` does not match, and per-prefix credentials are not
+supported by the current lookup. The token must grant `read_registry` on the
+repositories served through the proxy. The operator replicates the Secret to
+the HelmOp namespace and passes it as `upstream.credentialsSecret`; the chart
+mounts it read-only at
+`/etc/registry-proxy/secrets/upstream/credentials.yaml` and sets
+`upstream.credentials_file`. Credentials are never written to the ConfigMap or
+logs.
 
 The proxy's `harbor.url` must be HTTPS; nydusify converts through the Harbor
 registry and the proxy does not enable plain-HTTP conversion.
