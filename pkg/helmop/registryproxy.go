@@ -77,6 +77,15 @@ func RegistryProxy(c Cluster) *fleetv1alpha1.HelmOp {
 			"p2p.dragonfly.io/robot-secret-revision": c.ProxyRobotSecretRevision,
 		}
 	}
+	// Run the release's image instead of the chart's default tag: the
+	// operator image contains /registry-proxy, so the proxy stays in lockstep
+	// with the operator across upgrades.
+	if c.OperatorImageRepository != "" && c.OperatorImageTag != "" {
+		values["image"] = map[string]any{
+			"repository": c.OperatorImageRepository,
+			"tag":        c.OperatorImageTag,
+		}
+	}
 	if strings.TrimSpace(c.ProxyPublicURL) == "" {
 		values["ingress"].(map[string]any)["enabled"] = false
 	}

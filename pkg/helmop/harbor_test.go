@@ -187,3 +187,23 @@ func TestRegistryProxyEmptyBasePathUsesRoot(t *testing.T) {
 		t.Errorf("ingress.tlsSecret = %v", got)
 	}
 }
+
+func TestRegistryProxyImageUsesOperatorImage(t *testing.T) {
+	c := testCluster()
+	c.OperatorImageRepository = "ghcr.io/gorizond/d7y-cattle-operator"
+	c.OperatorImageTag = "v0.1.45"
+	values := RegistryProxy(c).Spec.Helm.Values.Data
+	if got := valueAt(t, values, "image", "repository"); got != "ghcr.io/gorizond/d7y-cattle-operator" {
+		t.Errorf("image.repository = %v", got)
+	}
+	if got := valueAt(t, values, "image", "tag"); got != "v0.1.45" {
+		t.Errorf("image.tag = %v", got)
+	}
+}
+
+func TestRegistryProxyImageKeepsChartDefaultWithoutOperatorImage(t *testing.T) {
+	c := testCluster()
+	if _, ok := RegistryProxy(c).Spec.Helm.Values.Data["image"]; ok {
+		t.Error("registry proxy values contain an image override without an operator image")
+	}
+}
