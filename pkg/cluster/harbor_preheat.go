@@ -89,12 +89,14 @@ func (c *Controller) ensureHarborPreheatPAT() (string, error) {
 	name := harborPreheatPATSecretName
 	namespace := c.opts.OperatorNamespace
 	secret, err := c.secrets.Get(namespace, name, metav1.GetOptions{})
-	if err == nil {
-		if token := strings.TrimSpace(string(secret.Data[harborPreheatPATSecretKey])); token != "" {
-			return token, nil
-		}
-	} else if !apierrors.IsNotFound(err) {
+	if apierrors.IsNotFound(err) {
+		// Wrangler may return a non-nil zero-value Secret together with
+		// NotFound; a later Update would fail with an empty resource name.
+		secret = nil
+	} else if err != nil {
 		return "", fmt.Errorf("read Harbor preheat PAT Secret %s/%s: %w", namespace, name, err)
+	} else if token := strings.TrimSpace(string(secret.Data[harborPreheatPATSecretKey])); token != "" {
+		return token, nil
 	}
 
 	credentials, err := c.secrets.Get(namespace, c.opts.ManagerAPICredentialsSecret, metav1.GetOptions{})
