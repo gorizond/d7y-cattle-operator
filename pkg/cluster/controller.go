@@ -553,9 +553,11 @@ func schedulerHost(domain, clusterID string) string {
 // ensureMTLSCertificate creates or updates the operator P2P Secret from the
 // scheduler host resolved at reconcile time. Seed clusters own the full SAN set:
 // resolved public IPs, the per-cluster scheduler DNS names, and manager DNS. A
-// DNS failure leaves the existing certificate untouched and returns an error so
-// the reconcile is retried. Manager-only clusters only bootstrap a missing
-// Secret and never rewrite an existing one (a seed reconcile owns the SAN set).
+// DNS failure is not fatal: existing IP SANs are preserved and the reconcile
+// continues with an empty public IP so the shared HelmOps (including the
+// external-dns record) can be applied. A later reconcile adds the resolved IP
+// and rotates once. Manager-only clusters only bootstrap a missing Secret and
+// never rewrite an existing one (a seed reconcile owns the SAN set).
 func (c *Controller) ensureMTLSCertificate(cluster *provv1.Cluster, roles Roles) (string, error) {
 	if !roles.Manager && !roles.Seed {
 		return "", nil
@@ -589,17 +591,17 @@ func (c *Controller) ensureMTLSCertificate(cluster *provv1.Cluster, roles Roles)
 
 	ctx, cancel := context.WithTimeout(c.ctx, 10*time.Second)
 	defer cancel()
+	resolvedIPs := []string(nil)
 	resolved, err := c.resolver().LookupHost(ctx, host)
 	if err != nil {
 		msg := fmt.Sprintf("resolve scheduler host %s: %v", host, err)
 		c.event(cluster, corev1.EventTypeWarning, "SchedulerDNSResolutionFailed", msg)
-		return "", errors.New(msg)
-	}
-	resolvedIPs := validPublicIPs(resolved)
-	if len(resolvedIPs) == 0 {
-		msg := fmt.Sprintf("scheduler host %s resolved to no IP addresses", host)
-		c.event(cluster, corev1.EventTypeWarning, "SchedulerDNSResolutionFailed", msg)
-		return "", errors.New(msg)
+	} else {
+		resolvedIPs = validPublicIPs(resolved)
+		if len(resolvedIPs) == 0 {
+			msg := fmt.Sprintf("scheduler host %s resolved to no IP addresses", host)
+			c.event(cluster, corev1.EventTypeWarning, "SchedulerDNSResolutionFailed", msg)
+		}
 	}
 	publicIPs := resolvedIPs
 	if getErr == nil {

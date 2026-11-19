@@ -43,8 +43,10 @@ scheduler:
   # Both are required when enabled; no domain is hardcoded in this chart.
   clusterID: ""
   domain: ""
-  # Public Traefik LB IP. The alias above must resolve to it; the P2P leaf
-  # certificate carries this IP SAN, not the hostname.
+  # Public Traefik LB IP as resolved by the operator (the advertiseIP input).
+  # The chart does not pin it as an external-dns target: external-dns derives
+  # the target from the Gateway/Ingress/Service, so the alias follows the
+  # cluster's own LB.
   publicIP: ""
   # HostSNI matcher for the TCP router. The catch-all '*' also covers clients
   # that dial the public IP and send no SNI. Set an explicit host or IP when

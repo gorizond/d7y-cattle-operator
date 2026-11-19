@@ -182,7 +182,7 @@ func TestForkChartDefaults(t *testing.T) {
 	if DefaultDragonflyChartVersion != "1.10.1-patch.2" {
 		t.Errorf("DefaultDragonflyChartVersion = %q", DefaultDragonflyChartVersion)
 	}
-	if DefaultExtrasChartVersion != "0.1.9" {
+	if DefaultExtrasChartVersion != "0.1.10" {
 		t.Errorf("DefaultExtrasChartVersion = %q", DefaultExtrasChartVersion)
 	}
 	if DefaultMirrorChartVersion != "0.1.0" {

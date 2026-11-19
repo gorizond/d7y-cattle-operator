@@ -11,6 +11,7 @@ import (
 	corev1 "k8s.io/api/core/v1"
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
 
+	"github.com/gorizond/d7y-cattle-operator/pkg/helmop"
 	"github.com/gorizond/d7y-cattle-operator/pkg/pki"
 )
 
@@ -124,8 +125,8 @@ func TestEnsureMTLSCertificateDNSFailureKeepsCertificate(t *testing.T) {
 
 	resolver := controller.opts.Resolver.(*fakeResolver)
 	resolver.err = errors.New("dns unavailable")
-	if _, err := controller.reconcile("", cluster); err == nil {
-		t.Fatal("reconcile() error = nil, want DNS failure")
+	if _, err := controller.reconcile("", cluster); err != nil {
+		t.Fatalf("reconcile() error = %v, want DNS failure tolerated", err)
 	}
 	if got := certPEM(t, controller); string(got) != string(before) {
 		t.Error("certificate changed after DNS failure")
@@ -145,14 +146,73 @@ func TestEnsureMTLSCertificateEmptyResolutionKeepsCertificate(t *testing.T) {
 
 	resolver := controller.opts.Resolver.(*fakeResolver)
 	resolver.ips = nil
-	if _, err := controller.reconcile("", cluster); err == nil {
-		t.Fatal("reconcile() error = nil, want empty-resolution failure")
+	if _, err := controller.reconcile("", cluster); err != nil {
+		t.Fatalf("reconcile() error = %v, want empty resolution tolerated", err)
 	}
 	if got := certPEM(t, controller); string(got) != string(before) {
 		t.Error("certificate changed after an empty DNS answer")
 	}
 	if !hasEventReason(events.events, "SchedulerDNSResolutionFailed") {
 		t.Errorf("events = %+v, want SchedulerDNSResolutionFailed", events.events)
+	}
+}
+
+func TestEnsureMTLSCertificateDNSFailureBootstrapsAndAppliesHelmOps(t *testing.T) {
+	controller, store, events := newTestController(t)
+	delete(controller.secrets.(*fakeSecretStore).secrets, "dragonfly-system/dragonfly-p2p-mtls")
+	resolver := controller.opts.Resolver.(*fakeResolver)
+	resolver.err = errors.New("dns unavailable")
+	cluster := testSeedCluster("42")
+	clusterStore := controller.clusters.(*fakeClusterStore)
+	clusterStore.set(cluster)
+
+	if _, err := controller.reconcile("", cluster); err != nil {
+		t.Fatalf("reconcile() error = %v, want DNS failure tolerated", err)
+	}
+	if !hasEventReason(events.events, "SchedulerDNSResolutionFailed") {
+		t.Errorf("events = %+v, want SchedulerDNSResolutionFailed", events.events)
+	}
+	if !store.has("fleet-default/" + helmop.SharedExtrasName()) {
+		t.Error("shared extras HelmOp was not applied after a DNS failure")
+	}
+
+	leaf := firstCertificate(t, certPEM(t, controller))
+	if !containsString(leaf.DNSNames, "d7y-scheduler.c-m-test.example.com") {
+		t.Errorf("leaf DNS SANs = %v, want the scheduler host", leaf.DNSNames)
+	}
+	if len(leaf.IPAddresses) != 2 || !certHasIP(leaf.IPAddresses, "127.0.0.1") || !certHasIP(leaf.IPAddresses, "::1") {
+		t.Errorf("leaf IP SANs = %v, want only loopbacks before the alias resolves", leaf.IPAddresses)
+	}
+	if certHasIP(leaf.IPAddresses, "203.0.113.10") {
+		t.Error("leaf contains a resolved public IP before the alias resolves")
+	}
+	before := certPEM(t, controller)
+
+	resolver.err = nil
+	resolver.ips = []string{"203.0.113.10"}
+	if _, err := controller.reconcile("", cluster); err != nil {
+		t.Fatalf("resolved reconcile() error = %v", err)
+	}
+	if got := clusterStore.annotation(helmop.AnnotationSchedulerPublicIP); got != "203.0.113.10" {
+		t.Errorf("scheduler public IP annotation = %q, want the resolved address", got)
+	}
+	rotated := certPEM(t, controller)
+	if bytes.Equal(rotated, before) {
+		t.Fatal("certificate did not rotate after the alias started resolving")
+	}
+	leaf = firstCertificate(t, rotated)
+	if !certHasIP(leaf.IPAddresses, "203.0.113.10") {
+		t.Errorf("leaf IP SANs = %v, want the resolved address", leaf.IPAddresses)
+	}
+	if !containsString(leaf.DNSNames, "d7y-scheduler.c-m-test.example.com") {
+		t.Errorf("leaf DNS SANs = %v, want the scheduler host", leaf.DNSNames)
+	}
+
+	if _, err := controller.reconcile("", cluster); err != nil {
+		t.Fatalf("stable reconcile() error = %v", err)
+	}
+	if got := certPEM(t, controller); !bytes.Equal(got, rotated) {
+		t.Error("certificate rotated without a SAN change")
 	}
 }
 
