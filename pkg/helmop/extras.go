@@ -45,6 +45,38 @@ type ExtrasOptions struct {
 // VerticalPodAutoscaler objects are rendered by the chart; the operator only
 // creates this HelmOp and needs no Ingress/VPA RBAC.
 func Extras(c Cluster, opts ExtrasOptions) *fleetv1alpha1.HelmOp {
+	names := ClusterNames(c.Name)
+	values := extrasValues(c, opts, names)
+
+	var dependsOn []string
+	if opts.IngressEnabled {
+		dependsOn = []string{names.Manager}
+	}
+	return newHelmOp(ExtrasName(c.Name), c, c.ExtrasChart, "extras", values, dependsOn)
+}
+
+// SharedExtras returns the shared dragonfly-extras HelmOp. It targets seed
+// Clusters: the public scheduler front, its DNS alias and the VPA target names
+// are per-target Fleet templates. The manager Ingress is enabled unconditionally
+// because Fleet cannot template booleans; seed Clusters that only consume a
+// remote manager render an Ingress with no local backend.
+func SharedExtras(c Cluster, opts ExtrasOptions) *fleetv1alpha1.HelmOp {
+	c = sharedCluster(c)
+	names := SharedNames()
+	opts.IngressEnabled = true
+	opts.Manager = true
+	opts.Seed = true
+	opts.SchedulerPublicEnabled = true
+	opts.SchedulerPublicIP = SharedSchedulerPublicIPTemplate
+	opts.SchedulerDomain = c.P2PDomain
+	opts.SchedulerClusterID = SharedSchedulerClusterIDTemplate
+	opts.SchedulerService = names.ControlScheduler
+	opts.SchedulerPort = SchedulerPort
+	return newSharedHelmOp(SharedExtrasName(), TargetNamespace, c, c.ExtrasChart, "extras",
+		extrasValues(c, opts, names), nil, SharedSelector())
+}
+
+func extrasValues(c Cluster, opts ExtrasOptions, names Names) map[string]any {
 	controller := opts.IngressController
 	if controller == "" {
 		controller = "nginx"
@@ -57,7 +89,7 @@ func Extras(c Cluster, opts ExtrasOptions) *fleetv1alpha1.HelmOp {
 			"grpc": map[string]any{
 				"enabled": opts.GRPCEnabled,
 				"host":    c.ManagerGRPCDomain,
-				"service": ManagerServiceName(c.Name),
+				"service": names.Manager,
 				"port":    ManagerGRPCPort,
 				// nginx-only P2P Secret for the GRPCS backend and mTLS.
 				// Traefik uses TCP passthrough and does not consume it. REST
@@ -67,7 +99,7 @@ func Extras(c Cluster, opts ExtrasOptions) *fleetv1alpha1.HelmOp {
 			"rest": map[string]any{
 				"enabled": opts.RESTEnabled,
 				"host":    c.ManagerAPIHost,
-				"service": ManagerServiceName(c.Name),
+				"service": names.Manager,
 				"port":    ManagerRESTPort,
 			},
 			"tls": map[string]any{
@@ -95,19 +127,14 @@ func Extras(c Cluster, opts ExtrasOptions) *fleetv1alpha1.HelmOp {
 			"clusterName": c.Name,
 			"namespace":   TargetNamespace,
 			"targets": map[string]any{
-				"keydb":   vpaTarget(true, "Deployment", KeyDBName(c.Name)),
-				"manager": vpaTarget(opts.Manager, "Deployment", ManagerName(c.Name)),
-				"control": vpaTarget(opts.Seed, "StatefulSet", SchedulerServiceName(c.Name)),
-				"data":    vpaTarget(opts.Seed, "StatefulSet", DataName(c.Name)+"-seed-client"),
+				"keydb":   vpaTarget(true, "Deployment", names.KeyDB),
+				"manager": vpaTarget(opts.Manager, "Deployment", names.Manager),
+				"control": vpaTarget(opts.Seed, "StatefulSet", names.ControlScheduler),
+				"data":    vpaTarget(opts.Seed, "StatefulSet", names.DataSeedClient),
 			},
 		},
 	}
-
-	var dependsOn []string
-	if opts.IngressEnabled {
-		dependsOn = []string{ManagerName(c.Name)}
-	}
-	return newHelmOp(ExtrasName(c.Name), c, c.ExtrasChart, "extras", values, dependsOn)
+	return values
 }
 
 func vpaTarget(enabled bool, kind, name string) map[string]any {

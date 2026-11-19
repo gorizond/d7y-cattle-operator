@@ -144,49 +144,10 @@ func (c *Controller) reconcile(key string, cluster *provv1.Cluster) (result *pro
 	c.warnUnsupportedChartVersion(cluster, hc.Chart.Version)
 
 	var errs []error
-	if err := c.applyHelmOp(cluster, helmop.KeyDB(hc)); err != nil {
-		status.set(conditionKeyDBReady, false, "ApplyFailed", err.Error())
-		errs = append(errs, err)
-	} else {
-		status.set(conditionKeyDBReady, true, "Ready", "KeyDB HelmOp applied")
-	}
 
-	hc = c.resolveHarborURL(hc)
-	harborErr := c.ensureHarbor(cluster, hc, roles)
-	setHarborCondition(status, roles, harborErr)
-	if harborErr != nil {
-		errs = append(errs, harborErr)
-	}
-	proxyErr := c.ensureRegistryProxy(cluster, hc, roles, harborErr)
-	proxyReady := false
-	proxyMessage := ""
-	if proxyErr == nil && roles.Proxy {
-		var stateErr error
-		proxyReady, proxyMessage, stateErr = c.helmOpReady(cluster, helmop.RegistryProxyName(cluster.Name), "registry proxy")
-		if stateErr != nil {
-			proxyErr = stateErr
-		}
-	}
-	setRegistryProxyCondition(status, roles, proxyErr, proxyReady, proxyMessage)
-	if proxyErr != nil {
-		errs = append(errs, proxyErr)
-	}
-
-	admissionErr := c.ensureAdmission(cluster, hc, roles)
-	admissionReady := false
-	admissionMessage := ""
-	if admissionErr == nil && roles.Admission {
-		var stateErr error
-		admissionReady, admissionMessage, stateErr = c.helmOpReady(cluster, helmop.AdmissionName(cluster.Name), "admission webhook")
-		if stateErr != nil {
-			admissionErr = stateErr
-		}
-	}
-	setAdmissionCondition(status, roles, admissionErr, admissionReady, admissionMessage)
-	if admissionErr != nil {
-		errs = append(errs, admissionErr)
-	}
-
+	// The P2P certificate and public address are resolved before the shared
+	// HelmOps are applied so the per-cluster inputs stamped for Fleet templates
+	// are current.
 	mtlsReady := true
 	if roles.Manager || roles.Seed {
 		publicIP, err := c.ensureMTLSCertificate(cluster, roles)
@@ -210,6 +171,68 @@ func (c *Controller) reconcile(key string, cluster *provv1.Cluster) (result *pro
 		}
 	}
 
+	// Fleet targets shared HelmOps by Cluster label and renders the scheduler
+	// host from the cluster-id label, so the labels must be in place before the
+	// objects are applied.
+	if updated, err := c.ensureClusterMetadata(cluster, hc); err != nil {
+		errs = append(errs, err)
+	} else if updated != nil {
+		// Continue with the updated object so later writes carry the same
+		// resourceVersion instead of fighting the metadata update.
+		cluster = updated
+		status.rebase(updated)
+	}
+
+	shared := c.ensureSharedHelmOps(cluster, hc)
+	if shared.keydb != nil {
+		status.set(conditionKeyDBReady, false, "ApplyFailed", shared.keydb.Error())
+	} else {
+		status.set(conditionKeyDBReady, true, "Ready", "KeyDB HelmOp applied")
+	}
+	// Harbor and the registry proxy stay per cluster: they need per-cluster
+	// Secret names and Harbor ClusterIP host aliases that Fleet cannot template.
+	hc = c.resolveHarborURL(hc)
+	harborErr := c.ensureHarbor(cluster, hc, roles)
+	setHarborCondition(status, roles, harborErr)
+	if harborErr != nil {
+		errs = append(errs, harborErr)
+	}
+	proxyErr := c.ensureRegistryProxy(cluster, hc, roles, harborErr)
+	proxyReady := false
+	proxyMessage := ""
+	if proxyErr == nil && roles.Proxy {
+		var stateErr error
+		proxyReady, proxyMessage, stateErr = c.helmOpReady(cluster, helmop.RegistryProxyName(cluster.Name), "registry proxy")
+		if stateErr != nil {
+			proxyErr = stateErr
+		}
+	}
+	setRegistryProxyCondition(status, roles, proxyErr, proxyReady, proxyMessage)
+	if proxyErr != nil {
+		errs = append(errs, proxyErr)
+	}
+
+	// The admission webhook is shared; the per-cluster role only gates the
+	// operator-wide precondition and the readiness condition.
+	admissionErr := shared.admission
+	var admissionExtra error
+	if admissionErr == nil && roles.Admission && strings.TrimSpace(hc.ProxyDomain) == "" {
+		admissionErr = fmt.Errorf("admission webhook requires the proxy.domain operator value")
+		admissionExtra = admissionErr
+		c.event(cluster, corev1.EventTypeWarning, "AdmissionProxyDomainMissing", admissionErr.Error())
+	}
+	admissionReady := false
+	admissionMessage := ""
+	if admissionErr == nil && roles.Admission {
+		var stateErr error
+		admissionReady, admissionMessage, stateErr = c.helmOpReady(cluster, helmop.SharedAdmissionName(), "admission webhook")
+		if stateErr != nil {
+			admissionErr = stateErr
+			admissionExtra = stateErr
+		}
+	}
+	setAdmissionCondition(status, roles, admissionErr, admissionReady, admissionMessage)
+
 	if roles.Manager {
 		if mtlsReady {
 			if err := c.ensureManager(cluster, hc); err != nil {
@@ -229,7 +252,6 @@ func (c *Controller) reconcile(key string, cluster *provv1.Cluster) (result *pro
 		}
 	}
 
-	seedReady := false
 	if roles.Seed {
 		if mtlsReady {
 			id, mismatch, registrationCluster, err := c.ensureSeedRegistration(c.ctx, cluster)
@@ -260,15 +282,11 @@ func (c *Controller) reconcile(key string, cluster *provv1.Cluster) (result *pro
 					c.event(cluster, corev1.EventTypeWarning, "IdMismatch",
 						fmt.Sprintf("annotation scheduler cluster ID %d differs from manager server ID %d; annotation preserved", hc.SchedulerClusterID, id))
 				}
-				seedReady = true
-				controlErr, dataErr := c.ensureSeed(cluster, hc)
-				setSeedCondition(status, conditionControlReady, controlErr)
-				setSeedCondition(status, conditionDataReady, dataErr)
-				for _, err := range []error{controlErr, dataErr} {
-					if err != nil {
-						errs = append(errs, err)
-					}
+				if err := c.ensureSeed(cluster); err != nil {
+					errs = append(errs, err)
 				}
+				setSeedCondition(status, conditionControlReady, shared.control)
+				setSeedCondition(status, conditionDataReady, errors.Join(shared.data, shared.mirror))
 			}
 		} else {
 			status.seedUnavailable("MTLSSecretUnavailable", "mTLS Secret is not ready")
@@ -280,26 +298,13 @@ func (c *Controller) reconcile(key string, cluster *provv1.Cluster) (result *pro
 		status.seedDisabled()
 		status.seedUnavailable("SeedDisabled", "seed role is disabled; the scheduler cluster ID annotation is preserved")
 	}
-
-	if err := c.applyHelmOp(cluster, helmop.Extras(hc, helmop.ExtrasOptions{
-		IngressEnabled:                 roles.Manager && mtlsReady,
-		IngressController:              c.opts.ExtrasIngressController,
-		IngressClassName:               c.opts.ExtrasIngressClassName,
-		GRPCEnabled:                    c.opts.ExtrasIngressGRPCEnabled,
-		RESTEnabled:                    c.opts.ExtrasIngressRESTEnabled,
-		TLSSecret:                      c.opts.ExtrasIngressTLSSecret,
-		TraefikServersTransportEnabled: c.opts.ExtrasTraefikTransport,
-		VPAEnabled:                     c.opts.VPAEnabled,
-		Manager:                        roles.Manager && mtlsReady,
-		Seed:                           seedReady,
-		SchedulerPublicEnabled:         seedReady,
-		SchedulerPublicIP:              hc.SchedulerPublicIP,
-		SchedulerDomain:                c.opts.P2PDomain,
-		SchedulerClusterID:             c.clusterID(cluster),
-		SchedulerService:               helmop.SchedulerServiceName(cluster.Name),
-		SchedulerPort:                  helmop.SchedulerPort,
-	})); err != nil {
-		errs = append(errs, err)
+	for _, err := range []error{
+		shared.keydb, shared.control, shared.data, shared.extras,
+		shared.mirror, shared.admission, shared.cleanup, admissionExtra,
+	} {
+		if err != nil {
+			errs = append(errs, err)
+		}
 	}
 
 	if len(errs) > 0 {
@@ -480,6 +485,7 @@ func (c *Controller) helmopCluster(cluster *provv1.Cluster) helmop.Cluster {
 		OperatorImageRepository:     c.opts.OperatorImageRepository,
 		OperatorImageTag:            c.opts.OperatorImageTag,
 		ManagerGRPCDomain:           c.opts.ManagerGRPCDomain,
+		P2PDomain:                   c.opts.P2PDomain,
 		ManagerGRPCPort:             c.opts.ManagerGRPCPort,
 		ManagerAPIHost:              c.opts.ManagerAPIHost,
 		ManagerAPICredentialsSecret: c.opts.ManagerAPICredentialsSecret,
@@ -727,6 +733,139 @@ func schedulerClusterID(cluster *provv1.Cluster) int {
 		return 0
 	}
 	return id
+}
+
+// sharedHelmOps carries the per-component shared apply results so conditions
+// and legacy cleanup only act on components whose shared HelmOp was applied.
+type sharedHelmOps struct {
+	keydb, control, data, extras, mirror, admission error
+	admissionApplied                                bool
+	cleanup                                         error
+}
+
+// ensureClusterMetadata stamps the Fleet inputs onto the provisioning Cluster:
+// the cluster-id label used by the scheduler-host template and the resolved
+// public scheduler IP used by the shared advertiseIP/extras values. Role labels
+// are user-managed and are never modified here.
+func (c *Controller) ensureClusterMetadata(cluster *provv1.Cluster, hc helmop.Cluster) (*provv1.Cluster, error) {
+	labels := map[string]string{}
+	if id := strings.TrimSpace(cluster.Status.ClusterName); id != "" {
+		labels[helmop.LabelClusterID] = id
+	}
+	annotations := map[string]string{}
+	// A value already set on the Cluster wins: the resolver can be wrong (a
+	// wildcard DNS record can point at the management cluster), so operators
+	// must be able to pin the address without the controller overwriting it.
+	if ip := strings.TrimSpace(hc.SchedulerPublicIP); ip != "" &&
+		strings.TrimSpace(cluster.Annotations[helmop.AnnotationSchedulerPublicIP]) == "" {
+		annotations[helmop.AnnotationSchedulerPublicIP] = ip
+	}
+	if len(labels) == 0 && len(annotations) == 0 {
+		return nil, nil
+	}
+	changed := false
+	for key, value := range labels {
+		if cluster.Labels[key] != value {
+			changed = true
+		}
+	}
+	for key, value := range annotations {
+		if cluster.Annotations[key] != value {
+			changed = true
+		}
+	}
+	if !changed || c.clusters == nil {
+		return nil, nil
+	}
+	updated := cluster.DeepCopy()
+	if updated.Labels == nil {
+		updated.Labels = map[string]string{}
+	}
+	for key, value := range labels {
+		updated.Labels[key] = value
+	}
+	if updated.Annotations == nil {
+		updated.Annotations = map[string]string{}
+	}
+	for key, value := range annotations {
+		updated.Annotations[key] = value
+	}
+	result, err := c.clusters.Update(updated)
+	if err != nil {
+		return nil, fmt.Errorf("update Cluster metadata: %w", err)
+	}
+	// The caller continues with this object; the informer-cache copy passed to
+	// the handler is never mutated.
+	return result, nil
+}
+
+// ensureSharedHelmOps applies the fixed set of shared HelmOps once. The objects
+// are named after the component, so repeated reconciles from every Cluster are
+// idempotent. Per-cluster manager/harbor/registry-proxy HelmOps stay in their
+// own ensure paths.
+func (c *Controller) ensureSharedHelmOps(cluster *provv1.Cluster, hc helmop.Cluster) sharedHelmOps {
+	var result sharedHelmOps
+	result.keydb = c.applyHelmOp(cluster, helmop.SharedKeyDB(hc))
+	result.control = c.applyHelmOp(cluster, helmop.SharedControl(hc))
+	result.data = c.applyHelmOp(cluster, helmop.SharedData(hc))
+	result.extras = c.applyHelmOp(cluster, helmop.SharedExtras(hc, helmop.ExtrasOptions{
+		IngressController:              c.opts.ExtrasIngressController,
+		IngressClassName:               c.opts.ExtrasIngressClassName,
+		GRPCEnabled:                    c.opts.ExtrasIngressGRPCEnabled,
+		RESTEnabled:                    c.opts.ExtrasIngressRESTEnabled,
+		TLSSecret:                      c.opts.ExtrasIngressTLSSecret,
+		TraefikServersTransportEnabled: c.opts.ExtrasTraefikTransport,
+		VPAEnabled:                     c.opts.VPAEnabled,
+	}))
+	result.mirror = c.applyHelmOp(cluster, helmop.SharedMirror(hc))
+	// An empty proxy domain means the admission role is not configured at all;
+	// do not install a webhook that would rewrite images to an empty host.
+	if strings.TrimSpace(hc.ProxyDomain) != "" {
+		result.admission = c.applyHelmOp(cluster, helmop.SharedAdmission(hc))
+		result.admissionApplied = true
+	}
+	result.cleanup = c.cleanupLegacyHelmOps(cluster, result)
+	return result
+}
+
+// cleanupLegacyHelmOps removes the per-cluster HelmOps (and their Bundles) that
+// the shared objects replaced. It only runs for components whose shared HelmOp
+// was applied, so a failed apply never drops the working release.
+func (c *Controller) cleanupLegacyHelmOps(cluster *provv1.Cluster, shared sharedHelmOps) error {
+	legacy := []struct {
+		name string
+		err  error
+	}{
+		{helmop.KeyDBName(cluster.Name), shared.keydb},
+		{helmop.ControlName(cluster.Name), shared.control},
+		{helmop.DataName(cluster.Name), shared.data},
+		{helmop.ExtrasName(cluster.Name), shared.extras},
+		{helmop.MirrorName(cluster.Name), shared.mirror},
+	}
+	var errs []error
+	for _, item := range legacy {
+		if item.err != nil {
+			continue
+		}
+		if err := c.deleteHelmOp(cluster, item.name); err != nil {
+			errs = append(errs, err)
+		}
+		if err := c.deleteBundle(cluster, item.name); err != nil {
+			errs = append(errs, err)
+		}
+	}
+	// Admission has no shared release when proxy.domain is unset; keep the
+	// legacy per-cluster webhook in that case.
+	if shared.admissionApplied && shared.admission == nil {
+		name := helmop.AdmissionName(cluster.Name)
+		if err := c.deleteHelmOp(cluster, name); err != nil {
+			errs = append(errs, err)
+		}
+		if err := c.deleteBundle(cluster, name); err != nil {
+			errs = append(errs, err)
+		}
+	}
+	return errors.Join(errs...)
 }
 
 func (c *Controller) applyHelmOp(cluster *provv1.Cluster, op *fleetv1alpha1.HelmOp) error {

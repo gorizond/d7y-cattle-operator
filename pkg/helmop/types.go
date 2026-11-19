@@ -2,6 +2,7 @@
 package helmop
 
 import (
+	"fmt"
 	"strings"
 
 	fleetv1alpha1 "github.com/rancher/fleet/pkg/apis/fleet.cattle.io/v1alpha1"
@@ -65,6 +66,142 @@ const (
 	AdmissionChartName    = "admission-webhook"
 	AdmissionChartVersion = "0.1.2"
 )
+
+// Fleet targeting labels. Fleet matches spec.targets[].clusterSelector against
+// the provisioning Cluster labels, so the label contract below is the only way
+// a shared HelmOp can fan out. Labels are user-managed: the operator stamps the
+// cluster-id label (required by the scheduler-host template) and leaves role
+// labels untouched.
+const (
+	// LabelGate opts a Cluster into the Dragonfly stack.
+	LabelGate = "d7y-operator-cattle"
+	// LabelClusterID carries status.clusterName; the scheduler host template
+	// reads it from .ClusterLabels.
+	LabelClusterID = "p2p.dragonfly.io/cluster-id"
+
+	LabelRoleManager   = "d7y-operator-manager"
+	LabelRoleSeed      = "d7y-operator-seed"
+	LabelRoleProxy     = "d7y-operator-proxy"
+	LabelRoleHarbor    = "d7y-operator-harbor"
+	LabelRoleAdmission = "d7y-operator-admission"
+
+	// AnnotationSchedulerClusterID is the Fleet template input for the
+	// scheduler cluster ID. The controller writes it during registration.
+	AnnotationSchedulerClusterID = "p2p.dragonfly.io/scheduler-cluster-id"
+	// AnnotationSchedulerPublicIP is stamped per Cluster so shared values can
+	// render the resolved public advertiseIP without changing the DNS-based
+	// resolution itself.
+	AnnotationSchedulerPublicIP  = "p2p.dragonfly.io/scheduler-public-ip"
+	AnnotationSchedulerReplicas  = "p2p.dragonfly.io/scheduler-replicas"
+	AnnotationSeedClientReplicas = "p2p.dragonfly.io/seedclient-replicas"
+
+	// SharedClusterNameTemplate is the per-target cluster name made available
+	// by Fleet inside spec.helm.values.
+	SharedClusterNameTemplate = "${ .ClusterName }"
+	// SharedSchedulerPublicIPTemplate resolves the per-target public LB IP
+	// stamped on the Cluster annotation.
+	// The annotation may be absent on a Cluster (for example when a user has not
+	// pinned it yet); default keeps Fleet's missingkey=error from failing the
+	// whole values render for that cluster.
+	SharedSchedulerPublicIPTemplate = `${ index .ClusterAnnotations "p2p.dragonfly.io/scheduler-public-ip" | default "" }`
+	// SharedSchedulerClusterIDTemplate resolves the per-target scheduler ID
+	// written by the registration flow.
+	SharedSchedulerClusterIDTemplate = `${ index .ClusterAnnotations "p2p.dragonfly.io/scheduler-cluster-id" }`
+)
+
+// Shared HelmOp names. These are also the Helm release names, so they must be
+// fixed and must not contain template markers: Fleet rejects templated
+// spec.helm.releaseName values.
+const (
+	sharedKeyDBName     = "d7y-keydb"
+	sharedControlName   = "d7y-control"
+	sharedDataName      = "d7y-data"
+	sharedExtrasName    = "d7y-extras"
+	sharedMirrorName    = "d7y-containerd-mirror"
+	sharedAdmissionName = "d7y-admission"
+)
+
+// SharedKeyDBName returns the shared KeyDB HelmOp and release name.
+func SharedKeyDBName() string { return sharedKeyDBName }
+
+// SharedControlName returns the shared scheduler HelmOp and release name.
+func SharedControlName() string { return sharedControlName }
+
+// SharedDataName returns the shared seedClient/client HelmOp and release name.
+func SharedDataName() string { return sharedDataName }
+
+// SharedExtrasName returns the shared dragonfly-extras HelmOp and release name.
+func SharedExtrasName() string { return sharedExtrasName }
+
+// SharedMirrorName returns the shared containerd-mirror HelmOp and release name.
+func SharedMirrorName() string { return sharedMirrorName }
+
+// SharedAdmissionName returns the shared admission-webhook HelmOp and release
+// name.
+func SharedAdmissionName() string { return sharedAdmissionName }
+
+// GateSelector matches every Cluster that opted into the Dragonfly stack. KeyDB
+// must reach manager-only and label-only Clusters too: the per-cluster manager
+// and Harbor releases point at the cluster-local <cluster>-keydb Service.
+func GateSelector() map[string]string {
+	return map[string]string{LabelGate: "true"}
+}
+
+// SharedSelector matches the seed role: the shared control, data, extras, and
+// containerd-mirror releases only make sense on Clusters that run a scheduler.
+func SharedSelector() map[string]string {
+	return map[string]string{LabelGate: "true", LabelRoleSeed: "true"}
+}
+
+// AdmissionSelector matches Clusters that opted into the admission webhook.
+func AdmissionSelector() map[string]string {
+	return map[string]string{LabelGate: "true", LabelRoleAdmission: "true"}
+}
+
+// SchedulerHostTemplate returns the Fleet values template for the per-target
+// public scheduler host. An empty domain returns an empty host.
+func SchedulerHostTemplate(domain string) string {
+	domain = strings.TrimSpace(strings.Trim(domain, "."))
+	if domain == "" {
+		return ""
+	}
+	return fmt.Sprintf(`d7y-scheduler.${ index .ClusterLabels %q }.`, LabelClusterID) + domain
+}
+
+// Names are the downstream resource names derived from a cluster name.
+type Names struct {
+	KeyDB            string
+	Manager          string
+	Control          string
+	Data             string
+	ControlScheduler string
+	DataSeedClient   string
+}
+
+// ClusterNames returns the per-cluster downstream resource names.
+func ClusterNames(cluster string) Names {
+	return Names{
+		KeyDB:            KeyDBName(cluster),
+		Manager:          ManagerServiceName(cluster),
+		Control:          ControlName(cluster),
+		Data:             DataName(cluster),
+		ControlScheduler: SchedulerServiceName(cluster),
+		DataSeedClient:   DataName(cluster) + "-seed-client",
+	}
+}
+
+// SharedNames returns the downstream resource names as Fleet templates, so a
+// single HelmOp renders the same names on every target cluster.
+func SharedNames() Names {
+	return Names{
+		KeyDB:            SharedClusterNameTemplate + "-keydb",
+		Manager:          SharedClusterNameTemplate + "-manager",
+		Control:          SharedClusterNameTemplate + "-control",
+		Data:             SharedClusterNameTemplate + "-data",
+		ControlScheduler: SharedClusterNameTemplate + "-control-scheduler",
+		DataSeedClient:   SharedClusterNameTemplate + "-data-seed-client",
+	}
+}
 
 // HelmOpGVR identifies Fleet HelmOps for the resource client.
 var HelmOpGVR = schema.GroupVersionResource{
@@ -148,8 +285,14 @@ type Cluster struct {
 	// it to the HelmOp namespace for Fleet to copy downstream.
 	ManagerAPICredentialsSecret string
 	SchedulerClusterID          int
-	SchedulerReplicas           string
-	SeedClientReplicas          string
+	// SchedulerClusterIDTemplate overrides SchedulerClusterID when set. Shared
+	// HelmOps use a Fleet template because the ID differs per target cluster.
+	SchedulerClusterIDTemplate string
+	SchedulerReplicas          string
+	SeedClientReplicas         string
+	// P2PDomain is the operator-wide scheduler base domain used to build the
+	// shared scheduler host template.
+	P2PDomain string
 	// SchedulerPublicIP is the currently resolved public scheduler address
 	// used as the scheduler advertiseIP and the external-dns target.
 	SchedulerPublicIP string
@@ -289,6 +432,64 @@ func newHelmOpInNamespace(name, targetNamespace string, c Cluster, chart Chart, 
 	return op
 }
 
+// sharedCluster rewrites the per-cluster inputs that cannot be shared into
+// Fleet values templates. Monitoring and P2P data TLS keep their chart
+// defaults: Fleet cannot template booleans, and a bool rendered as the string
+// "false" is truthy in Helm.
+func sharedCluster(c Cluster) Cluster {
+	c.Name = SharedClusterNameTemplate
+	c.Labels = nil
+	c.SchedulerHost = SchedulerHostTemplate(c.P2PDomain)
+	c.SchedulerPublicIP = SharedSchedulerPublicIPTemplate
+	c.SchedulerClusterIDTemplate = SharedSchedulerClusterIDTemplate
+	c.Monitoring = false
+	c.P2PDataTLS = false
+	return c
+}
+
+// newSharedHelmOp builds a fixed-name HelmOp that fans out to clusters matched
+// by selector. spec.helm.releaseName and spec.namespace are not templatable, so
+// the name is fixed and the same release name is installed on every target.
+func newSharedHelmOp(name, targetNamespace string, c Cluster, chart Chart, component string, values map[string]any, dependsOn []string, selector map[string]string) *fleetv1alpha1.HelmOp {
+	op := &fleetv1alpha1.HelmOp{
+		TypeMeta: metav1.TypeMeta{APIVersion: APIVersion, Kind: Kind},
+		ObjectMeta: metav1.ObjectMeta{
+			Name:      name,
+			Namespace: c.Namespace,
+			// Deliberately not c.Labels: shared objects must not accumulate the
+			// ownership labels of whichever Cluster reconciled last.
+			Labels: map[string]string{
+				"app.kubernetes.io/managed-by": "d7y-cattle-operator",
+				"p2p-dragonfly-io":             component,
+			},
+		},
+	}
+	op.Spec.TargetNamespace = targetNamespace
+	op.Spec.Helm = &fleetv1alpha1.HelmOptions{
+		Repo:        chart.Repo,
+		Chart:       chart.Name,
+		Version:     chart.Version,
+		ReleaseName: name,
+		Values:      &fleetv1alpha1.GenericMap{Data: values},
+	}
+	op.Spec.Targets = []fleetv1alpha1.BundleTarget{{
+		ClusterSelector: &metav1.LabelSelector{MatchLabels: selector},
+	}}
+	for _, dependency := range dependsOn {
+		op.Spec.DependsOn = append(op.Spec.DependsOn, fleetv1alpha1.BundleRef{Name: dependency})
+	}
+	return op
+}
+
+func schedulerClusterIDValue(c Cluster) any {
+	if c.SchedulerClusterIDTemplate != "" {
+		return c.SchedulerClusterIDTemplate
+	}
+	return c.SchedulerClusterID
+}
+
+// withMTLS declares the downstream P2P Secret so Fleet copies it into the
+// release namespace before the chart starts.
 func withMTLS(op *fleetv1alpha1.HelmOp, secretName string) *fleetv1alpha1.HelmOp {
 	op.Spec.DownstreamResources = []fleetv1alpha1.DownstreamResource{{Kind: "Secret", Name: secretName}}
 	return op

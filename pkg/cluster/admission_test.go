@@ -26,16 +26,15 @@ func TestReconcileAdmissionToggleMatrix(t *testing.T) {
 		admission  bool
 		wantHarbor bool
 		wantProxy  bool
-		wantAdm    bool
 	}{
 		{name: "none"},
-		{name: "admission only", admission: true, wantAdm: true},
+		{name: "admission only", admission: true},
 		{name: "harbor only", harbor: true, wantHarbor: true},
 		{name: "proxy only", proxy: true, wantProxy: true},
 		{name: "harbor and proxy", harbor: true, proxy: true, wantHarbor: true, wantProxy: true},
-		{name: "harbor and admission", harbor: true, admission: true, wantHarbor: true, wantAdm: true},
-		{name: "proxy and admission", proxy: true, admission: true, wantProxy: true, wantAdm: true},
-		{name: "all toggles", harbor: true, proxy: true, admission: true, wantHarbor: true, wantProxy: true, wantAdm: true},
+		{name: "harbor and admission", harbor: true, admission: true, wantHarbor: true},
+		{name: "proxy and admission", proxy: true, admission: true, wantProxy: true},
+		{name: "all toggles", harbor: true, proxy: true, admission: true, wantHarbor: true, wantProxy: true},
 	}
 	for _, test := range tests {
 		t.Run(test.name, func(t *testing.T) {
@@ -62,28 +61,34 @@ func TestReconcileAdmissionToggleMatrix(t *testing.T) {
 				t.Fatalf("reconcile() error = %v", err)
 			}
 			for name, want := range map[string]bool{
-				"c1-harbor":            test.wantHarbor,
-				"c1-registry-proxy":    test.wantProxy,
-				"c1-admission-webhook": test.wantAdm,
+				"c1-harbor":         test.wantHarbor,
+				"c1-registry-proxy": test.wantProxy,
 			} {
 				if got := store.has("fleet-default/" + name); got != want {
 					t.Errorf("%s present = %t, want %t", name, got, want)
 				}
 			}
-			if test.wantAdm {
-				op := store.object("fleet-default/c1-admission-webhook")
-				if len(dependsOn(op)) != 0 {
-					t.Errorf("admission dependsOn = %v, want none", dependsOn(op))
-				}
-				if got := valueAtPath(t, helmValues(t, op), "proxy", "domain"); got != "proxy.example.com" {
-					t.Errorf("admission proxy.domain = %v", got)
-				}
+			// Admission is a shared HelmOp: it exists for every enabled Cluster
+			// regardless of this Cluster's admission role, and the per-cluster
+			// copy is always cleaned up.
+			if !store.has("fleet-default/" + helmop.SharedAdmissionName()) {
+				t.Error("shared admission HelmOp was not created")
+			}
+			if store.has("fleet-default/c1-admission-webhook") {
+				t.Error("legacy per-cluster admission HelmOp still exists")
+			}
+			op := store.object("fleet-default/" + helmop.SharedAdmissionName())
+			if got := selectorLabels(op); got[helmop.LabelGate] != "true" || got[helmop.LabelRoleAdmission] != "true" {
+				t.Errorf("admission selector = %v, want gate+admission", got)
+			}
+			if got := valueAtPath(t, helmValues(t, op), "proxy", "domain"); got != "proxy.example.com" {
+				t.Errorf("admission proxy.domain = %v", got)
 			}
 		})
 	}
 }
 
-func TestReconcileAdmissionIsRemovedIndependently(t *testing.T) {
+func TestReconcileAdmissionToggleKeepsSharedHelmOp(t *testing.T) {
 	controller, store, _ := newTestController(t)
 	cluster := admissionCluster()
 	cluster.Annotations[AnnotationHarbor] = "true"
@@ -92,16 +97,16 @@ func TestReconcileAdmissionIsRemovedIndependently(t *testing.T) {
 	if _, err := controller.reconcile("", cluster); err != nil {
 		t.Fatalf("reconcile() error = %v", err)
 	}
-	if !store.has("fleet-default/c1-admission-webhook") {
-		t.Fatal("admission HelmOp was not created")
-	}
 
 	delete(cluster.Annotations, AnnotationAdmission)
 	if _, err := controller.reconcile("", cluster); err != nil {
 		t.Fatalf("reconcile(remove admission) error = %v", err)
 	}
+	if !store.has("fleet-default/" + helmop.SharedAdmissionName()) {
+		t.Error("shared admission HelmOp was removed by the per-cluster toggle")
+	}
 	if store.has("fleet-default/c1-admission-webhook") {
-		t.Error("admission HelmOp was not removed")
+		t.Error("legacy per-cluster admission HelmOp still exists")
 	}
 	for _, name := range []string{"c1-harbor", "c1-registry-proxy"} {
 		if !store.has("fleet-default/" + name) {
@@ -124,7 +129,7 @@ func TestReconcileAdmissionCondition(t *testing.T) {
 		t.Errorf("AdmissionWebhookReady before HelmOp status = %+v, want False/Progressing", got)
 	}
 
-	op := store.object("fleet-default/c1-admission-webhook")
+	op := store.object("fleet-default/" + helmop.SharedAdmissionName())
 	if err := unstructured.SetNestedSlice(op.Object, []any{
 		map[string]any{"type": "Ready", "status": "True", "message": "Ready"},
 	}, "status", "conditions"); err != nil {
@@ -150,8 +155,8 @@ func TestReconcileAdmissionProxyDomainMissingDoesNotBlockOthers(t *testing.T) {
 	if _, err := controller.reconcile("", cluster); err == nil {
 		t.Fatal("reconcile() error = nil, want the admission proxy.domain error")
 	}
-	if store.has("fleet-default/c1-admission-webhook") {
-		t.Error("admission HelmOp was created without proxy.domain")
+	if store.has("fleet-default/" + helmop.SharedAdmissionName()) {
+		t.Error("shared admission HelmOp was created without proxy.domain")
 	}
 	// Harbor has no dependency on the proxy domain and must still be applied.
 	if !store.has("fleet-default/c1-harbor") {
@@ -189,7 +194,7 @@ func TestAdmissionHelmOpUsesIndependentChart(t *testing.T) {
 	}
 }
 
-func TestAdmissionHelmOpImageFromOperatorOptions(t *testing.T) {
+func TestSharedAdmissionImageFromOperatorOptions(t *testing.T) {
 	controller, store, _ := newTestController(t)
 	controller.opts.OperatorImageRepository = "ghcr.io/gorizond/d7y-cattle-operator"
 	controller.opts.OperatorImageTag = "v0.1.43"
@@ -198,7 +203,7 @@ func TestAdmissionHelmOpImageFromOperatorOptions(t *testing.T) {
 	if _, err := controller.reconcile("", cluster); err != nil {
 		t.Fatalf("reconcile() error = %v", err)
 	}
-	values := helmValues(t, store.object("fleet-default/c1-admission-webhook"))
+	values := helmValues(t, store.object("fleet-default/"+helmop.SharedAdmissionName()))
 	if got := valueAtPath(t, values, "image", "repository"); got != "ghcr.io/gorizond/d7y-cattle-operator" {
 		t.Errorf("image.repository = %v", got)
 	}
@@ -219,8 +224,8 @@ func fleetBundle(name, namespace string) *unstructured.Unstructured {
 	}}
 }
 
-func TestReconcileAdmissionDisableDeletesBundle(t *testing.T) {
-	controller, store, _ := newTestController(t)
+func TestReconcileAdmissionCleanupDeletesLegacyBundle(t *testing.T) {
+	controller, _, _ := newTestController(t)
 	cluster := admissionCluster()
 	if _, err := controller.reconcile("", cluster); err != nil {
 		t.Fatalf("reconcile() error = %v", err)
@@ -233,18 +238,15 @@ func TestReconcileAdmissionDisableDeletesBundle(t *testing.T) {
 	if _, err := controller.reconcile("", cluster); err != nil {
 		t.Fatalf("reconcile(remove admission) error = %v", err)
 	}
-	if store.has("fleet-default/c1-admission-webhook") {
-		t.Error("admission HelmOp was not removed")
-	}
 	if bundles.has("fleet-default/c1-admission-webhook") {
-		t.Error("admission Bundle was not removed")
+		t.Error("legacy admission Bundle was not removed")
 	}
 	if !bundles.has("fleet-default/c1-harbor") {
 		t.Error("unrelated Bundle was removed with admission cleanup")
 	}
 }
 
-func TestReconcileDisableClusterDeletesAdmissionBundle(t *testing.T) {
+func TestReconcileDisableClusterDeletesLegacyAdmissionBundle(t *testing.T) {
 	controller, store, _ := newTestController(t)
 	cluster := admissionCluster()
 	if _, err := controller.reconcile("", cluster); err != nil {
@@ -258,14 +260,14 @@ func TestReconcileDisableClusterDeletesAdmissionBundle(t *testing.T) {
 		t.Fatalf("reconcile(disable cluster) error = %v", err)
 	}
 	if store.has("fleet-default/c1-admission-webhook") {
-		t.Error("admission HelmOp was not removed by cleanupAll")
+		t.Error("legacy admission HelmOp was not removed by cleanupAll")
 	}
 	if bundles.has("fleet-default/c1-admission-webhook") {
-		t.Error("admission Bundle was not removed by cleanupAll")
+		t.Error("legacy admission Bundle was not removed by cleanupAll")
 	}
 }
 
-func TestReconcileAdmissionDisableLeavesUnlabeledBundle(t *testing.T) {
+func TestReconcileAdmissionCleanupLeavesUnlabeledBundle(t *testing.T) {
 	controller, _, _ := newTestController(t)
 	cluster := admissionCluster()
 	if _, err := controller.reconcile("", cluster); err != nil {
@@ -285,19 +287,24 @@ func TestReconcileAdmissionDisableLeavesUnlabeledBundle(t *testing.T) {
 	}
 }
 
-func TestReconcileAdmissionExcludeNamespaces(t *testing.T) {
+// TestSharedAdmissionIgnoresClusterExcludeList documents a deliberate
+// limitation: the excluded-namespace list is a per-Cluster annotation and Fleet
+// values templates cannot render a YAML list, so the shared release keeps the
+// chart's system-namespace exclusions only.
+func TestSharedAdmissionIgnoresClusterExcludeList(t *testing.T) {
 	controller, store, _ := newTestController(t)
 	cluster := admissionCluster()
-	cluster.Annotations[AnnotationAdmissionExclude] = " ns-a, ns-b, ns-a, Bad_NS "
+	cluster.Annotations[AnnotationAdmissionExclude] = " ns-a, ns-b "
 	if _, err := controller.reconcile("", cluster); err != nil {
 		t.Fatalf("reconcile() error = %v", err)
 	}
-	op := store.object("fleet-default/c1-admission-webhook")
-	raw, ok := valueAtPath(t, helmValues(t, op), "namespaceSelector", "excludedNamespaces").([]any)
+	raw, ok := valueAtPath(t, helmValues(t, store.object("fleet-default/"+helmop.SharedAdmissionName())),
+		"namespaceSelector", "excludedNamespaces").([]any)
 	if !ok {
-		t.Fatalf("namespaceSelector.excludedNamespaces = %T, want []any", valueAtPath(t, helmValues(t, op), "namespaceSelector", "excludedNamespaces"))
+		t.Fatalf("namespaceSelector.excludedNamespaces = %T, want []any",
+			valueAtPath(t, helmValues(t, store.object("fleet-default/"+helmop.SharedAdmissionName())), "namespaceSelector", "excludedNamespaces"))
 	}
-	if len(raw) != 2 || raw[0] != "ns-a" || raw[1] != "ns-b" {
-		t.Errorf("namespaceSelector.excludedNamespaces = %v, want [ns-a ns-b]", raw)
+	if len(raw) != 0 {
+		t.Errorf("namespaceSelector.excludedNamespaces = %v, want empty for the shared release", raw)
 	}
 }

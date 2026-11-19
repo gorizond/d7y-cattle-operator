@@ -9,6 +9,30 @@ import (
 // operator-wide proxy domain (plus optional credential injection), and there
 // is no dependsOn.
 func Admission(c Cluster) *fleetv1alpha1.HelmOp {
+	op := newHelmOp(AdmissionName(c.Name), c, c.AdmissionChart, "admission-webhook", admissionValues(c), nil)
+	// The chart ships a cluster-scoped MutatingWebhookConfiguration, which
+	// Fleet refuses inside a targetNamespace. Install without one and let
+	// namespaced resources default to TargetNamespace.
+	op.Spec.TargetNamespace = ""
+	op.Spec.DefaultNamespace = TargetNamespace
+	return op
+}
+
+// SharedAdmission returns the shared admission-webhook HelmOp. The excluded
+// namespace list is a per-Cluster annotation and Fleet values templates cannot
+// render a list, so shared admission keeps the chart's system-namespace
+// exclusions only.
+func SharedAdmission(c Cluster) *fleetv1alpha1.HelmOp {
+	c = sharedCluster(c)
+	c.AdmissionExcludeNamespaces = nil
+	op := newSharedHelmOp(SharedAdmissionName(), "", c, c.AdmissionChart, "admission-webhook",
+		admissionValues(c), nil, AdmissionSelector())
+	op.Spec.TargetNamespace = ""
+	op.Spec.DefaultNamespace = TargetNamespace
+	return op
+}
+
+func admissionValues(c Cluster) map[string]any {
 	excludedNamespaces := c.AdmissionExcludeNamespaces
 	if excludedNamespaces == nil {
 		excludedNamespaces = []string{}
@@ -30,11 +54,5 @@ func Admission(c Cluster) *fleetv1alpha1.HelmOp {
 			"tag":        c.OperatorImageTag,
 		}
 	}
-	op := newHelmOp(AdmissionName(c.Name), c, c.AdmissionChart, "admission-webhook", values, nil)
-	// The chart ships a cluster-scoped MutatingWebhookConfiguration, which
-	// Fleet refuses inside a targetNamespace. Install without one and let
-	// namespaced resources default to TargetNamespace.
-	op.Spec.TargetNamespace = ""
-	op.Spec.DefaultNamespace = TargetNamespace
-	return op
+	return values
 }

@@ -301,7 +301,7 @@ func testRequest(operation admissionv1.Operation, name, kind, userData string, e
 }
 
 func testRequestWithNodeConfig(operation admissionv1.Operation, name, kind, nodeConfigKey, nodeConfig string, extraLabels, extraAnnotations map[string]string) *wranglerwebhook.Request {
-	labelsMap := map[string]any{"p2p-dragonfly-io": "true"}
+	labelsMap := map[string]any{"d7y-operator-cattle": "true"}
 	annotations := map[string]any{}
 	for key, value := range extraLabels {
 		labelsMap[key] = value

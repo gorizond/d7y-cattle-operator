@@ -81,8 +81,8 @@ func TestReconcileRegistrationUsesManagerAPI(t *testing.T) {
 	if got := clusterStore.annotation(AnnotationSchedulerClusterIDAuto); got != "5" {
 		t.Errorf("auto marker = %q, want server ID 5", got)
 	}
-	if !store.has("fleet-default/c1-control") || !store.has("fleet-default/c1-data") {
-		t.Error("seed HelmOps were not created after successful manager registration")
+	if !store.has("fleet-default/"+helmop.SharedControlName()) || !store.has("fleet-default/"+helmop.SharedDataName()) {
+		t.Error("shared seed HelmOps were not created after successful manager registration")
 	}
 	if signins.Load() != 1 || creates.Load() != 2 || links.Load() != 1 {
 		t.Errorf("signins/creates/links = %d/%d/%d, want 1/2/1", signins.Load(), creates.Load(), links.Load())
@@ -115,23 +115,25 @@ func TestReconcileAutoRegistrationWritesAnnotation(t *testing.T) {
 	if got := clusterStore.annotation(AnnotationSchedulerClusterIDAuto); got != "5" {
 		t.Errorf("auto marker = %q, want 5", got)
 	}
-	if !store.has("fleet-default/c1-keydb") {
-		t.Error("KeyDB HelmOp was not created")
+	if !store.has("fleet-default/" + helmop.SharedKeyDBName()) {
+		t.Error("shared KeyDB HelmOp was not created")
 	}
-	for _, name := range []string{"c1-control", "c1-data"} {
+	for _, name := range []string{helmop.SharedControlName(), helmop.SharedDataName()} {
 		if !store.has("fleet-default/" + name) {
 			t.Errorf("%s HelmOp was not created after registration", name)
 		}
 	}
 
-	control := store.object("fleet-default/c1-control")
-	if got := valueAtPath(t, helmValues(t, control), "scheduler", "config", "manager", "schedulerClusterID"); got != int64(5) {
-		t.Errorf("control schedulerClusterID = %v, want 5", got)
+	// The shared values carry a Fleet template; the per-target ID comes from
+	// the annotation written by this registration pass.
+	control := store.object("fleet-default/" + helmop.SharedControlName())
+	if got := valueAtPath(t, helmValues(t, control), "scheduler", "config", "manager", "schedulerClusterID"); got != helmop.SharedSchedulerClusterIDTemplate {
+		t.Errorf("control schedulerClusterID = %v, want Fleet template", got)
 	}
-	data := store.object("fleet-default/c1-data")
+	data := store.object("fleet-default/" + helmop.SharedDataName())
 	for _, component := range []string{"seedClient", "client"} {
-		if got := valueAtPath(t, helmValues(t, data), component, "config", "host", "schedulerClusterID"); got != int64(5) {
-			t.Errorf("data %s schedulerClusterID = %v, want 5", component, got)
+		if got := valueAtPath(t, helmValues(t, data), component, "config", "host", "schedulerClusterID"); got != helmop.SharedSchedulerClusterIDTemplate {
+			t.Errorf("data %s schedulerClusterID = %v, want Fleet template", component, got)
 		}
 	}
 
@@ -168,16 +170,15 @@ func TestReconcileUserIDPreservedAndMismatch(t *testing.T) {
 	if got := clusterStore.annotation(AnnotationSchedulerClusterIDAuto); got != "5" {
 		t.Errorf("auto marker = %q, want stale 5 (not overwritten)", got)
 	}
-	if clusterStore.updateCount() != 0 {
-		t.Errorf("annotation updates = %d, want 0", clusterStore.updateCount())
+	// The metadata stamp (cluster-id label and public-IP annotation) is an
+	// expected Update; the scheduler ID annotation above must stay untouched.
+	control := store.object("fleet-default/" + helmop.SharedControlName())
+	if got := valueAtPath(t, helmValues(t, control), "scheduler", "config", "manager", "schedulerClusterID"); got != helmop.SharedSchedulerClusterIDTemplate {
+		t.Errorf("control schedulerClusterID = %v, want Fleet template", got)
 	}
-	control := store.object("fleet-default/c1-control")
-	if got := valueAtPath(t, helmValues(t, control), "scheduler", "config", "manager", "schedulerClusterID"); got != int64(42) {
-		t.Errorf("control schedulerClusterID = %v, want annotation 42", got)
-	}
-	data := store.object("fleet-default/c1-data")
-	if got := valueAtPath(t, helmValues(t, data), "seedClient", "config", "host", "schedulerClusterID"); got != int64(42) {
-		t.Errorf("data schedulerClusterID = %v, want annotation 42", got)
+	data := store.object("fleet-default/" + helmop.SharedDataName())
+	if got := valueAtPath(t, helmValues(t, data), "seedClient", "config", "host", "schedulerClusterID"); got != helmop.SharedSchedulerClusterIDTemplate {
+		t.Errorf("data schedulerClusterID = %v, want Fleet template", got)
 	}
 
 	if got := clusterStore.condition(string(conditionRegistered)); got == nil || got.Status != corev1.ConditionTrue {
@@ -219,6 +220,8 @@ func TestReconcileAutoDBWipeUpdatesAnnotation(t *testing.T) {
 
 	// Simulate the next informer delivery after the auto write, then a manager
 	// DB wipe that assigns a new server ID.
+	afterFirst := clusterStore.updateCount()
+	clusterStore.deliver(cluster)
 	cluster.Annotations[AnnotationSchedulerClusterID] = "5"
 	cluster.Annotations[AnnotationSchedulerClusterIDAuto] = "5"
 	registrar.schedulerID = 9
@@ -228,12 +231,12 @@ func TestReconcileAutoDBWipeUpdatesAnnotation(t *testing.T) {
 	if got := clusterStore.annotation(AnnotationSchedulerClusterID); got != "9" {
 		t.Errorf("annotation = %q, want updated 9", got)
 	}
-	if clusterStore.updateCount() != 2 {
-		t.Errorf("annotation updates = %d, want 2", clusterStore.updateCount())
+	if clusterStore.updateCount() != afterFirst+1 {
+		t.Errorf("Cluster updates = %d, want %d (one scheduler ID rewrite)", clusterStore.updateCount(), afterFirst+1)
 	}
-	control := store.object("fleet-default/c1-control")
-	if got := valueAtPath(t, helmValues(t, control), "scheduler", "config", "manager", "schedulerClusterID"); got != int64(9) {
-		t.Errorf("control schedulerClusterID = %v, want 9", got)
+	control := store.object("fleet-default/" + helmop.SharedControlName())
+	if got := valueAtPath(t, helmValues(t, control), "scheduler", "config", "manager", "schedulerClusterID"); got != helmop.SharedSchedulerClusterIDTemplate {
+		t.Errorf("control schedulerClusterID = %v, want Fleet template", got)
 	}
 	if got := clusterStore.condition(string(conditionIDMismatch)); got == nil || got.Status != corev1.ConditionFalse {
 		t.Errorf("IdMismatch condition = %+v, want False", got)
@@ -296,17 +299,16 @@ func TestReconcileAutoSetOnce(t *testing.T) {
 	if _, err := controller.reconcile("", cluster); err != nil {
 		t.Fatalf("reconcile(first) error = %v", err)
 	}
-	if clusterStore.updateCount() != 1 {
-		t.Fatalf("annotation updates = %d, want 1", clusterStore.updateCount())
-	}
+	afterFirst := clusterStore.updateCount()
 
+	clusterStore.deliver(cluster)
 	cluster.Annotations[AnnotationSchedulerClusterID] = "5"
 	cluster.Annotations[AnnotationSchedulerClusterIDAuto] = "5"
 	if _, err := controller.reconcile("", cluster); err != nil {
 		t.Fatalf("reconcile(second) error = %v", err)
 	}
-	if clusterStore.updateCount() != 1 {
-		t.Errorf("annotation updates = %d, want 1 (set-once)", clusterStore.updateCount())
+	if clusterStore.updateCount() != afterFirst {
+		t.Errorf("Cluster updates = %d, want %d (set-once)", clusterStore.updateCount(), afterFirst)
 	}
 	if got := clusterStore.annotation(AnnotationSchedulerClusterID); got != "5" {
 		t.Errorf("annotation = %q, want 5", got)
@@ -326,14 +328,16 @@ func TestReconcileRegistrationFailureKeepsManagerAndKeyDB(t *testing.T) {
 	if _, err := controller.reconcile("", cluster); !errors.Is(err, managerapi.ErrUnauthorized) {
 		t.Fatalf("reconcile() error = %v, want ErrUnauthorized", err)
 	}
-	for _, name := range []string{"c1-keydb", "c1-manager"} {
+	for _, name := range []string{helmop.SharedKeyDBName(), "c1-manager"} {
 		if !store.has("fleet-default/" + name) {
 			t.Errorf("%s HelmOp was not created", name)
 		}
 	}
-	for _, name := range []string{"c1-control", "c1-data"} {
-		if store.has("fleet-default/" + name) {
-			t.Errorf("%s HelmOp was created despite registration failure", name)
+	// Shared seed HelmOps exist independently of this Cluster's registration;
+	// only the per-cluster condition reflects the manager failure.
+	for _, name := range []string{helmop.SharedControlName(), helmop.SharedDataName()} {
+		if !store.has("fleet-default/" + name) {
+			t.Errorf("%s shared HelmOp is missing", name)
 		}
 	}
 	if got := clusterStore.condition(string(conditionRegistered)); got == nil || got.Status != corev1.ConditionFalse {
@@ -366,12 +370,12 @@ func TestReconcileRegistrationRetryCondition(t *testing.T) {
 	if _, err := controller.reconcile("", cluster); err == nil {
 		t.Fatal("reconcile() error = nil, want manager error")
 	}
-	if !store.has("fleet-default/c1-keydb") {
-		t.Error("KeyDB HelmOp was not created")
+	if !store.has("fleet-default/" + helmop.SharedKeyDBName()) {
+		t.Error("shared KeyDB HelmOp was not created")
 	}
-	for _, name := range []string{"c1-control", "c1-data"} {
-		if store.has("fleet-default/" + name) {
-			t.Errorf("%s HelmOp was created despite registration failure", name)
+	for _, name := range []string{helmop.SharedControlName(), helmop.SharedDataName()} {
+		if !store.has("fleet-default/" + name) {
+			t.Errorf("%s shared HelmOp is missing", name)
 		}
 	}
 	if got := clusterStore.condition(string(conditionRetrying)); got == nil || got.Status != corev1.ConditionTrue {
@@ -522,6 +526,25 @@ func (f *fakeClusterStore) UpdateStatus(cluster *provv1.Cluster) (*provv1.Cluste
 		f.cluster.Status = *cluster.Status.DeepCopy()
 	}
 	return f.cluster.DeepCopy(), nil
+}
+
+// deliver simulates the informer handing the reconciled Cluster back to the
+// controller, including the metadata stamped by the previous pass.
+func (f *fakeClusterStore) deliver(cluster *provv1.Cluster) {
+	f.mu.Lock()
+	defer f.mu.Unlock()
+	if f.cluster == nil {
+		return
+	}
+	cluster.Labels = map[string]string{}
+	for key, value := range f.cluster.Labels {
+		cluster.Labels[key] = value
+	}
+	cluster.Annotations = map[string]string{}
+	for key, value := range f.cluster.Annotations {
+		cluster.Annotations[key] = value
+	}
+	cluster.ResourceVersion = f.cluster.ResourceVersion
 }
 
 func (f *fakeClusterStore) annotation(key string) string {

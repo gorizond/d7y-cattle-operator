@@ -14,10 +14,32 @@ import (
 // schedulers and other peers; with hostNetwork they are bound on the node.
 // The Dragonfly chart has no separate advertise fields for dfdaemon.
 func Data(c Cluster) *fleetv1alpha1.HelmOp {
-	// DaemonSets use the same public scheduler front as bootstrap clients:
-	// the P2P client resolves this host to the public LB IP that is in the
-	// certificate SAN set, and Traefik passes TLS through to the scheduler.
-	schedulerAddr := fmt.Sprintf("%s:%d", c.SchedulerHost, SchedulerPublicPort)
+	names := ClusterNames(c.Name)
+	op := newHelmOp(DataName(c.Name), c, c.Chart, "data",
+		dataValues(c, names, schedulerAddr(c.SchedulerHost)),
+		[]string{names.Control, names.KeyDB, ExtrasName(c.Name)})
+	return withMTLS(op, c.MTLSSecretName)
+}
+
+// SharedData returns the shared seedClient/client HelmOp. The scheduler host
+// and scheduler cluster ID are per-target Fleet templates.
+func SharedData(c Cluster) *fleetv1alpha1.HelmOp {
+	c = sharedCluster(c)
+	names := SharedNames()
+	op := newSharedHelmOp(SharedDataName(), TargetNamespace, c, c.Chart, "data",
+		dataValues(c, names, schedulerAddr(c.SchedulerHost)),
+		[]string{SharedControlName(), SharedKeyDBName(), SharedExtrasName()}, SharedSelector())
+	return withMTLS(op, c.MTLSSecretName)
+}
+
+// schedulerAddr is the public scheduler front used by DaemonSets: the P2P
+// client resolves this host to the public LB IP that is in the certificate SAN
+// set, and Traefik passes TLS through to the scheduler.
+func schedulerAddr(host string) string {
+	return fmt.Sprintf("%s:%d", host, SchedulerPublicPort)
+}
+
+func dataValues(c Cluster, names Names, schedulerAddr string) map[string]any {
 	seedClient := map[string]any{
 		"enable":      true,
 		"hostNetwork": true,
@@ -35,7 +57,7 @@ func Data(c Cluster) *fleetv1alpha1.HelmOp {
 		"persistence": map[string]any{"enable": false},
 		"dynconfig":   map[string]any{"scheduler": map[string]any{"addr": schedulerAddr}},
 		"config": map[string]any{
-			"host":      map[string]any{"schedulerClusterID": c.SchedulerClusterID},
+			"host":      map[string]any{"schedulerClusterID": schedulerClusterIDValue(c)},
 			"scheduler": tlsPaths(),
 			"upload":    uploadConfig(4100, c.P2PDataTLS),
 			"download":  map[string]any{"server": map[string]any{"requestRateLimit": 500}},
@@ -69,7 +91,7 @@ func Data(c Cluster) *fleetv1alpha1.HelmOp {
 		},
 		"dynconfig": map[string]any{"scheduler": map[string]any{"addr": schedulerAddr}},
 		"config": map[string]any{
-			"host":      map[string]any{"schedulerClusterID": c.SchedulerClusterID},
+			"host":      map[string]any{"schedulerClusterID": schedulerClusterIDValue(c)},
 			"scheduler": tlsPaths(),
 			"upload":    uploadConfig(4000, c.P2PDataTLS),
 			"download":  map[string]any{"server": map[string]any{"requestRateLimit": 500}},
@@ -104,7 +126,7 @@ func Data(c Cluster) *fleetv1alpha1.HelmOp {
 	}
 
 	values := map[string]any{
-		"fullnameOverride": DataName(c.Name),
+		"fullnameOverride": names.Data,
 		"manager":          map[string]any{"enable": false},
 		"externalManager":  map[string]any{"host": ""},
 		"mysql":            map[string]any{"enable": false},
@@ -116,9 +138,7 @@ func Data(c Cluster) *fleetv1alpha1.HelmOp {
 	// The extras release owns the public scheduler TCP route used by the local
 	// dynconfig, so data waits for it before starting clients.
 	applyMonitoring(values, c.Monitoring)
-	op := newHelmOp(DataName(c.Name), c, c.Chart, "data", values,
-		[]string{ControlName(c.Name), KeyDBName(c.Name), ExtrasName(c.Name)})
-	return withMTLS(op, c.MTLSSecretName)
+	return values
 }
 
 // proxyRules must render as a YAML sequence: dfdaemon rejects a map form with

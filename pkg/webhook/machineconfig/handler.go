@@ -26,7 +26,7 @@ const (
 	MachineConfigGroup   = "rke-machine-config.cattle.io"
 	MachineConfigVersion = "v1"
 
-	LabelEnabled               = "p2p-dragonfly-io"
+	LabelEnabled               = "d7y-operator-cattle"
 	AnnotationSeed             = "p2p.dragonfly.io/seed"
 	AnnotationSchedulerCluster = "p2p.dragonfly.io/scheduler-cluster-id"
 	AnnotationCluster          = "p2p.dragonfly.io/cluster"
