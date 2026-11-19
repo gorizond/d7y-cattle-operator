@@ -123,6 +123,10 @@ const (
 	// the proxy Service. External-Harbor clusters keep the chart default
 	// (proxy.publicURL + /api/convert).
 	SharedProxyWebhookAddressTemplate = `${ if and (eq (index .ClusterLabels "d7y-operator-harbor") "true") (eq (index .ClusterAnnotations "p2p.dragonfly.io/harbor-url") "") }http://${ .ClusterName }-registry-proxy.dragonfly-system.svc:8080/api/convert${ end }`
+	// SharedManagerIngressEnabledTemplate gates the manager ingress per target:
+	// true only when the Cluster carries the manager role label. It must render
+	// to a bare YAML bool; a quoted "false" would be truthy in Helm.
+	SharedManagerIngressEnabledTemplate = `${ if eq (index .ClusterLabels "` + LabelRoleManager + `") "true" }true${ else }false${ end }`
 	// SharedHarborDomainTemplate resolves the per-target Harbor ingress host.
 	SharedHarborDomainTemplate = `${ index .ClusterAnnotations "p2p.dragonfly.io/harbor-domain" }`
 	// SharedHarborTLSSecretTemplate resolves the per-target Harbor ingress TLS

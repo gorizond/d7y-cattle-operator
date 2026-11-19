@@ -29,8 +29,8 @@ func TestSharedExtrasTemplatedManagerBackends(t *testing.T) {
 	}
 
 	values := helmValues(t, extras)
-	if got := valueAtPath(t, values, "ingress", "enabled"); got != true {
-		t.Errorf("ingress.enabled = %v", got)
+	if got := valueAtPath(t, values, "ingress", "enabled"); got != helmop.SharedManagerIngressEnabledTemplate {
+		t.Errorf("ingress.enabled = %v, want the manager-label template", got)
 	}
 	if got := valueAtPath(t, values, "ingress", "grpc", "host"); got != "grpc.example.com" {
 		t.Errorf("ingress.grpc.host = %v", got)
