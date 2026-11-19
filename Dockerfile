@@ -14,7 +14,7 @@ RUN apk add --no-cache ca-certificates curl \
     && install -m 0755 /tmp/nydus-static/nydusify /tmp/nydus-static/nydus-image /usr/local/bin/ \
     && rm -rf /tmp/nydus.tgz /tmp/nydus-static
 
-FROM golang:1.26-alpine AS build
+FROM golang:1.27-alpine AS build
 WORKDIR /src
 COPY go.mod go.sum ./
 RUN go mod download

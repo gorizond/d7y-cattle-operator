@@ -11,6 +11,23 @@ jobs:
     steps:
       - uses: actions/checkout@v4
 
+      # The test and release jobs build from the Dockerfile; there is no
+      # separate setup-go step. Keep its builder image in lockstep with go.mod
+      # so a dependency bump cannot ship an image that cannot run go mod
+      # download (the 0.1.56 failure: go.mod 1.27.0, builder 1.26).
+      - name: Check Go toolchain matches go.mod
+        run: |
+          go_version="$(sed -n 's/^go \([0-9][0-9]*\.[0-9][0-9]*\).*/\1/p' go.mod | head -1)"
+          image_version="$(sed -n 's/^FROM golang:\([0-9][0-9]*\.[0-9][0-9]*\)-alpine.*/\1/p' Dockerfile | head -1)"
+          if [ -z "$go_version" ] || [ -z "$image_version" ]; then
+            echo "could not read the Go version from go.mod or the Dockerfile" >&2
+            exit 1
+          fi
+          if [ "$go_version" != "$image_version" ]; then
+            echo "Dockerfile golang:$image_version does not match go.mod go $go_version" >&2
+            exit 1
+          fi
+
       - name: Build test image
         run: docker build --target test -t d7y-cattle-operator:test .
 
