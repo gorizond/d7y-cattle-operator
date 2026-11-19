@@ -166,7 +166,7 @@ matching role label must also be present for Fleet to render the shared release.
 | Label | Value | Meaning |
 |---|---|---|
 | `d7y-operator-cattle` | `"true"` | Gate: opts the Cluster into the Dragonfly stack |
-| `d7y-operator-manager` | `"true"` | Manager role (per-cluster `<cluster>-manager`) |
+| `d7y-operator-manager` | `"true"` | Manager role (shared `d7y-manager`) |
 | `d7y-operator-seed` | `"true"` | Seed role (shared control/data/extras/mirror) |
 | `d7y-operator-proxy` | `"true"` | Registry proxy role (per-cluster) |
 | `d7y-operator-harbor` | `"true"` | Harbor role (per-cluster) |
@@ -184,9 +184,9 @@ The role annotations and matching labels add:
 | Roles | HelmOps |
 |---|---|
 | gate only | `d7y-keydb` |
-| `manager: "true"` | `d7y-keydb`, `<cluster>-manager` |
+| `manager: "true"` | `d7y-keydb`, `d7y-manager` |
 | `seed: "true"` + scheduler ID | `d7y-keydb`, `d7y-control`, `d7y-data`, `d7y-extras`, `d7y-containerd-mirror` |
-| manager + seed | shared seed set + `<cluster>-manager` |
+| manager + seed | shared seed set + `d7y-manager` |
 | `proxy: "true"` | `<cluster>-registry-proxy` only (external `harbor-url` allowed) |
 | `harbor: "true"` | `<cluster>-harbor` |
 | `admission: "true"` | `d7y-admission` |
@@ -206,6 +206,7 @@ templates.
 | HelmOp / release | Component | Selector |
 |---|---|---|
 | `d7y-keydb` | KeyDB | `d7y-operator-cattle=true` |
+| `d7y-manager` | manager + MySQL | `d7y-operator-cattle=true`, `d7y-operator-manager=true` |
 | `d7y-control` | scheduler | `d7y-operator-cattle=true`, `d7y-operator-seed=true` |
 | `d7y-data` | seedClient + client | same as control |
 | `d7y-extras` | extras (public scheduler front, VPA, Ingress) | same as control |
@@ -214,8 +215,8 @@ templates.
 
 The rendered values keep the per-cluster downstream names:
 
-- `fullnameOverride`: `${ .ClusterName }-keydb`, `${ .ClusterName }-control`,
-  `${ .ClusterName }-data`
+- `fullnameOverride`: `${ .ClusterName }` (manager), `${ .ClusterName }-keydb`,
+  `${ .ClusterName }-control`, `${ .ClusterName }-data`
 - Ingress/VPA backends: `${ .ClusterName }-manager`,
   `${ .ClusterName }-control-scheduler`, `${ .ClusterName }-data-seed-client`
 - Scheduler public host:
@@ -224,15 +225,15 @@ The rendered values keep the per-cluster downstream names:
   `${ index .ClusterAnnotations "p2p.dragonfly.io/scheduler-cluster-id" }` and
   `${ index .ClusterAnnotations "p2p.dragonfly.io/scheduler-public-ip" }`
 
-The manager, Harbor, and registry-proxy HelmOps stay per cluster: Harbor and
-the proxy need per-cluster Secret names, and Harbor needs ClusterIP host
-aliases that Fleet cannot template. When a Cluster stops matching a selector,
-Fleet deletes its BundleDeployment and uninstalls the release.
+Harbor and the registry-proxy HelmOps stay per cluster: they need per-cluster
+Secret names, and Harbor needs ClusterIP host aliases that Fleet cannot
+template. When a Cluster stops matching a selector, Fleet deletes its
+BundleDeployment and uninstalls the release.
 
-Legacy per-cluster objects (`<cluster>-keydb`, `<cluster>-control`,
-`<cluster>-data`, `<cluster>-extras`, `<cluster>-containerd-mirror`,
-`<cluster>-admission-webhook`) are deleted, HelmOp and Bundle, once the
-corresponding shared HelmOp has been applied.
+Legacy per-cluster objects (`<cluster>-keydb`, `<cluster>-manager`,
+`<cluster>-control`, `<cluster>-data`, `<cluster>-extras`,
+`<cluster>-containerd-mirror`, `<cluster>-admission-webhook`) are deleted,
+HelmOp and Bundle, once the corresponding shared HelmOp has been applied.
 
 Existing annotation-driven Clusters must add the matching role label (for
 example `d7y-operator-seed: "true"` next to `p2p.dragonfly.io/seed: "true"`):
@@ -444,12 +445,12 @@ DaemonSets may run on the same node, seedClient ports are shifted to
 All releases target `dragonfly-system` and depend on each other through
 `spec.dependsOn`: the shared control depends on shared KeyDB, shared data
 depends on shared control, KeyDB, and extras (which owns the public scheduler
-TCP front), the shared mirror depends on shared data, and the per-cluster
-manager depends on shared KeyDB. Shared extras has no dependency because the
-per-cluster manager name is not templatable. The mTLS Secret and the
-manager credentials Secret (names via `mtlsSecretName` and
-`managerApiCredentialsSecret`) are copied into the Cluster namespace and
-delivered downstream through Fleet `spec.downstreamResources`.
+TCP front), the shared mirror depends on shared data, and the shared manager
+depends on shared KeyDB. Shared extras has no dependency because the manager
+name is templated. The mTLS Secret and the manager credentials Secret (names
+via `mtlsSecretName` and `managerApiCredentialsSecret`) are copied into the
+HelmOp namespace and delivered downstream through Fleet
+`spec.downstreamResources`.
 
 ### Extras chart
 
@@ -780,8 +781,8 @@ scheduler control TLS and leaves upload plaintext, matching the cluster default.
 The manager credentials Secret (`managerApiCredentialsSecret`) is the source of
 truth for both the operator's manager REST sign-in and the manager's initial
 root account. The operator ensures the Secret in its own namespace, then copies
-it to each manager Cluster (HelmOp) namespace so Fleet can deliver it into
-`dragonfly-system`.
+it into the shared manager HelmOp namespace so Fleet can deliver it into
+`dragonfly-system` on every manager-labeled Cluster.
 
 | Key | Meaning | Operator behaviour |
 |---|---|---|

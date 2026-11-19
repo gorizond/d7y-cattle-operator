@@ -328,7 +328,7 @@ func TestReconcileRegistrationFailureKeepsManagerAndKeyDB(t *testing.T) {
 	if _, err := controller.reconcile("", cluster); !errors.Is(err, managerapi.ErrUnauthorized) {
 		t.Fatalf("reconcile() error = %v, want ErrUnauthorized", err)
 	}
-	for _, name := range []string{helmop.SharedKeyDBName(), "c1-manager"} {
+	for _, name := range []string{helmop.SharedKeyDBName(), helmop.SharedManagerName()} {
 		if !store.has("fleet-default/" + name) {
 			t.Errorf("%s HelmOp was not created", name)
 		}
