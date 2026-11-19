@@ -1,9 +1,11 @@
 package cluster
 
 import (
+	"bytes"
 	"crypto/x509"
 	"errors"
 	"net"
+	"slices"
 	"testing"
 
 	corev1 "k8s.io/api/core/v1"
@@ -62,13 +64,53 @@ func TestEnsureMTLSCertificateResolvesHostAndSANs(t *testing.T) {
 		t.Fatalf("parse certificate: %v", err)
 	}
 	leaf := certs[0]
-	for _, want := range []string{"grpc.example.com", "manager-api.example.com"} {
+	for _, want := range []string{
+		"grpc.example.com",
+		"manager-api.example.com",
+		"d7y-scheduler.c-m-test.example.com",
+	} {
 		if !containsString(leaf.DNSNames, want) {
 			t.Errorf("leaf DNS SANs %v do not contain %q", leaf.DNSNames, want)
 		}
 	}
 	if certHasIP(leaf.IPAddresses, "10.42.0.1") {
 		t.Error("leaf contains a node IP")
+	}
+}
+
+func TestEnsureMTLSCertificateKeepsOtherSchedulerHosts(t *testing.T) {
+	controller, _, _ := newTestController(t)
+
+	clusterA := testSeedCluster("42")
+	clusterA.Name = "seed-a"
+	clusterA.Status.ClusterName = "c-m-a"
+	if _, err := controller.reconcile("", clusterA); err != nil {
+		t.Fatalf("reconcile(seed A) error = %v", err)
+	}
+
+	clusterB := testSeedCluster("42")
+	clusterB.Name = "seed-b"
+	clusterB.Status.ClusterName = "c-m-b"
+	if _, err := controller.reconcile("", clusterB); err != nil {
+		t.Fatalf("reconcile(seed B) error = %v", err)
+	}
+
+	leaf := firstCertificate(t, certPEM(t, controller))
+	for _, want := range []string{
+		"d7y-scheduler.c-m-a.example.com",
+		"d7y-scheduler.c-m-b.example.com",
+	} {
+		if !slices.Contains(leaf.DNSNames, want) {
+			t.Errorf("leaf DNS SANs %v do not contain %q", leaf.DNSNames, want)
+		}
+	}
+
+	stable := certPEM(t, controller)
+	if _, err := controller.reconcile("", clusterB); err != nil {
+		t.Fatalf("stable reconcile(seed B) error = %v", err)
+	}
+	if got := certPEM(t, controller); !bytes.Equal(got, stable) {
+		t.Error("certificate rotated when the scheduler SAN set was unchanged")
 	}
 }
 

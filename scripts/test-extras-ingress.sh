@@ -144,6 +144,23 @@ echo "$scheduler_route" | grep -q 'port: 8002' || fail "scheduler backend port m
 echo "$scheduler_route" | grep -q 'passthrough: true' || fail "scheduler TLS passthrough missing"
 echo "$scheduler_route" | grep -q 'external-dns.alpha.kubernetes.io/hostname: "d7y-scheduler.c-m-example.example.com"' || fail "scheduler external-dns hostname missing"
 echo "$scheduler_route" | grep -q 'external-dns.alpha.kubernetes.io/target: "203.0.113.10"' || fail "scheduler external-dns target missing"
+
+# Fleet renders unquoted numeric cluster IDs as numbers, not strings. The alias
+# must format them without fmt's %!s(...) marker.
+helm template e "$extras" --namespace dragonfly-system \
+  --set ingress.enabled=false \
+  --set ingress.controller=traefik \
+  --set ingress.className=traefik \
+  --set scheduler.enabled=true \
+  --set scheduler.publicIP=203.0.113.10 \
+  --set scheduler.clusterID=2 \
+  --set scheduler.domain=example.com \
+  --set scheduler.service=c1-control-scheduler \
+  --set scheduler.port=8002 \
+  --api-versions traefik.io/v1alpha1 \
+  --show-only templates/ingressroute-scheduler-tcp.yaml >"$tmp/scheduler-numeric.yaml"
+grep -q 'external-dns.alpha.kubernetes.io/hostname: "d7y-scheduler.2.example.com"' "$tmp/scheduler-numeric.yaml" || fail "numeric scheduler clusterID must render the external-dns hostname"
+if grep -q '%!' "$tmp/scheduler-numeric.yaml"; then fail "scheduler external-dns alias contains a fmt error marker"; fi
 if echo "$scheduler_route" | grep -q 'secretName:'; then fail "scheduler passthrough must not reference a TLS Secret"; fi
 if grep -q 'name: e-scheduler' "$tmp/scheduler-tcp.yaml" && grep -q 'kind: TLSOption' "$tmp/scheduler-tcp.yaml"; then
   fail "scheduler passthrough must not render a TLSOption"
