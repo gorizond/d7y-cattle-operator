@@ -4,7 +4,6 @@ import (
 	"bytes"
 	"context"
 	"encoding/json"
-	"errors"
 	"fmt"
 	"io"
 	"net/http"
@@ -192,12 +191,20 @@ func TestHarborBackendCopiesOnManifestMiss(t *testing.T) {
 	manager.Start(ctx)
 	backend := &HarborBackend{Source: source, Mirror: mirror, MirrorProject: "mirror", Jobs: manager}
 
-	if _, err := backend.GetManifest(ctx, "docker.io", "library/nginx", "1.27"); !errors.Is(err, ErrConverting) {
-		t.Fatalf("first GetManifest() error = %v, want ErrConverting", err)
+	first, err := backend.GetManifest(ctx, "docker.io", "library/nginx", "1.27")
+	if err != nil {
+		t.Fatalf("first GetManifest() error = %v, want the source OCI manifest", err)
+	}
+	if first.Digest == "" || first.MediaType == "" {
+		t.Errorf("first GetManifest() = %+v, want a non-empty source manifest", first)
 	}
 	<-started
 	if state := manager.Pending(); state != 1 {
 		t.Errorf("pending jobs = %d, want 1", state)
+	}
+	jobKey := Job{Registry: "docker.io", Repository: "library/nginx", Reference: "1.27", Digest: "sha256:source"}.Key()
+	if state, ok := manager.State(jobKey); !ok || (state.State != "pending" && state.State != "converting") {
+		t.Errorf("conversion state = %+v (exists=%t), want pending or converting", state, ok)
 	}
 	close(release)
 	waitState(t, manager, Job{Registry: "docker.io", Repository: "library/nginx", Reference: "1.27", Digest: "sha256:source"}.Key(), "ready")

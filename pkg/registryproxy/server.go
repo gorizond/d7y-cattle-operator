@@ -28,9 +28,9 @@ type Backend interface {
 // detached from it.
 const backendTimeout = 2 * time.Minute
 
-// ErrConverting tells the client that the mirror copy/conversion job is still
-// running. The server answers 503 with Retry-After; a later retry sees the
-// nydus index.
+// ErrConverting is retained for the 503/Retry-After handler. The read path no
+// longer returns it: a first pull serves the source OCI manifest and the
+// mirror copy/conversion runs in the background.
 var ErrConverting = errors.New("registry mirror conversion in progress")
 
 // conversionRetryDelay throttles automatic retries after a failed conversion
@@ -83,10 +83,10 @@ func (b *HarborBackend) GetManifest(ctx context.Context, registry, repo, ref str
 		if manifest, err := b.Mirror.GetManifest(ctx, b.mirrorRepo(registry, repo), ref); err == nil {
 			// A converted tag whose nydus source reference still points at
 			// the upstream registry (older conversion or changed proxy host)
-			// is reconverted instead of serving a broken nydus index.
-			if b.needsFreshConversion(manifest, registry, repo, ref) &&
-				b.enqueueTagConversion(manifest, registry, repo, ref, "stale-source") {
-				return Manifest{}, ErrConverting
+			// is reconverted in the background; the existing mirror manifest
+			// is served meanwhile.
+			if b.needsFreshConversion(manifest, registry, repo, ref) {
+				b.enqueueTagConversion(manifest, registry, repo, ref, "stale-source")
 			}
 			return manifest, nil
 		}
@@ -98,23 +98,21 @@ func (b *HarborBackend) GetManifest(ctx context.Context, registry, repo, ref str
 	if err != nil {
 		return Manifest{}, fmt.Errorf("read source manifest %s/%s:%s: %w", registry, repo, ref, err)
 	}
-	// Copy-on-read: the first pull of a tag starts the mirror copy and nydus
-	// conversion once the source manifest is resolved. While it runs, answer
-	// 503/Retry-After instead of returning a plain OCI manifest that nydus
-	// would skip. Digest refs cannot get a nydus index under the same
-	// reference, so they keep the source OCI manifest and never enqueue.
+	// Copy-on-read: the first pull of a tag returns the source OCI manifest
+	// immediately and starts the mirror copy and nydus conversion in the
+	// background. A later pull of the same tag finds the mirror nydus index.
+	// Digest refs cannot get a nydus index under the same reference, so they
+	// keep the source OCI manifest and never enqueue.
 	if b.Jobs == nil || strings.HasPrefix(ref, "sha256:") {
 		return manifest, nil
 	}
-	if b.enqueueTagConversion(manifest, registry, repo, ref, "pull") {
-		return Manifest{}, ErrConverting
-	}
+	b.enqueueTagConversion(manifest, registry, repo, ref, "pull")
 	return manifest, nil
 }
 
 // enqueueTagConversion starts (or observes) a tag conversion and reports
-// whether the caller should answer ErrConverting. A failed conversion serves
-// the source OCI manifest and retries in the background at most once per
+// whether a conversion is pending. Callers serve the source OCI manifest
+// regardless. A failed conversion retries in the background at most once per
 // cooldown.
 func (b *HarborBackend) enqueueTagConversion(manifest Manifest, registry, repo, ref, trigger string) bool {
 	if b.Jobs == nil || strings.HasPrefix(ref, "sha256:") {
