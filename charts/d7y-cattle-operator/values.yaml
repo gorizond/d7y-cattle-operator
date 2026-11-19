@@ -19,7 +19,10 @@ rbac:
 # Secret holding the CA and leaf certificate shared with Dragonfly.
 mtlsSecretName: dragonfly-p2p-mtls
 
-# Secret with manager REST API credentials (keys: username, password).
+# Secret with manager REST API credentials. The operator creates it in its own
+# namespace when absent (keys: username, password, jwt-key) and feeds the
+# password and JWT key to the manager. No secret values are rendered as chart
+# values.
 managerApiCredentialsSecret: ""
 
 manager:

@@ -140,12 +140,16 @@ type Cluster struct {
 	OperatorImageRepository string
 	OperatorImageTag        string
 
-	ManagerGRPCDomain  string
-	ManagerGRPCPort    int
-	ManagerAPIHost     string
-	SchedulerClusterID int
-	SchedulerReplicas  string
-	SeedClientReplicas string
+	ManagerGRPCDomain string
+	ManagerGRPCPort   int
+	ManagerAPIHost    string
+	// ManagerAPICredentialsSecret holds the manager root password and JWT
+	// signing key. The operator creates it in its own namespace and replicates
+	// it to the HelmOp namespace for Fleet to copy downstream.
+	ManagerAPICredentialsSecret string
+	SchedulerClusterID          int
+	SchedulerReplicas           string
+	SeedClientReplicas          string
 	// SchedulerPublicIP is the currently resolved public scheduler address
 	// used as the scheduler advertiseIP and the external-dns target.
 	SchedulerPublicIP string

@@ -8,27 +8,28 @@ import (
 
 func testCluster() Cluster {
 	return Cluster{
-		Name:               "c1",
-		Namespace:          "fleet-default",
-		MTLSSecretName:     "dragonfly-p2p-mtls",
-		Chart:              Chart{Repo: "https://charts.example.com", Name: "dragonfly", Version: "1.10.1-patch.2"},
-		ExtrasChart:        Chart{Repo: "https://charts.example.com", Name: "dragonfly-extras", Version: "0.1.8"},
-		MirrorChart:        Chart{Repo: "https://charts.example.com", Name: "containerd-mirror", Version: "0.1.0"},
-		HarborChart:        Chart{Repo: "https://helm.example.com", Name: "harbor", Version: "1.19.4"},
-		RegistryProxyChart: Chart{Repo: "https://charts.example.com", Name: "registry-proxy", Version: "0.1.11"},
-		HarborDomain:       "harbor.example.com",
-		HarborAdminSecret:  "c1-harbor-admin",
-		ProxyRegistries:    []string{"docker.io"},
-		ManagerGRPCDomain:  "grpc.example.com",
-		ManagerGRPCPort:    ManagerGRPCEdgePort,
-		ManagerAPIHost:     "api.example.com",
-		SchedulerClusterID: 42,
-		SchedulerReplicas:  ReplicasTemplate("p2p.dragonfly.io/scheduler-replicas"),
-		SeedClientReplicas: ReplicasTemplate("p2p.dragonfly.io/seedclient-replicas"),
-		SchedulerPublicIP:  "203.0.113.10",
-		SchedulerHost:      "d7y-scheduler.c-m-test.example.com",
-		MTLSCertRevision:   "rev1",
-		Labels:             map[string]string{"app.kubernetes.io/managed-by": "d7y-cattle-operator"},
+		Name:                        "c1",
+		Namespace:                   "fleet-default",
+		MTLSSecretName:              "dragonfly-p2p-mtls",
+		Chart:                       Chart{Repo: "https://charts.example.com", Name: "dragonfly", Version: "1.10.1-patch.2"},
+		ExtrasChart:                 Chart{Repo: "https://charts.example.com", Name: "dragonfly-extras", Version: "0.1.8"},
+		MirrorChart:                 Chart{Repo: "https://charts.example.com", Name: "containerd-mirror", Version: "0.1.0"},
+		HarborChart:                 Chart{Repo: "https://helm.example.com", Name: "harbor", Version: "1.19.4"},
+		RegistryProxyChart:          Chart{Repo: "https://charts.example.com", Name: "registry-proxy", Version: "0.1.11"},
+		HarborDomain:                "harbor.example.com",
+		HarborAdminSecret:           "c1-harbor-admin",
+		ProxyRegistries:             []string{"docker.io"},
+		ManagerGRPCDomain:           "grpc.example.com",
+		ManagerGRPCPort:             ManagerGRPCEdgePort,
+		ManagerAPIHost:              "api.example.com",
+		ManagerAPICredentialsSecret: "dragonfly-manager-api",
+		SchedulerClusterID:          42,
+		SchedulerReplicas:           ReplicasTemplate("p2p.dragonfly.io/scheduler-replicas"),
+		SeedClientReplicas:          ReplicasTemplate("p2p.dragonfly.io/seedclient-replicas"),
+		SchedulerPublicIP:           "203.0.113.10",
+		SchedulerHost:               "d7y-scheduler.c-m-test.example.com",
+		MTLSCertRevision:            "rev1",
+		Labels:                      map[string]string{"app.kubernetes.io/managed-by": "d7y-cattle-operator"},
 	}
 }
 
@@ -78,9 +79,11 @@ func TestManagerHelmOp(t *testing.T) {
 	if len(op.Spec.DependsOn) != 1 || op.Spec.DependsOn[0].Name != "c1-keydb" {
 		t.Errorf("dependsOn = %+v", op.Spec.DependsOn)
 	}
-	if len(op.Spec.DownstreamResources) != 1 ||
+	if len(op.Spec.DownstreamResources) != 2 ||
 		op.Spec.DownstreamResources[0].Kind != "Secret" ||
-		op.Spec.DownstreamResources[0].Name != "dragonfly-p2p-mtls" {
+		op.Spec.DownstreamResources[0].Name != "dragonfly-p2p-mtls" ||
+		op.Spec.DownstreamResources[1].Kind != "Secret" ||
+		op.Spec.DownstreamResources[1].Name != "dragonfly-manager-api" {
 		t.Errorf("downstreamResources = %+v", op.Spec.DownstreamResources)
 	}
 
@@ -101,6 +104,34 @@ func TestManagerHelmOp(t *testing.T) {
 	}
 	if got := valueAt(t, values, "manager", "enable"); got != true {
 		t.Errorf("manager.enable = %v", got)
+	}
+	envVars, ok := valueAt(t, values, "manager", "extraEnvVars").([]any)
+	if !ok || len(envVars) != 2 {
+		t.Fatalf("manager.extraEnvVars = %v, want two entries", valueAt(t, values, "manager", "extraEnvVars"))
+	}
+	wantEnvKeys := map[string]string{
+		"DRAGONFLY_INITIAL_ROOT_PASSWORD": "password",
+		"MANAGER_AUTH_JWT_KEY":            "jwt-key",
+	}
+	for _, raw := range envVars {
+		env, ok := raw.(map[string]any)
+		if !ok {
+			t.Fatalf("manager.extraEnvVars entry = %T, want map[string]any", raw)
+		}
+		name, _ := env["name"].(string)
+		wantKey, ok := wantEnvKeys[name]
+		if !ok {
+			t.Errorf("unexpected manager env var %q", name)
+			continue
+		}
+		ref := nested(t, env, "valueFrom", "secretKeyRef")
+		if ref["name"] != "dragonfly-manager-api" || ref["key"] != wantKey {
+			t.Errorf("%s secretKeyRef = %v", name, ref)
+		}
+		delete(wantEnvKeys, name)
+	}
+	if len(wantEnvKeys) != 0 {
+		t.Errorf("missing manager env vars: %v", wantEnvKeys)
 	}
 	if got := valueAt(t, values, "mysql", "enable"); got != true {
 		t.Errorf("mysql.enable = %v", got)
@@ -154,6 +185,21 @@ func TestManagerHelmOp(t *testing.T) {
 	}
 	if got := valueAt(t, values, "manager", "podAnnotations", certRevisionAnnotation); got != "rev1" {
 		t.Errorf("manager podAnnotations revision = %v", got)
+	}
+}
+
+func TestManagerHelmOpWithoutCredentialsSecret(t *testing.T) {
+	cluster := testCluster()
+	cluster.ManagerAPICredentialsSecret = ""
+	op := Manager(cluster)
+
+	if len(op.Spec.DownstreamResources) != 1 ||
+		op.Spec.DownstreamResources[0].Name != cluster.MTLSSecretName {
+		t.Errorf("downstreamResources = %+v, want only the mTLS Secret", op.Spec.DownstreamResources)
+	}
+	managerValues := nested(t, op.Spec.Helm.Values.Data, "manager")
+	if _, ok := managerValues["extraEnvVars"]; ok {
+		t.Errorf("manager.extraEnvVars = %v, want unset when the Secret name is empty", managerValues["extraEnvVars"])
 	}
 }
 
