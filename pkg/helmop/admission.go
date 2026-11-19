@@ -24,6 +24,12 @@ func Admission(c Cluster) *fleetv1alpha1.HelmOp {
 			"excludedNamespaces": excludedNamespaces,
 		},
 	}
+	if c.OperatorImageRepository != "" && c.OperatorImageTag != "" {
+		values["image"] = map[string]any{
+			"repository": c.OperatorImageRepository,
+			"tag":        c.OperatorImageTag,
+		}
+	}
 	op := newHelmOp(AdmissionName(c.Name), c, c.AdmissionChart, "admission-webhook", values, nil)
 	// The chart ships a cluster-scoped MutatingWebhookConfiguration, which
 	// Fleet refuses inside a targetNamespace. Install without one and let

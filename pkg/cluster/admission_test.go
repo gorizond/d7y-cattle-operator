@@ -189,6 +189,24 @@ func TestAdmissionHelmOpUsesIndependentChart(t *testing.T) {
 	}
 }
 
+func TestAdmissionHelmOpImageFromOperatorOptions(t *testing.T) {
+	controller, store, _ := newTestController(t)
+	controller.opts.OperatorImageRepository = "ghcr.io/gorizond/d7y-cattle-operator"
+	controller.opts.OperatorImageTag = "v0.1.43"
+	cluster := admissionCluster()
+
+	if _, err := controller.reconcile("", cluster); err != nil {
+		t.Fatalf("reconcile() error = %v", err)
+	}
+	values := helmValues(t, store.object("fleet-default/c1-admission-webhook"))
+	if got := valueAtPath(t, values, "image", "repository"); got != "ghcr.io/gorizond/d7y-cattle-operator" {
+		t.Errorf("image.repository = %v", got)
+	}
+	if got := valueAtPath(t, values, "image", "tag"); got != "v0.1.43" {
+		t.Errorf("image.tag = %v", got)
+	}
+}
+
 func fleetBundle(name, namespace string) *unstructured.Unstructured {
 	return &unstructured.Unstructured{Object: map[string]any{
 		"apiVersion": "fleet.cattle.io/v1alpha1",

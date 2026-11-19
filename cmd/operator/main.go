@@ -146,6 +146,8 @@ func run() error {
 		AdmissionImagePullSecret: cfg.AdmissionImagePullSecret,
 		AdmissionServiceAccount:  cfg.AdmissionServiceAccount,
 		AdmissionNetworkOnly:     cfg.AdmissionNetworkOnly,
+		OperatorImageRepository:  cfg.OperatorImageRepository,
+		OperatorImageTag:         cfg.OperatorImageTag,
 		ExtrasIngressController:  cfg.ExtrasIngressController,
 		ExtrasIngressClassName:   cfg.ExtrasIngressClassName,
 		ExtrasIngressGRPCEnabled: cfg.ExtrasIngressGRPCEnabled,

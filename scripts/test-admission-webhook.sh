@@ -132,4 +132,30 @@ helm template c1-admission-webhook "$chart" --namespace dragonfly-system \
 grep -q 'proxy-pull' "$tmp/inject.yaml" || fail "imagePullSecret value is missing"
 grep -q 'proxy-sa' "$tmp/inject.yaml" || fail "serviceAccountName value is missing"
 
+# The operator chart exposes its own effective image to the process so the
+# admission webhook can run the same binary.
+operator_chart="$root/charts/d7y-cattle-operator"
+operator_version="$(awk '/^version:/{print $2; exit}' "$operator_chart/Chart.yaml")"
+helm template d7y-cattle-operator "$operator_chart" \
+  --show-only templates/deployment.yaml >"$tmp/operator.yaml"
+grep -q 'name: OPERATOR_IMAGE_REPOSITORY' "$tmp/operator.yaml" || \
+  fail "operator chart does not expose OPERATOR_IMAGE_REPOSITORY"
+grep -q 'name: OPERATOR_IMAGE_TAG' "$tmp/operator.yaml" || \
+  fail "operator chart does not expose OPERATOR_IMAGE_TAG"
+grep -q 'value: "ghcr.io/gorizond/d7y-cattle-operator"' "$tmp/operator.yaml" || \
+  fail "operator image repository env is not sourced from values"
+grep -q "value: \"v$operator_version\"" "$tmp/operator.yaml" || \
+  fail "operator image tag env does not default to v$operator_version"
+
+# An explicit image.tag must win over the chart appVersion fallback.
+admission_app_version="$(awk '/^appVersion:/{gsub(/"/,"",$2); print $2; exit}' "$chart/Chart.yaml")"
+helm template c1-admission-webhook "$chart" --namespace dragonfly-system \
+  --set proxy.domain=proxy.example.test --set image.tag=v9.9.9 \
+  --show-only templates/deployment.yaml >"$tmp/admission-image.yaml"
+grep -q 'image: "ghcr.io/gorizond/d7y-cattle-operator:v9.9.9"' "$tmp/admission-image.yaml" || \
+  fail "explicit admission image.tag is not used"
+if grep -q "v$admission_app_version" "$tmp/admission-image.yaml"; then
+  fail "admission image still falls back to the chart appVersion"
+fi
+
 echo "admission-webhook render checks passed"

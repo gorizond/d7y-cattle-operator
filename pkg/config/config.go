@@ -67,6 +67,8 @@ type Config struct {
 	ClusterIDFallback           string
 	NginxStaticURL              string
 	NydusMirrorURL              string
+	OperatorImageRepository     string
+	OperatorImageTag            string
 	MTLSSecretName              string
 	ManagerAPICredentialsSecret string
 	DragonflyChartRepo          string
@@ -149,6 +151,8 @@ func Load(args []string) (*Config, error) {
 	fs.StringVar(&cfg.ClusterIDFallback, "p2p-cluster-id", envOr("P2P_CLUSTER_ID", ""), "fallback cluster ID when provisioning Cluster status.clusterName is empty")
 	fs.StringVar(&cfg.NginxStaticURL, "nginx-static-url", envOr("NGINX_STATIC_URL", ""), "base URL of the static asset server (http or https)")
 	fs.StringVar(&cfg.NydusMirrorURL, "nydus-mirror-url", envOr("NYDUS_MIRROR_URL", ""), "optional HTTPS mirror path for nydus blobs (for example https://proxy.example.test/docker.io)")
+	fs.StringVar(&cfg.OperatorImageRepository, "operator-image-repository", envOr("OPERATOR_IMAGE_REPOSITORY", ""), "operator image repository passed to the admission webhook")
+	fs.StringVar(&cfg.OperatorImageTag, "operator-image-tag", envOr("OPERATOR_IMAGE_TAG", ""), "operator image tag passed to the admission webhook")
 	fs.StringVar(&cfg.MTLSSecretName, "mtls-secret-name", envOr("MTLS_SECRET_NAME", DefaultMTLSSecretName), "name of the mTLS Secret")
 	fs.StringVar(&cfg.ManagerAPICredentialsSecret, "manager-api-credentials-secret", envOr("MANAGER_API_CREDENTIALS_SECRET", ""), "name of the Secret holding manager API credentials")
 	fs.StringVar(&cfg.DragonflyChartRepo, "dragonfly-chart-repo", envOr("DRAGONFLY_CHART_REPO", DefaultDragonflyChartRepo), "Helm repository URL of the Dragonfly chart")

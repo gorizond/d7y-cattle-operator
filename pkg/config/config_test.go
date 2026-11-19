@@ -13,6 +13,8 @@ var envKeys = []string{
 	"P2P_CLUSTER_ID",
 	"NGINX_STATIC_URL",
 	"NYDUS_MIRROR_URL",
+	"OPERATOR_IMAGE_REPOSITORY",
+	"OPERATOR_IMAGE_TAG",
 	"MTLS_SECRET_NAME",
 	"MANAGER_API_CREDENTIALS_SECRET",
 	"DRAGONFLY_CHART_REPO",
@@ -86,6 +88,9 @@ func TestLoadDefaults(t *testing.T) {
 	}
 	if cfg.MTLSSecretName != DefaultMTLSSecretName {
 		t.Errorf("MTLSSecretName = %q, want %q", cfg.MTLSSecretName, DefaultMTLSSecretName)
+	}
+	if cfg.OperatorImageRepository != "" || cfg.OperatorImageTag != "" {
+		t.Errorf("operator image defaults = %q/%q, want empty", cfg.OperatorImageRepository, cfg.OperatorImageTag)
 	}
 	if cfg.DragonflyChartRepo != DefaultDragonflyChartRepo {
 		t.Errorf("DragonflyChartRepo = %q, want %q", cfg.DragonflyChartRepo, DefaultDragonflyChartRepo)
@@ -279,6 +284,8 @@ func TestLoadEnvOverride(t *testing.T) {
 	t.Setenv("P2P_CLUSTER_ID", "c-m-env")
 	t.Setenv("NGINX_STATIC_URL", "http://static.env.example.com")
 	t.Setenv("NYDUS_MIRROR_URL", "https://proxy.env.example.com/docker.io")
+	t.Setenv("OPERATOR_IMAGE_REPOSITORY", "ghcr.io/example/d7y-cattle-operator")
+	t.Setenv("OPERATOR_IMAGE_TAG", "v9.9.9")
 	t.Setenv("MTLS_SECRET_NAME", "env-mtls")
 	t.Setenv("MANAGER_API_CREDENTIALS_SECRET", "env-credentials")
 	t.Setenv("DRAGONFLY_CHART_REPO", "https://charts.env.example.com")
@@ -327,6 +334,9 @@ func TestLoadEnvOverride(t *testing.T) {
 	}
 	if cfg.NydusMirrorURL != "https://proxy.env.example.com/docker.io" {
 		t.Errorf("NydusMirrorURL = %q", cfg.NydusMirrorURL)
+	}
+	if cfg.OperatorImageRepository != "ghcr.io/example/d7y-cattle-operator" || cfg.OperatorImageTag != "v9.9.9" {
+		t.Errorf("operator image = %q/%q", cfg.OperatorImageRepository, cfg.OperatorImageTag)
 	}
 	if cfg.MTLSSecretName != "env-mtls" {
 		t.Errorf("MTLSSecretName = %q", cfg.MTLSSecretName)
