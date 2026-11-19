@@ -30,5 +30,6 @@ data:
       nydus_image: {{ .Values.conversion.nydusImage | quote }}
       work_dir: {{ .Values.conversion.workDir | quote }}
       timeout: {{ .Values.conversion.timeout | quote }}
+      job_timeout: {{ .Values.conversion.jobTimeout | quote }}
     service:
       port: {{ .Values.service.port }}

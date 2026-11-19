@@ -42,6 +42,13 @@ func (h *Webhook) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 		http.Error(w, "unauthorized", http.StatusUnauthorized)
 		return
 	}
+	// One-shot reconvert for a cached tag whose nydus-source-reference predates
+	// the proxy rewrite, for example:
+	// POST /api/convert?registry=docker.io&repository=library/nginx&tag=1.27
+	if registry := strings.TrimSpace(r.URL.Query().Get("registry")); registry != "" {
+		h.reconvert(w, r, registry)
+		return
+	}
 	body, err := io.ReadAll(io.LimitReader(r.Body, 1<<20))
 	if err != nil {
 		http.Error(w, "invalid payload", http.StatusBadRequest)
@@ -92,6 +99,37 @@ func (h *Webhook) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 	}
 	if !accepted {
 		http.Error(w, "event has no resources", http.StatusBadRequest)
+		return
+	}
+	w.WriteHeader(http.StatusAccepted)
+	_, _ = w.Write([]byte("accepted\n"))
+}
+
+// reconvert enqueues one explicit tag conversion, bypassing the normal
+// deduplication so an already-cached tag is rewritten.
+func (h *Webhook) reconvert(w http.ResponseWriter, r *http.Request, registry string) {
+	repo := strings.TrimSpace(r.URL.Query().Get("repository"))
+	tag := strings.TrimSpace(r.URL.Query().Get("tag"))
+	if repo == "" || tag == "" || strings.HasPrefix(tag, "sha256:") {
+		http.Error(w, "registry, repository, and a tag are required", http.StatusBadRequest)
+		return
+	}
+	if h.Config == nil || !h.Config.Allowlisted(registry) {
+		http.Error(w, "registry is not allowlisted", http.StatusForbidden)
+		return
+	}
+	if h.Manager == nil {
+		http.Error(w, "conversion manager is unavailable", http.StatusServiceUnavailable)
+		return
+	}
+	if !h.Manager.Requeue(Job{
+		Registry:   registry,
+		Repository: repo,
+		Reference:  tag,
+		Tag:        tag,
+		Trigger:    "reconvert",
+	}) {
+		http.Error(w, "conversion is already running", http.StatusConflict)
 		return
 	}
 	w.WriteHeader(http.StatusAccepted)

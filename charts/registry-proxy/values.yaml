@@ -7,7 +7,7 @@ serviceAccount:
 image:
   # Same image as the operator: it contains /registry-proxy.
   repository: ghcr.io/gorizond/d7y-cattle-operator
-  tag: v0.1.36
+  tag: v0.1.37
   pullPolicy: IfNotPresent
 
 command:
@@ -54,6 +54,9 @@ conversion:
   nydusImage: /usr/local/bin/nydus-image
   workDir: /tmp/nydusify
   timeout: 10m
+  # Per-attempt copy/conversion budget; one stuck job must not occupy the
+  # single worker forever.
+  jobTimeout: 30m
 
 service:
   type: ClusterIP

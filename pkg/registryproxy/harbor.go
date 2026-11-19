@@ -6,6 +6,7 @@ import (
 	"encoding/json"
 	"fmt"
 	"io"
+	"log/slog"
 	"net/http"
 	"net/url"
 	"strconv"
@@ -55,7 +56,7 @@ func (h *HarborClient) client() *http.Client {
 	if h.Client != nil {
 		return h.Client
 	}
-	return http.DefaultClient
+	return defaultHTTPClient
 }
 
 func (h *HarborClient) do(ctx context.Context, method, path string, body any, out any) (int, error) {
@@ -97,7 +98,9 @@ func registrySpec(host string) HarborRegistry {
 	case "ghcr.io":
 		return HarborRegistry{Name: host, Type: "github-ghcr", URL: "https://ghcr.io"}
 	case "quay.io":
-		return HarborRegistry{Name: host, Type: "quay", URL: "https://quay.io"}
+		// Harbor 2.x has no "quay" adapter; the generic docker-registry
+		// adapter works with Quay's OCI API. A "quay" type returns HTTP 400.
+		return HarborRegistry{Name: host, Type: "docker-registry", URL: "https://quay.io"}
 	default:
 		return HarborRegistry{Name: host, Type: "docker-registry", URL: "https://" + host}
 	}
@@ -344,17 +347,23 @@ func (p *Provisioner) Ensure(ctx context.Context, registry string) error {
 
 	endpoint, err := p.Harbor.EnsureRegistry(ctx, registry)
 	if err != nil {
-		return err
+		return fmt.Errorf("ensure Harbor registry %q: %w", registry, err)
 	}
 	project := ProjectName(registry)
 	if _, err := p.Harbor.EnsureProject(ctx, project, endpoint.ID); err != nil {
-		return err
+		return fmt.Errorf("ensure Harbor source project %q: %w", project, err)
 	}
 	if _, err := p.Harbor.EnsureProject(ctx, p.MirrorProject, 0); err != nil {
-		return err
+		return fmt.Errorf("ensure Harbor mirror project %q: %w", p.MirrorProject, err)
 	}
-	if err := p.Harbor.EnsureWebhook(ctx, ProjectName(registry), p.WebhookAddress, p.WebhookSecret); err != nil {
-		return err
+	// The webhook is an optional acceleration path: pull-triggered conversion
+	// still enqueues jobs, so a broken Harbor webhook policy must not fail the
+	// read path or bootstrap.
+	if p.WebhookAddress != "" {
+		if err := p.Harbor.EnsureWebhook(ctx, project, p.WebhookAddress, p.WebhookSecret); err != nil {
+			slog.Warn("harbor webhook policy is unavailable; pull-triggered conversion still works",
+				"registry", registry, "project", project, "error", err)
+		}
 	}
 	p.mu.Lock()
 	if p.cache == nil {

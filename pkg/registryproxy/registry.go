@@ -6,12 +6,21 @@ import (
 	"crypto/sha256"
 	"encoding/hex"
 	"encoding/json"
+	"errors"
 	"fmt"
 	"io"
 	"net/http"
 	"net/url"
 	"strings"
+	"time"
 )
+
+// defaultHTTPTimeout bounds registry HTTP calls that are not already covered
+// by a request/job deadline. It is generous because blob streams count
+// against the client timeout.
+const defaultHTTPTimeout = 30 * time.Minute
+
+var defaultHTTPClient = &http.Client{Timeout: defaultHTTPTimeout}
 
 // Manifest is an OCI manifest or index returned by a registry.
 type Manifest struct {
@@ -42,8 +51,8 @@ func (e *RegistryError) Error() string {
 
 // IsNotFound reports whether an OCI request returned 404.
 func IsNotFound(err error) bool {
-	re, ok := err.(*RegistryError)
-	return ok && re.Status == http.StatusNotFound
+	var re *RegistryError
+	return errors.As(err, &re) && re.Status == http.StatusNotFound
 }
 
 // HTTPRegistry talks to a Harbor registry endpoint over the OCI distribution
@@ -59,7 +68,7 @@ func (r *HTTPRegistry) client() *http.Client {
 	if r.Client != nil {
 		return r.Client
 	}
-	return http.DefaultClient
+	return defaultHTTPClient
 }
 
 func (r *HTTPRegistry) do(ctx context.Context, method, path string, body io.Reader) (*http.Response, error) {

@@ -23,6 +23,9 @@ type fakeHarbor struct {
 	webhookAuth    string
 	robots         []HarborRobot
 	posts          map[string]int
+	// webhookFail/registryFail simulate optional and required Harbor failures.
+	webhookFail  bool
+	registryFail bool
 	// lastRegistryBody/lastRobotBody are raw create bodies (checks that
 	// credentials and wildcard permissions reach Harbor).
 	lastRegistryBody map[string]any
@@ -40,6 +43,10 @@ func (f *fakeHarbor) handler() http.Handler {
 		case r.Method == http.MethodGet && r.URL.Path == "/api/v2.0/registries":
 			_ = json.NewEncoder(w).Encode(f.registries)
 		case r.Method == http.MethodPost && r.URL.Path == "/api/v2.0/registries":
+			if f.registryFail {
+				http.Error(w, "harbor registry health check failed", http.StatusInternalServerError)
+				return
+			}
 			var body map[string]any
 			_ = json.NewDecoder(r.Body).Decode(&body)
 			f.lastRegistryBody = body
@@ -71,6 +78,10 @@ func (f *fakeHarbor) handler() http.Handler {
 			_ = json.NewEncoder(w).Encode(items)
 		case r.Method == http.MethodPost && strings.HasPrefix(r.URL.Path, "/api/v2.0/projects/") &&
 			strings.HasSuffix(r.URL.Path, "/webhook/policies"):
+			if f.webhookFail {
+				http.Error(w, "harbor webhook policy is broken", http.StatusInternalServerError)
+				return
+			}
 			f.posts["webhook"]++
 			f.webhooks = append(f.webhooks, "nydus-convert")
 			f.setWebhookTarget(r)
@@ -214,15 +225,28 @@ func TestEnsureRobotSecretCreatesOnceAndReuses(t *testing.T) {
 func TestEnsureRobotSecretUsesExistingCredentials(t *testing.T) {
 	username := fmt.Sprintf("robot$d7y-%d", time.Now().UnixNano())
 	password := fmt.Sprintf("fixture-%d", time.Now().UnixNano())
+	fingerprint := robotFingerprint(systemRobotName, "mirror", []string{"dockerio"})
 	store := &fakeSecretStore{data: map[string]map[string][]byte{
-		"robot-secret": {"username": []byte(username), "password": []byte(password)},
+		"robot-secret": {
+			"username":                []byte(username),
+			"password":                []byte(password),
+			"permissions-fingerprint": []byte(fingerprint),
+		},
 	}}
-	robot, err := EnsureRobotSecret(context.Background(), &HarborClient{BaseURL: "http://127.0.0.1:1"}, "robot-secret", "mirror", []string{"dockerio"}, store)
+	fake := &fakeHarbor{robots: []HarborRobot{{ID: 9, Name: "robot$" + systemRobotName, Secret: password}}}
+	server := httptest.NewServer(fake.handler())
+	defer server.Close()
+	robot, err := EnsureRobotSecret(context.Background(), &HarborClient{BaseURL: server.URL}, "robot-secret", "mirror", []string{"dockerio"}, store)
 	if err != nil {
 		t.Fatalf("EnsureRobotSecret() error = %v", err)
 	}
 	if robot.Name != username || robot.Secret != password {
 		t.Errorf("robot = %+v, want persisted credentials", robot)
+	}
+	fake.mu.Lock()
+	defer fake.mu.Unlock()
+	if fake.posts["robot"] != 0 || fake.posts["robot_delete"] != 0 {
+		t.Errorf("robot POST/DELETE = %d/%d, want 0/0", fake.posts["robot"], fake.posts["robot_delete"])
 	}
 }
 
@@ -329,5 +353,118 @@ func TestEnsureSystemRobotUsesWildcardPull(t *testing.T) {
 	first, _ := permissions[0].(map[string]any)
 	if first["kind"] != "project" || first["namespace"] != "*" {
 		t.Errorf("wildcard permission = %v", first)
+	}
+}
+
+func TestEnsureRobotSecretRecreatesOnPermissionChange(t *testing.T) {
+	fake := &fakeHarbor{}
+	server := httptest.NewServer(fake.handler())
+	defer server.Close()
+	store := &fakeSecretStore{}
+	harbor := &HarborClient{BaseURL: server.URL}
+
+	if _, err := EnsureRobotSecret(context.Background(), harbor, "robot-secret", "mirror", []string{"dockerio"}, store); err != nil {
+		t.Fatalf("EnsureRobotSecret(first) error = %v", err)
+	}
+	firstFingerprint := string(store.data["robot-secret"]["permissions-fingerprint"])
+	if firstFingerprint == "" {
+		t.Fatal("permission fingerprint was not stored")
+	}
+	// Same grants reuse the stored credentials.
+	if _, err := EnsureRobotSecret(context.Background(), harbor, "robot-secret", "mirror", []string{"dockerio"}, store); err != nil {
+		t.Fatalf("EnsureRobotSecret(same grants) error = %v", err)
+	}
+	// A new source project invalidates the stored credentials; the stale robot
+	// must be deleted and recreated with the new grants.
+	if _, err := EnsureRobotSecret(context.Background(), harbor, "robot-secret", "mirror", []string{"dockerio", "ghcrio"}, store); err != nil {
+		t.Fatalf("EnsureRobotSecret(new grants) error = %v", err)
+	}
+	if got := string(store.data["robot-secret"]["permissions-fingerprint"]); got == firstFingerprint || got == "" {
+		t.Errorf("fingerprint after permission change = %q", got)
+	}
+	fake.mu.Lock()
+	defer fake.mu.Unlock()
+	if fake.posts["robot"] != 2 || fake.posts["robot_delete"] != 1 {
+		t.Errorf("robot POST/DELETE = %d/%d, want 2/1", fake.posts["robot"], fake.posts["robot_delete"])
+	}
+}
+
+func TestEnsureRegistryMapsQuayToDockerRegistry(t *testing.T) {
+	fake := &fakeHarbor{}
+	server := httptest.NewServer(fake.handler())
+	defer server.Close()
+	if _, err := (&HarborClient{BaseURL: server.URL}).EnsureRegistry(context.Background(), "quay.io"); err != nil {
+		t.Fatalf("EnsureRegistry() error = %v", err)
+	}
+	fake.mu.Lock()
+	defer fake.mu.Unlock()
+	if got := fake.lastRegistryBody["type"]; got != "docker-registry" {
+		t.Errorf("quay registry type = %v, want the generic docker-registry adapter", got)
+	}
+}
+
+func TestProvisionerWebhookFailureIsNonFatal(t *testing.T) {
+	fake := &fakeHarbor{webhookFail: true}
+	server := httptest.NewServer(fake.handler())
+	defer server.Close()
+	provisioner := &Provisioner{
+		Harbor:         &HarborClient{BaseURL: server.URL},
+		MirrorProject:  "mirror",
+		WebhookAddress: "https://proxy.example.test/api/convert",
+		WebhookSecret:  "shared",
+	}
+	if err := provisioner.Ensure(context.Background(), "docker.io"); err != nil {
+		t.Fatalf("Ensure() with a broken webhook = %v, want nil", err)
+	}
+	fake.mu.Lock()
+	defer fake.mu.Unlock()
+	if fake.posts["registry"] != 1 || fake.posts["project"] != 2 {
+		t.Errorf("required Harbor objects = %v", fake.posts)
+	}
+}
+
+func TestProvisionerRegistryFailureIsFatal(t *testing.T) {
+	fake := &fakeHarbor{registryFail: true}
+	server := httptest.NewServer(fake.handler())
+	defer server.Close()
+	provisioner := &Provisioner{
+		Harbor:         &HarborClient{BaseURL: server.URL},
+		MirrorProject:  "mirror",
+		WebhookAddress: "https://proxy.example.test/api/convert",
+		WebhookSecret:  "shared",
+	}
+	err := provisioner.Ensure(context.Background(), "docker.io")
+	if err == nil {
+		t.Fatal("Ensure() error = nil for a failing registry creation")
+	}
+	if !strings.Contains(err.Error(), "Harbor registry") {
+		t.Errorf("Ensure() error = %q, want clear registry context", err)
+	}
+}
+
+func TestEnsureRobotSecretRecreatesMissingRobot(t *testing.T) {
+	fingerprint := robotFingerprint(systemRobotName, "mirror", []string{"dockerio"})
+	store := &fakeSecretStore{data: map[string]map[string][]byte{
+		"robot-secret": {
+			"username":                []byte("robot$stale"),
+			"password":                []byte("stale"),
+			"permissions-fingerprint": []byte(fingerprint),
+		},
+	}}
+	fake := &fakeHarbor{} // Harbor was reinstalled: no robots exist.
+	server := httptest.NewServer(fake.handler())
+	defer server.Close()
+	robot, err := EnsureRobotSecret(context.Background(), &HarborClient{BaseURL: server.URL},
+		"robot-secret", "mirror", []string{"dockerio"}, store)
+	if err != nil {
+		t.Fatalf("EnsureRobotSecret() error = %v", err)
+	}
+	if robot.Secret == "stale" || robot.Secret == "" {
+		t.Errorf("robot secret was not recreated: %+v", robot)
+	}
+	fake.mu.Lock()
+	defer fake.mu.Unlock()
+	if fake.posts["robot"] != 1 {
+		t.Errorf("robot POST = %d, want 1", fake.posts["robot"])
 	}
 }

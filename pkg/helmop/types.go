@@ -55,7 +55,7 @@ const (
 
 	RegistryProxyChartRepo    = "https://gorizond.github.io/d7y-cattle-operator"
 	RegistryProxyChartName    = "registry-proxy"
-	RegistryProxyChartVersion = "0.1.13"
+	RegistryProxyChartVersion = "0.1.14"
 
 	AdmissionChartRepo    = "https://gorizond.github.io/d7y-cattle-operator"
 	AdmissionChartName    = "admission-webhook"
