@@ -9,18 +9,18 @@ import (
 	"github.com/gorizond/d7y-cattle-operator/pkg/helmop"
 )
 
-// ensureManager reconciles the manager HelmOp. The manager Service stays
-// cluster-internal; public endpoints are added by a follow-up MR.
-func (c *Controller) ensureManager(cluster *provv1.Cluster, hc helmop.Cluster) error {
+// ensureSharedManager reconciles the shared manager HelmOp. The manager
+// credentials Secret is operator-global and replicated into the HelmOp
+// namespace; the release itself fans out to manager-labeled Clusters. The
+// per-cluster value inputs are Fleet templates, so no per-cluster manager
+// HelmOp is created.
+func (c *Controller) ensureSharedManager(cluster *provv1.Cluster, hc helmop.Cluster, roles Roles) error {
+	if !roles.Manager {
+		return nil
+	}
 	if err := c.ensureManagerCredentials(cluster); err != nil {
 		c.event(cluster, corev1.EventTypeWarning, "ManagerCredentialsFailed", err.Error())
 		return fmt.Errorf("ensure manager credentials: %w", err)
 	}
-	return c.applyHelmOp(cluster, helmop.Manager(hc))
-}
-
-// deleteManager removes the manager release. KeyDB stays because it may still
-// be used by the seed role.
-func (c *Controller) deleteManager(cluster *provv1.Cluster) error {
-	return c.deleteHelmOp(cluster, helmop.ManagerName(cluster.Name))
+	return c.applyHelmOp(cluster, helmop.SharedManager(hc))
 }

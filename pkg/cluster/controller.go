@@ -182,7 +182,7 @@ func (c *Controller) reconcile(key string, cluster *provv1.Cluster) (result *pro
 		status.rebase(updated)
 	}
 
-	shared := c.ensureSharedHelmOps(cluster, hc)
+	shared := c.ensureSharedHelmOps(cluster, hc, roles, mtlsReady)
 	if shared.keydb != nil {
 		status.set(conditionKeyDBReady, false, "ApplyFailed", shared.keydb.Error())
 	} else {
@@ -231,16 +231,6 @@ func (c *Controller) reconcile(key string, cluster *provv1.Cluster) (result *pro
 		}
 	}
 	setAdmissionCondition(status, roles, admissionErr, admissionReady, admissionMessage)
-
-	if roles.Manager {
-		if mtlsReady {
-			if err := c.ensureManager(cluster, hc); err != nil {
-				errs = append(errs, err)
-			}
-		}
-	} else if err := c.deleteManager(cluster); err != nil {
-		errs = append(errs, err)
-	}
 
 	// Harbor's Dragonfly "Distribution" is a P2P preheat provider backed by the
 	// manager REST API; it needs both a reachable Harbor and the manager API.
@@ -298,7 +288,7 @@ func (c *Controller) reconcile(key string, cluster *provv1.Cluster) (result *pro
 		status.seedUnavailable("SeedDisabled", "seed role is disabled; the scheduler cluster ID annotation is preserved")
 	}
 	for _, err := range []error{
-		shared.keydb, shared.control, shared.data, shared.extras,
+		shared.keydb, shared.manager, shared.control, shared.data, shared.extras,
 		shared.mirror, shared.admission, shared.cleanup, admissionExtra,
 	} {
 		if err != nil {
@@ -736,9 +726,9 @@ func schedulerClusterID(cluster *provv1.Cluster) int {
 // sharedHelmOps carries the per-component shared apply results so conditions
 // and legacy cleanup only act on components whose shared HelmOp was applied.
 type sharedHelmOps struct {
-	keydb, control, data, extras, mirror, admission error
-	admissionApplied                                bool
-	cleanup                                         error
+	keydb, manager, control, data, extras, mirror, admission error
+	managerApplied, admissionApplied                         bool
+	cleanup                                                  error
 }
 
 // ensureClusterMetadata stamps the Fleet inputs onto the provisioning Cluster:
@@ -799,11 +789,18 @@ func (c *Controller) ensureClusterMetadata(cluster *provv1.Cluster, hc helmop.Cl
 
 // ensureSharedHelmOps applies the fixed set of shared HelmOps once. The objects
 // are named after the component, so repeated reconciles from every Cluster are
-// idempotent. Per-cluster manager/harbor/registry-proxy HelmOps stay in their
-// own ensure paths.
-func (c *Controller) ensureSharedHelmOps(cluster *provv1.Cluster, hc helmop.Cluster) sharedHelmOps {
+// idempotent. Per-cluster Harbor and registry-proxy HelmOps stay in their own
+// ensure paths.
+func (c *Controller) ensureSharedHelmOps(cluster *provv1.Cluster, hc helmop.Cluster, roles Roles, mtlsReady bool) sharedHelmOps {
 	var result sharedHelmOps
 	result.keydb = c.applyHelmOp(cluster, helmop.SharedKeyDB(hc))
+	// The manager needs the operator-global credentials Secret and the mTLS
+	// Secret; skip it until the certificate path is ready so the legacy release
+	// keeps running.
+	if roles.Manager && mtlsReady {
+		result.manager = c.ensureSharedManager(cluster, hc, roles)
+		result.managerApplied = true
+	}
 	result.control = c.applyHelmOp(cluster, helmop.SharedControl(hc))
 	result.data = c.applyHelmOp(cluster, helmop.SharedData(hc))
 	result.extras = c.applyHelmOp(cluster, helmop.SharedExtras(hc, helmop.ExtrasOptions{
@@ -822,14 +819,14 @@ func (c *Controller) ensureSharedHelmOps(cluster *provv1.Cluster, hc helmop.Clus
 		result.admission = c.applyHelmOp(cluster, helmop.SharedAdmission(hc))
 		result.admissionApplied = true
 	}
-	result.cleanup = c.cleanupLegacyHelmOps(cluster, result)
+	result.cleanup = c.cleanupLegacyHelmOps(cluster, result, roles)
 	return result
 }
 
 // cleanupLegacyHelmOps removes the per-cluster HelmOps (and their Bundles) that
 // the shared objects replaced. It only runs for components whose shared HelmOp
 // was applied, so a failed apply never drops the working release.
-func (c *Controller) cleanupLegacyHelmOps(cluster *provv1.Cluster, shared sharedHelmOps) error {
+func (c *Controller) cleanupLegacyHelmOps(cluster *provv1.Cluster, shared sharedHelmOps, roles Roles) error {
 	legacy := []struct {
 		name string
 		err  error
@@ -849,6 +846,18 @@ func (c *Controller) cleanupLegacyHelmOps(cluster *provv1.Cluster, shared shared
 			errs = append(errs, err)
 		}
 		if err := c.deleteBundle(cluster, item.name); err != nil {
+			errs = append(errs, err)
+		}
+	}
+	// Manager: remove the legacy release when the role is gone, or once the
+	// shared release was applied. Keep it when the shared apply was skipped or
+	// failed.
+	if !roles.Manager || (shared.managerApplied && shared.manager == nil) {
+		name := helmop.ManagerName(cluster.Name)
+		if err := c.deleteHelmOp(cluster, name); err != nil {
+			errs = append(errs, err)
+		}
+		if err := c.deleteBundle(cluster, name); err != nil {
 			errs = append(errs, err)
 		}
 	}

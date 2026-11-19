@@ -114,6 +114,7 @@ const (
 // spec.helm.releaseName values.
 const (
 	sharedKeyDBName     = "d7y-keydb"
+	sharedManagerName   = "d7y-manager"
 	sharedControlName   = "d7y-control"
 	sharedDataName      = "d7y-data"
 	sharedExtrasName    = "d7y-extras"
@@ -123,6 +124,9 @@ const (
 
 // SharedKeyDBName returns the shared KeyDB HelmOp and release name.
 func SharedKeyDBName() string { return sharedKeyDBName }
+
+// SharedManagerName returns the shared manager HelmOp and release name.
+func SharedManagerName() string { return sharedManagerName }
 
 // SharedControlName returns the shared scheduler HelmOp and release name.
 func SharedControlName() string { return sharedControlName }
@@ -145,6 +149,11 @@ func SharedAdmissionName() string { return sharedAdmissionName }
 // and Harbor releases point at the cluster-local <cluster>-keydb Service.
 func GateSelector() map[string]string {
 	return map[string]string{LabelGate: "true"}
+}
+
+// ManagerSelector matches the manager role.
+func ManagerSelector() map[string]string {
+	return map[string]string{LabelGate: "true", LabelRoleManager: "true"}
 }
 
 // SharedSelector matches the seed role: the shared control, data, extras, and

@@ -6,9 +6,42 @@ import (
 	fleetv1alpha1 "github.com/rancher/fleet/pkg/apis/fleet.cattle.io/v1alpha1"
 )
 
-// Manager returns the manager HelmOp with an embedded MySQL database (no PVC)
-// and KeyDB as the external Redis-compatible store.
+// Manager returns the per-cluster manager HelmOp. It is retained for
+// back-compat and tests; the controller reconciles the shared manager.
 func Manager(c Cluster) *fleetv1alpha1.HelmOp {
+	values := managerValues(c,
+		ManagerFullname(c.Name),
+		fmt.Sprintf("%s.%s.svc.cluster.local:6379", KeyDBName(c.Name), TargetNamespace),
+	)
+	op := newHelmOp(ManagerName(c.Name), c, c.Chart, "manager", values, []string{KeyDBName(c.Name)})
+	return withManagerSecrets(op, c)
+}
+
+// SharedManager returns the shared manager HelmOp with an embedded MySQL
+// database (no PVC) and the cluster-local KeyDB as the external Redis store.
+// The fullname and KeyDB address are Fleet templates, so the per-target object
+// names stay <cluster> and <cluster>-manager.
+func SharedManager(c Cluster) *fleetv1alpha1.HelmOp {
+	c = sharedCluster(c)
+	values := managerValues(c,
+		SharedClusterNameTemplate,
+		SharedClusterNameTemplate+"-keydb."+TargetNamespace+".svc.cluster.local:6379",
+	)
+	op := newSharedHelmOp(SharedManagerName(), TargetNamespace, c, c.Chart, "manager",
+		values, []string{SharedKeyDBName()}, ManagerSelector())
+	return withManagerSecrets(op, c)
+}
+
+func withManagerSecrets(op *fleetv1alpha1.HelmOp, c Cluster) *fleetv1alpha1.HelmOp {
+	op = withMTLS(op, c.MTLSSecretName)
+	if c.ManagerAPICredentialsSecret != "" {
+		op.Spec.DownstreamResources = append(op.Spec.DownstreamResources,
+			fleetv1alpha1.DownstreamResource{Kind: "Secret", Name: c.ManagerAPICredentialsSecret})
+	}
+	return op
+}
+
+func managerValues(c Cluster, fullname, keydbAddr string) map[string]any {
 	managerValues := map[string]any{
 		"enable": true,
 		"config": map[string]any{
@@ -34,7 +67,7 @@ func Manager(c Cluster) *fleetv1alpha1.HelmOp {
 	}
 
 	values := map[string]any{
-		"fullnameOverride": ManagerFullname(c.Name),
+		"fullnameOverride": fullname,
 		"manager":          managerValues,
 		// Bitnami MySQL 11.x reads persistence under the primary subchart.
 		"mysql": map[string]any{
@@ -47,21 +80,13 @@ func Manager(c Cluster) *fleetv1alpha1.HelmOp {
 		// The Dragonfly chart expects externalRedis.addrs, not host/port.
 		// KeyDB is installed downstream into TargetNamespace; c.Namespace is the
 		// Fleet namespace of the HelmOp, so it is not the in-cluster namespace.
-		"externalRedis": map[string]any{
-			"addrs": []any{fmt.Sprintf("%s.%s.svc.cluster.local:6379", KeyDBName(c.Name), TargetNamespace)},
-		},
-		"scheduler":  map[string]any{"enable": false},
-		"seedClient": map[string]any{"enable": false},
-		"client":     map[string]any{"enable": false},
+		"externalRedis": map[string]any{"addrs": []any{keydbAddr}},
+		"scheduler":     map[string]any{"enable": false},
+		"seedClient":    map[string]any{"enable": false},
+		"client":        map[string]any{"enable": false},
 	}
 	applyMonitoring(values, c.Monitoring)
-	op := newHelmOp(ManagerName(c.Name), c, c.Chart, "manager", values, []string{KeyDBName(c.Name)})
-	op = withMTLS(op, c.MTLSSecretName)
-	if c.ManagerAPICredentialsSecret != "" {
-		op.Spec.DownstreamResources = append(op.Spec.DownstreamResources,
-			fleetv1alpha1.DownstreamResource{Kind: "Secret", Name: c.ManagerAPICredentialsSecret})
-	}
-	return op
+	return values
 }
 
 // managerCredentialsEnvVars feeds the operator-generated root password and JWT

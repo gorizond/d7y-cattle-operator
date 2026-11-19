@@ -22,6 +22,7 @@ func TestSharedHelmOpNamesAndReleases(t *testing.T) {
 		name string
 	}{
 		"keydb":     {SharedKeyDB(c), "d7y-keydb"},
+		"manager":   {SharedManager(c), "d7y-manager"},
 		"control":   {SharedControl(c), "d7y-control"},
 		"data":      {SharedData(c), "d7y-data"},
 		"extras":    {SharedExtras(c, ExtrasOptions{}), "d7y-extras"},
@@ -51,6 +52,7 @@ func TestSharedHelmOpSelectors(t *testing.T) {
 		want map[string]string
 	}{
 		"keydb":     {SharedKeyDB(c), map[string]string{LabelGate: "true"}},
+		"manager":   {SharedManager(c), map[string]string{LabelGate: "true", LabelRoleManager: "true"}},
 		"control":   {SharedControl(c), map[string]string{LabelGate: "true", LabelRoleSeed: "true"}},
 		"data":      {SharedData(c), map[string]string{LabelGate: "true", LabelRoleSeed: "true"}},
 		"extras":    {SharedExtras(c, ExtrasOptions{}), map[string]string{LabelGate: "true", LabelRoleSeed: "true"}},
@@ -81,6 +83,16 @@ func TestSharedValuesUseFleetTemplates(t *testing.T) {
 	keydb := SharedKeyDB(c).Spec.Helm.Values.Data
 	if got := keydb["fullnameOverride"]; got != "${ .ClusterName }-keydb" {
 		t.Errorf("keydb fullnameOverride = %v", got)
+	}
+
+	manager := SharedManager(c).Spec.Helm.Values.Data
+	if got := manager["fullnameOverride"]; got != SharedClusterNameTemplate {
+		t.Errorf("manager fullnameOverride = %v, want the cluster-name template", got)
+	}
+	managerAddrs, _ := manager["externalRedis"].(map[string]any)["addrs"].([]any)
+	wantKeyDBAddr := SharedClusterNameTemplate + "-keydb." + TargetNamespace + ".svc.cluster.local:6379"
+	if len(managerAddrs) != 1 || managerAddrs[0] != wantKeyDBAddr {
+		t.Errorf("manager externalRedis.addrs = %v, want [%s]", managerAddrs, wantKeyDBAddr)
 	}
 
 	control := SharedControl(c).Spec.Helm.Values.Data
@@ -172,6 +184,7 @@ func TestSharedHelmOpsHaveNoPerClusterLabels(t *testing.T) {
 	c := sharedTestCluster()
 	for name, op := range map[string]*fleetv1alpha1.HelmOp{
 		"keydb":     SharedKeyDB(c),
+		"manager":   SharedManager(c),
 		"control":   SharedControl(c),
 		"data":      SharedData(c),
 		"extras":    SharedExtras(c, ExtrasOptions{}),
@@ -208,6 +221,7 @@ func TestPerClusterHelmOpsKeepStrictOwnership(t *testing.T) {
 	c := sharedTestCluster()
 	ops := map[string]*fleetv1alpha1.HelmOp{
 		"keydb":   KeyDB(c),
+		"manager": Manager(c),
 		"control": Control(c),
 		"data":    Data(c),
 		"extras":  Extras(c, ExtrasOptions{IngressEnabled: true, Manager: true}),
@@ -219,5 +233,16 @@ func TestPerClusterHelmOpsKeepStrictOwnership(t *testing.T) {
 		if op.Spec.Helm.TakeOwnership {
 			t.Errorf("%s takeOwnership = true, want strict ownership for a per-cluster release", name)
 		}
+	}
+}
+
+func TestSharedManagerKeepsGlobalSecrets(t *testing.T) {
+	op := SharedManager(sharedTestCluster())
+	if len(op.Spec.DownstreamResources) != 2 ||
+		op.Spec.DownstreamResources[0].Kind != "Secret" ||
+		op.Spec.DownstreamResources[0].Name != "dragonfly-p2p-mtls" ||
+		op.Spec.DownstreamResources[1].Kind != "Secret" ||
+		op.Spec.DownstreamResources[1].Name != "dragonfly-manager-api" {
+		t.Errorf("downstreamResources = %+v, want the fleet-global mTLS and manager credentials Secrets", op.Spec.DownstreamResources)
 	}
 }
