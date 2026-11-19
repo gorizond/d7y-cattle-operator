@@ -127,7 +127,7 @@ const (
 	SharedHarborDomainTemplate = `${ index .ClusterAnnotations "p2p.dragonfly.io/harbor-domain" }`
 	// SharedHarborTLSSecretTemplate resolves the per-target Harbor ingress TLS
 	// Secret. The default follows the cert-manager convention
-	// <cluster>-harbor-tls (e.g. poligon-harbor-tls); the annotation overrides
+	// <cluster>-harbor-tls (e.g. demo-harbor-tls); the annotation overrides
 	// it. Build the default with printf: a nested ${ .ClusterName } inside the
 	// default string argument would stay literal because Fleet renders the
 	// template only once.
@@ -560,8 +560,8 @@ func newSharedHelmOp(name, targetNamespace string, c Cluster, chart Chart, compo
 		// releases during migration, so downstream resources still carry the
 		// old release-name/release-namespace Helm annotations. Without
 		// takeOwnership Helm refuses to adopt them, e.g.
-		// PodDisruptionBudget "poligon-keydb" ... "meta.helm.sh/release-name"
-		// must equal "d7y-keydb": current value is "poligon-keydb".
+		// PodDisruptionBudget "demo-keydb" ... "meta.helm.sh/release-name"
+		// must equal "d7y-keydb": current value is "demo-keydb".
 		TakeOwnership: true,
 		Values:        &fleetv1alpha1.GenericMap{Data: values},
 	}

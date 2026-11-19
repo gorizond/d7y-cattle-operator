@@ -97,7 +97,7 @@ func registryProxyHostAliases(aliases []HostAlias) []any {
 // so this string stays unquoted and the rendered [...] becomes a list.
 //
 // The annotation is a comma-separated list of ip=hostname pairs, e.g.
-// "10.43.110.19=harbor.koldun.negash.ru". Items are trimmed and quoted so the
+// "203.0.113.10=harbor.example.com". Items are trimmed and quoted so the
 // flow sequence stays valid. Keep the map syntax JSON-style (no space after
 // ':') so the YAML marshaller emits this template as an unquoted plain scalar;
 // a ": " sequence would force quoting and render a string instead of a list.

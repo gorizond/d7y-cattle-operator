@@ -126,7 +126,7 @@ done
 
 # Manager remains external-only: no in-cluster manager DNS fallback.
 grep -q 'addr: manager-grpc.example.com:443' "$tmp/control.yaml" || fail "scheduler manager address is not the public external host"
-if grep -q 'poligon-manager.dragonfly-system.svc' "$tmp/control.yaml" || grep -q 'manager.dragonfly-system.svc' "$tmp/control.yaml"; then
+if grep -q 'demo-manager.dragonfly-system.svc' "$tmp/control.yaml" || grep -q 'manager.dragonfly-system.svc' "$tmp/control.yaml"; then
   fail "scheduler render contains an internal manager DNS address"
 fi
 
@@ -218,7 +218,7 @@ helm template e "$extras" --namespace dragonfly-system \
   --set ingress.rest.host=api.example.com \
   --set ingress.rest.service=c1-manager \
   --set ingress.tls.enabled=true \
-  --set ingress.tls.secretName=poligon-manager-public-tls \
+  --set ingress.tls.secretName=demo-manager-public-tls \
   --set scheduler.enabled=true \
   --set scheduler.clusterID=c-m-example \
   --set scheduler.domain=example.com \
@@ -242,6 +242,6 @@ fi
 if grep -Fq 'Host(`grpc.example.com`)' "$tmp/extras.yaml"; then fail "HTTP router competes with manager gRPC TCP SNI"; fi
 if grep -q 'dragonfly-system.svc' "$tmp/extras.yaml"; then fail "extras render contains an internal manager DNS address"; fi
 grep -q 'serversTransport: "e-manager-rest"' "$tmp/extras.yaml" || fail "REST ServersTransport missing"
-grep -q 'secretName: "poligon-manager-public-tls"' "$tmp/extras.yaml" || fail "REST public TLS Secret missing"
+grep -q 'secretName: "demo-manager-public-tls"' "$tmp/extras.yaml" || fail "REST public TLS Secret missing"
 
 echo "extras manager-gRPC TCP render checks passed"

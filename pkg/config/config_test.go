@@ -413,7 +413,7 @@ func TestLoadHarborProxyEnv(t *testing.T) {
 	t.Setenv("PROXY_HARBOR_ADMIN_SECRET", "env-harbor-admin")
 	t.Setenv("PROXY_REGISTRIES", "docker.io,ghcr.io")
 	t.Setenv("PROXY_BASE_PATH", "/proxy")
-	t.Setenv("PROXY_TLS_SECRET", "poligon-harbor-tls")
+	t.Setenv("PROXY_TLS_SECRET", "demo-harbor-tls")
 	t.Setenv("HARBOR_CHART_VERSION", "1.19.4")
 	t.Setenv("REGISTRY_PROXY_CHART_VERSION", "0.1.11")
 	cfg, err := Load(requiredArgs())
@@ -426,7 +426,7 @@ func TestLoadHarborProxyEnv(t *testing.T) {
 	if cfg.ProxyHarborAdminSecret != "env-harbor-admin" || cfg.ProxyRegistries != "docker.io,ghcr.io" {
 		t.Errorf("proxy secret/registries = %q/%q", cfg.ProxyHarborAdminSecret, cfg.ProxyRegistries)
 	}
-	if cfg.ProxyBasePath != "/proxy" || cfg.ProxyTLSSecret != "poligon-harbor-tls" {
+	if cfg.ProxyBasePath != "/proxy" || cfg.ProxyTLSSecret != "demo-harbor-tls" {
 		t.Errorf("proxy path/TLS = %q/%q", cfg.ProxyBasePath, cfg.ProxyTLSSecret)
 	}
 }
@@ -441,7 +441,7 @@ func TestLoadHarborProxyConfig(t *testing.T) {
 		"--proxy-harbor-admin-secret=harbor-admin",
 		"--proxy-registries=docker.io,ghcr.io",
 		"--proxy-base-path=/proxy",
-		"--proxy-tls-secret=poligon-harbor-tls",
+		"--proxy-tls-secret=demo-harbor-tls",
 	)
 	cfg, err := Load(args)
 	if err != nil {
@@ -456,14 +456,14 @@ func TestLoadHarborProxyConfig(t *testing.T) {
 	if cfg.HarborChartVersion != "1.19.4" || cfg.RegistryProxyChartVersion != "0.1.11" {
 		t.Errorf("chart versions = %q/%q", cfg.HarborChartVersion, cfg.RegistryProxyChartVersion)
 	}
-	if cfg.ProxyBasePath != "/proxy" || cfg.ProxyTLSSecret != "poligon-harbor-tls" {
+	if cfg.ProxyBasePath != "/proxy" || cfg.ProxyTLSSecret != "demo-harbor-tls" {
 		t.Errorf("proxy path/TLS = %q/%q", cfg.ProxyBasePath, cfg.ProxyTLSSecret)
 	}
 }
 
 func TestLoadProxyHostAliases(t *testing.T) {
 	clearEnv(t)
-	t.Setenv("PROXY_HOST_ALIASES", `[{"ip":"10.43.0.10","hostnames":["harbor.example.test"]}]`)
+	t.Setenv("PROXY_HOST_ALIASES", `[{"ip":"203.0.113.10","hostnames":["harbor.example.test"]}]`)
 	cfg, err := Load(requiredArgs())
 	if err != nil {
 		t.Fatalf("Load() error = %v", err)
@@ -472,7 +472,7 @@ func TestLoadProxyHostAliases(t *testing.T) {
 		t.Fatalf("ProxyHostAliases = %+v", cfg.ProxyHostAliases)
 	}
 	alias := cfg.ProxyHostAliases[0]
-	if alias.IP != "10.43.0.10" || len(alias.Hostnames) != 1 || alias.Hostnames[0] != "harbor.example.test" {
+	if alias.IP != "203.0.113.10" || len(alias.Hostnames) != 1 || alias.Hostnames[0] != "harbor.example.test" {
 		t.Errorf("ProxyHostAliases[0] = %+v", alias)
 	}
 }

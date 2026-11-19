@@ -212,7 +212,7 @@ are left in place for a later retry.
 
 ### Nydus on Harbor: confirmed settings
 
-Confirmed on poligon (live). Workloads use direct Harbor references of the form
+Confirmed on a live RKE2 cluster. Workloads use direct Harbor references of the form
 `harbor.../mirror/<registry>/<repo>:<tag>`; the node-wide nydus snapshotter
 resolves them, so no `runtimeClass` is needed.
 
@@ -353,7 +353,7 @@ self-test, and a `helm template` render check.
 
 - The fscache path is unit- and render-tested only. Stock Ubuntu 24.04
   GA/HWE kernels report both CONFIG options as `n`, so the selector must choose
-  fusedev there. A live poligon VM with a custom or signed kernel must confirm
+  fusedev there. A live demo VM with a custom or signed kernel must confirm
   both are `=y`, `/dev/cachefiles` is created, cachefilesd is
   absent/stopped/disabled/masked, `ExecStartPre` rewrites `/etc/nydus/config.toml`
   to the fscache shape, and the pinned snapshotter supports

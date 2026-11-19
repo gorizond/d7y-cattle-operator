@@ -259,7 +259,7 @@ func newTestController(t *testing.T) (*Controller, *fakeHelmOpStore, *fakeEventS
 			HarborIngressClass:          "traefik",
 			ProxyDomain:                 "proxy.example.com",
 			ProxyBasePath:               "/proxy",
-			ProxyTLSSecret:              "poligon-harbor-tls",
+			ProxyTLSSecret:              "demo-harbor-tls",
 			ProxyHarborAdminSecret:      "harbor-admin",
 			ProxyRegistries:             []string{"docker.io"},
 			ExtrasIngressController:     "nginx",

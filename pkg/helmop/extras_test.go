@@ -165,7 +165,7 @@ func TestExtrasGRPCUsesP2PCert(t *testing.T) {
 		IngressController: "traefik",
 		GRPCEnabled:       true,
 		RESTEnabled:       true,
-		TLSSecret:         "poligon-manager-public-tls",
+		TLSSecret:         "demo-manager-public-tls",
 		Manager:           true,
 	})
 
@@ -173,7 +173,7 @@ func TestExtrasGRPCUsesP2PCert(t *testing.T) {
 	if got := valueAt(t, values, "ingress", "grpc", "tlsSecret"); got != "dragonfly-p2p-mtls" {
 		t.Errorf("ingress.grpc.tlsSecret = %v, want the P2P secret", got)
 	}
-	if got := valueAt(t, values, "ingress", "tls", "secretName"); got != "poligon-manager-public-tls" {
+	if got := valueAt(t, values, "ingress", "tls", "secretName"); got != "demo-manager-public-tls" {
 		t.Errorf("ingress.tls.secretName = %v, want the public REST secret", got)
 	}
 }

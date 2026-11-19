@@ -511,12 +511,12 @@ func renderFleetValue(t *testing.T, text string, annotations map[string]any) []m
 
 func TestSharedHarborTLSSecretTemplate(t *testing.T) {
 	base := map[string]any{
-		"ClusterName":        "poligon",
+		"ClusterName":        "demo",
 		"ClusterAnnotations": map[string]string{},
 		"ClusterLabels":      map[string]string{},
 	}
-	if got := renderFleetString(t, SharedHarborTLSSecretTemplate, base); got != "poligon-harbor-tls" {
-		t.Errorf("default Harbor TLS Secret = %q, want poligon-harbor-tls", got)
+	if got := renderFleetString(t, SharedHarborTLSSecretTemplate, base); got != "demo-harbor-tls" {
+		t.Errorf("default Harbor TLS Secret = %q, want demo-harbor-tls", got)
 	}
 	base["ClusterAnnotations"] = map[string]string{
 		"p2p.dragonfly.io/harbor-tls-secret": "custom-harbor-tls",
