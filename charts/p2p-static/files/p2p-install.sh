@@ -35,6 +35,13 @@ NYDUS_SNAPSHOTTER_BINARY="containerd-nydus-grpc"
 # from the mirror path and removes that proxy block.
 NYDUS_MIRROR_DIR="/etc/nydus/mirrors"
 NYDUS_MIRROR_URL="${NYDUS_MIRROR_URL:-}"
+# Host nydus-snapshotter filesystem driver. The Helm chart renders the
+# nydus.fsDriver value into the placeholder below; a raw script run defaults to
+# fscache. fusedev is the documented fallback when fscache modules are absent.
+NYDUS_FS_DRIVER="${NYDUS_FS_DRIVER:-__NYDUS_FS_DRIVER__}"
+case "$NYDUS_FS_DRIVER" in
+  ""|__NYDUS_*) NYDUS_FS_DRIVER="fscache" ;;
+esac
 SCHEDULER_PORT=443
 PREFLIGHT_TIMEOUT="${P2P_PREFLIGHT_TIMEOUT:-3}"
 BIN_DIR="${ROOT}/usr/local/bin"
@@ -176,7 +183,7 @@ while IFS= read -r line || [ -n "$line" ]; do
   value="${line#*=}"
   value="${value%$'\r'}"
   case "$key" in
-    MANAGER_GRPC|STATIC_URL|SMART_PROXY_URL|NYDUS_MIRROR_URL|SCHEDULER_HOST|SCHEDULER_CLUSTER_ID|NYDUS_VERSION|CA_CRT_B64|CLIENT_CRT_B64|CLIENT_KEY_B64)
+    MANAGER_GRPC|STATIC_URL|SMART_PROXY_URL|NYDUS_MIRROR_URL|NYDUS_CLUSTER_ID|SCHEDULER_HOST|SCHEDULER_CLUSTER_ID|NYDUS_VERSION|CA_CRT_B64|CLIENT_CRT_B64|CLIENT_KEY_B64)
       printf -v "$key" '%s' "$value"
       ;;
   esac
@@ -267,6 +274,31 @@ if [ "$SCHEDULER_CLUSTER_ID" -lt 1 ] 2>/dev/null; then
   die "scheduler_cluster_id must be a positive integer"
 fi
 
+case "$NYDUS_FS_DRIVER" in
+  fscache|fusedev) ;;
+  *) die "nydus_fs_driver must be fscache or fusedev" ;;
+esac
+
+# nydusd bootstrap id/domain_id. Precedence: optional payload/env value (or the
+# chart nydus.clusterId render), then the scheduler cluster ID, then hostname.
+NYDUS_CLUSTER_ID_DEFAULT="__NYDUS_CLUSTER_ID__"
+case "$NYDUS_CLUSTER_ID_DEFAULT" in
+  __NYDUS_*) NYDUS_CLUSTER_ID_DEFAULT="" ;;
+esac
+NYDUS_CLUSTER_ID="${NYDUS_CLUSTER_ID:-$NYDUS_CLUSTER_ID_DEFAULT}"
+if [ -z "$NYDUS_CLUSTER_ID" ]; then
+  NYDUS_CLUSTER_ID="$SCHEDULER_CLUSTER_ID"
+fi
+if [ -z "$NYDUS_CLUSTER_ID" ]; then
+  NYDUS_CLUSTER_ID="$(hostname 2>/dev/null || true)"
+fi
+if [ -z "$NYDUS_CLUSTER_ID" ]; then
+  NYDUS_CLUSTER_ID="nydus"
+fi
+case "$NYDUS_CLUSTER_ID" in
+  *[!A-Za-z0-9._-]*) die "nydus_cluster_id contains an unsupported character" ;;
+esac
+
 write_direct_template() {
   local major template
   major="${CONTAINERD_MAJOR:-$(detect_containerd_major)}"
@@ -341,6 +373,48 @@ preflight() {
 
 preflight
 
+# fscache (EROFS over the kernel fscache/cachefiles stack) needs all three
+# modules. When they are unavailable, fall back to fusedev explicitly instead
+# of starting a snapshotter that cannot mount images.
+MODPROBE_BIN="${MODPROBE:-modprobe}"
+load_kernel_modules() {
+  local module
+  case "$NYDUS_FS_DRIVER" in
+    fscache)
+      for module in erofs fscache cachefiles; do
+        if ! "$MODPROBE_BIN" "$module" >/dev/null 2>&1; then
+          log "ERROR: could not load kernel module ${module} required by fscache"
+          return 1
+        fi
+      done
+      ;;
+    *)
+      for module in fuse erofs; do
+        "$MODPROBE_BIN" "$module" >/dev/null 2>&1 || log "warning: could not load module ${module}"
+      done
+      ;;
+  esac
+}
+
+if [ "${SKIP_MODULES:-0}" != "1" ] && { [ "$REAL_ROOT" = "1" ] || [ -n "${MODPROBE:-}" ]; }; then
+  if command -v "$MODPROBE_BIN" >/dev/null 2>&1; then
+    if ! load_kernel_modules; then
+      log "ERROR: fscache selected but erofs/fscache/cachefiles are unavailable; falling back to fusedev"
+      NYDUS_FS_DRIVER="fusedev"
+    fi
+  elif [ "$NYDUS_FS_DRIVER" = "fscache" ]; then
+    log "ERROR: fscache selected but ${MODPROBE_BIN} is unavailable; falling back to fusedev"
+    NYDUS_FS_DRIVER="fusedev"
+  else
+    log "warning: ${MODPROBE_BIN} is not available"
+  fi
+fi
+
+case "$NYDUS_FS_DRIVER" in
+  fscache) NYDUSD_CONFIG_PATH="${NYDUS_DIR}/nydusd-config.fscache.json" ;;
+  *) NYDUSD_CONFIG_PATH="${NYDUS_DIR}/nydusd-config.json" ;;
+esac
+
 mkdir -p \
   "${ROOT}${CERT_DIR}" \
   "${ROOT}${NYDUS_DIR}" \
@@ -349,6 +423,7 @@ mkdir -p \
   "$RKE2_CONTAINERD_DIR" \
   "${ROOT}/var/lib/nydus/cache" \
   "${ROOT}/var/lib/containerd-nydus" \
+  "${ROOT}/var/lib/containerd-nydus/cache" \
   "${ROOT}/var/lib/dragonfly"
 
 if ! printf '%s' "$CA_CRT_B64" | base64 -d > "$TMP/ca.crt"; then
@@ -374,7 +449,7 @@ write_file "${ROOT}${CERT_DIR}/tls.key" 0600 < "$TMP/tls.key"
 # matching hosts.toml entry. The same proxy path is used for docker.io and its
 # index.docker.io alias; _default covers any other registry host. These files
 # contain only the public mirror URL, never credentials.
-if [ -n "${NYDUS_MIRROR_URL:-}" ]; then
+if [ -n "${NYDUS_MIRROR_URL:-}" ] && [ "$NYDUS_FS_DRIVER" = "fusedev" ]; then
   for mirror_host in docker.io index.docker.io _default; do
     mirror_dir="${ROOT}${NYDUS_MIRROR_DIR}/${mirror_host}"
     mkdir -p "$mirror_dir"
@@ -408,8 +483,36 @@ scheduler:
   addr: "$SCHEDULER_HOST:$SCHEDULER_PORT"
 EOF
 
-{
-  cat <<'TOML'
+if [ "$NYDUS_FS_DRIVER" = "fscache" ]; then
+  # Exact fscache shape: one shared snapshotter daemon, EROFS over the kernel
+  # fscache/cachefiles stack, kubeconfig keychain for registry auth. The nydus
+  # mirror layout is not part of this shape; the nydusd fscache bootstrap keeps
+  # the local dfdaemon proxy instead.
+  write_file "${ROOT}${NYDUS_DIR}/config.toml" 0644 <<TOML
+version = 1
+root = "/var/lib/containerd-nydus"
+address = "/run/containerd-nydus/containerd-nydus-grpc.sock"
+daemon_mode = "shared"
+
+[daemon]
+  nydusd_path = "/usr/local/bin/nydusd"
+  nydusimage_path = "/usr/local/bin/nydus-image"
+  nydusd_config = "${NYDUSD_CONFIG_PATH}"
+  fs_driver = "fscache"
+  threads_number = 8
+
+[remote]
+  skip_ssl_verify = false
+
+[remote.auth]
+  enable_kubeconfig_keychain = true
+TOML
+  if [ -n "${NYDUS_MIRROR_URL:-}" ]; then
+    log "warning: NYDUS_MIRROR_URL is only applied with fs_driver=fusedev; the fscache nydusd config keeps the dfdaemon proxy"
+  fi
+else
+  {
+    cat <<'TOML'
 version = 1
 root = "/var/lib/containerd-nydus"
 address = "/run/containerd-nydus/containerd-nydus-grpc.sock"
@@ -432,8 +535,8 @@ daemon_mode = "multiple"
   enable_referrer_detect = true
   enable_index_detect = true
 TOML
-  if [ -n "${NYDUS_MIRROR_URL:-}" ]; then
-    cat <<TOML
+    if [ -n "${NYDUS_MIRROR_URL:-}" ]; then
+      cat <<TOML
 
 # Mirror host selection for nydusd. The snapshotter rewrites the backend host
 # to the first matching mirror before each mount; the files are written under
@@ -441,8 +544,48 @@ TOML
 [remote.mirrors_config]
   dir = "$NYDUS_MIRROR_DIR"
 TOML
-  fi
-} | write_file "${ROOT}${NYDUS_DIR}/config.toml" 0644
+    fi
+  } | write_file "${ROOT}${NYDUS_DIR}/config.toml" 0644
+fi
+
+# nydusd fscache bootstrap. This is the canonical shape shipped as
+# files/nydusd-config.fscache.json; the ids come from the chart value or the
+# bootstrap payload, never from a hardcoded cluster name. The Dragonfly local
+# proxy URL/ping stay at 127.0.0.1:4001/4003 with fallback enabled.
+write_file "${ROOT}${NYDUS_DIR}/nydusd-config.fscache.json" 0644 <<JSON
+{
+  "type": "bootstrap",
+  "id": "$NYDUS_CLUSTER_ID",
+  "domain_id": "$NYDUS_CLUSTER_ID",
+  "config": {
+    "version": 2,
+    "id": "factory1",
+    "backend": {
+      "type": "registry",
+      "registry": {
+        "scheme": "https",
+        "skip_verify": false,
+        "timeout": 10,
+        "connect_timeout": 5,
+        "retry_limit": 4,
+        "proxy": {
+          "url": "http://127.0.0.1:4001",
+          "ping_url": "http://127.0.0.1:4003/healthy",
+          "fallback": true,
+          "check_interval": 5
+        }
+      }
+    },
+    "cache": {
+      "type": "fscache",
+      "fscache": {
+        "work_dir": "/var/lib/containerd-nydus/cache"
+      }
+    },
+    "metadata_path": "/var/lib/containerd-nydus/cache"
+  }
+}
+JSON
 
 # fs_prefetch is the documented nydusd prefetch/readahead control. Avoid
 # rafs.prefetch/rafs.readahead here: the pinned nydusd schema does not document
@@ -727,7 +870,8 @@ Unit=dfdaemon-bootstrap-switch.service
 WantedBy=timers.target
 UNIT
 
-write_file "${SERVICE_DIR}/nydus-snapshotter-bootstrap.service" 0644 <<'UNIT'
+{
+  cat <<'UNIT'
 [Unit]
 Description=Dragonfly host nydus snapshotter
 Documentation=https://d7y.io
@@ -739,7 +883,9 @@ ConditionPathExists=/etc/nydus/config.toml
 [Service]
 Type=simple
 Environment=PATH=/usr/local/bin:/usr/local/sbin:/usr/sbin:/usr/bin:/sbin:/bin
-ExecStart=/usr/local/bin/containerd-nydus-grpc --config /etc/nydus/config.toml --nydusd /usr/local/bin/nydusd --nydusd-config /etc/nydus/nydusd-config.json
+UNIT
+  printf 'ExecStart=/usr/local/bin/containerd-nydus-grpc --config /etc/nydus/config.toml --nydusd /usr/local/bin/nydusd --nydusd-config %s\n' "$NYDUSD_CONFIG_PATH"
+  cat <<'UNIT'
 ExecStartPost=/bin/sh -c 'i=0; while [ ! -S /run/containerd-nydus/containerd-nydus-grpc.sock ]; do i=$((i + 1)); [ "$i" -ge 60 ] && exit 1; sleep 1; done'
 Restart=always
 RestartSec=5
@@ -750,6 +896,7 @@ LimitNOFILE=1048576
 [Install]
 WantedBy=multi-user.target
 UNIT
+} | write_file "${SERVICE_DIR}/nydus-snapshotter-bootstrap.service" 0644
 
 # Host-only updater: keeps the pinned static nydus binaries current and
 # restarts the host unit when anything changed. The patched nydus-snapshotter
@@ -873,18 +1020,6 @@ if [ "${SKIP_DOWNLOAD:-0}" != "1" ]; then
   fi
 fi
 
-if [ "$REAL_ROOT" = "1" ] && [ "${SKIP_MODULES:-0}" != "1" ]; then
-  if command -v modprobe >/dev/null 2>&1; then
-    for module in fuse erofs; do
-      if ! modprobe "$module" 2>/dev/null; then
-        log "warning: could not load module ${module}"
-      fi
-    done
-  else
-    log "warning: modprobe is not available"
-  fi
-fi
-
 if [ "$REAL_ROOT" = "1" ] && [ "${SKIP_SYSTEMD:-0}" != "1" ]; then
   command -v systemctl >/dev/null 2>&1 || fallback_direct "systemctl is required"
   systemctl daemon-reload || fallback_direct "systemctl daemon-reload failed"
@@ -902,10 +1037,10 @@ fi
 log "certificates written to ${CERT_DIR}"
 log "dfget.yaml written with scheduler cluster ID ${SCHEDULER_CLUSTER_ID}"
 log "dynconfig written with scheduler ${SCHEDULER_HOST}:${SCHEDULER_PORT}"
-log "nydus ${NYDUS_VERSION} configuration written to ${NYDUS_DIR}"
-if [ -n "${NYDUS_MIRROR_URL:-}" ]; then
+log "nydus ${NYDUS_VERSION} configuration written to ${NYDUS_DIR} (fs_driver=${NYDUS_FS_DRIVER}, nydusd_config=${NYDUSD_CONFIG_PATH})"
+if [ -n "${NYDUS_MIRROR_URL:-}" ] && [ "$NYDUS_FS_DRIVER" = "fusedev" ]; then
   log "nydus mirror ${NYDUS_MIRROR_URL} configured; dfdaemon proxy block disabled for nydus blobs"
-else
+elif [ -z "${NYDUS_MIRROR_URL:-}" ]; then
   log "nydus mirror disabled; keeping the dfdaemon proxy fallback for nydus blobs"
 fi
 log "nydus-snapshotter ${NYDUS_SNAPSHOTTER_VERSION} installed from ${NYDUS_SNAPSHOTTER_REPO}"

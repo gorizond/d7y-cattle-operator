@@ -43,6 +43,17 @@ grep -q 'nydus-updater' "$tmp/p2p-static.yaml" || fail "p2p-static script is mis
 grep -q 'use_local_image_pull' "$tmp/p2p-static.yaml" || fail "p2p-static script is missing the global nydus drop-in"
 grep -q 'enable_referrer_detect = true' "$tmp/p2p-static.yaml" || fail "p2p-static script is missing enable_referrer_detect"
 grep -q 'enable_index_detect = true' "$tmp/p2p-static.yaml" || fail "p2p-static script is missing enable_index_detect"
+grep -q 'nydusd-config.fscache.json' "$tmp/p2p-static.yaml" || fail "p2p-static script is missing the fscache nydusd config"
+grep -q 'fs_driver = "fscache"' "$tmp/p2p-static.yaml" || fail "p2p-static script is missing the fscache fs_driver"
+grep -q 'threads_number = 8' "$tmp/p2p-static.yaml" || fail "p2p-static script is missing fscache threads_number"
+grep -q 'enable_kubeconfig_keychain = true' "$tmp/p2p-static.yaml" || fail "p2p-static script is missing the kubeconfig keychain"
+grep -q 'NYDUS_FS_DRIVER="${NYDUS_FS_DRIVER:-fscache}"' "$tmp/p2p-static.yaml" || fail "p2p-static chart value nydus.fsDriver did not render"
+if grep -q '__NYDUS_FS_DRIVER__' "$tmp/p2p-static.yaml" || grep -q '__NYDUS_CLUSTER_ID__' "$tmp/p2p-static.yaml"; then
+  fail "p2p-static script still contains unrendered nydus placeholders"
+fi
+if grep -q 'k3s-gpu-erofs' "$tmp/p2p-static.yaml"; then
+  fail "p2p-static must not hardcode a cluster name"
+fi
 if grep -q '"auth"' "$tmp/p2p-static.yaml"; then
   fail "p2p-static must not embed registry credentials (network-only or node keychain)"
 fi
@@ -57,5 +68,10 @@ fi
 if grep -q 'kind: PersistentVolumeClaim' "$tmp/p2p-static.yaml"; then
   fail "p2p-static must not render a PVC"
 fi
+
+helm template p2p-static "$root/charts/p2p-static" --namespace dragonfly-system \
+  --set nydus.fsDriver=fusedev --set nydus.clusterId=example-node >"$tmp/p2p-static-values.yaml"
+grep -q 'NYDUS_FS_DRIVER="${NYDUS_FS_DRIVER:-fusedev}"' "$tmp/p2p-static-values.yaml" || fail "p2p-static chart value nydus.fsDriver=fusedev did not render"
+grep -q 'NYDUS_CLUSTER_ID_DEFAULT="example-node"' "$tmp/p2p-static-values.yaml" || fail "p2p-static chart value nydus.clusterId did not render"
 
 echo "p2p-static render checks passed"

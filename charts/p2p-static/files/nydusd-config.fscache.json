@@ -1,0 +1,32 @@
+{
+  "type": "bootstrap",
+  "id": "__NYDUS_CLUSTER_ID__",
+  "domain_id": "__NYDUS_CLUSTER_ID__",
+  "config": {
+    "version": 2,
+    "id": "factory1",
+    "backend": {
+      "type": "registry",
+      "registry": {
+        "scheme": "https",
+        "skip_verify": false,
+        "timeout": 10,
+        "connect_timeout": 5,
+        "retry_limit": 4,
+        "proxy": {
+          "url": "http://127.0.0.1:4001",
+          "ping_url": "http://127.0.0.1:4003/healthy",
+          "fallback": true,
+          "check_interval": 5
+        }
+      }
+    },
+    "cache": {
+      "type": "fscache",
+      "fscache": {
+        "work_dir": "/var/lib/containerd-nydus/cache"
+      }
+    },
+    "metadata_path": "/var/lib/containerd-nydus/cache"
+  }
+}

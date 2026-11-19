@@ -35,6 +35,16 @@ ingress:
 # host updater; /bin/ is the legacy fallback. The patched nydus-snapshotter is
 # downloaded from its GitHub release by p2p-install.sh, not from this store.
 # The chart never ships binaries and creates no PVC by default.
+nydus:
+  # Host nydus-snapshotter filesystem driver rendered into p2p-install.sh.
+  # "fscache" selects EROFS over the kernel fscache/cachefiles stack and
+  # requires the erofs, fscache, and cachefiles modules; the installer falls
+  # back to "fusedev" (and logs an error) when they are unavailable.
+  fsDriver: fscache
+  # Optional nydusd bootstrap id/domain_id. Empty uses the scheduler cluster ID
+  # from the bootstrap payload, then the node hostname.
+  clusterId: ""
+
 static:
   existingClaim: ""
   sizeLimit: ""

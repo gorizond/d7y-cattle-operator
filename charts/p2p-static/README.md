@@ -20,6 +20,20 @@ helm install p2p-static charts/p2p-static \
 populate it from GitOps/an init job. `static.sizeLimit` optionally caps the
 `emptyDir`.
 
+The chart values `nydus.fsDriver` and `nydus.clusterId` are rendered into
+`p2p-install.sh`:
+
+```bash
+helm install p2p-static charts/p2p-static \
+  --set nydus.fsDriver=fusedev        # legacy fallback; default is fscache
+  --set nydus.clusterId=example-node  # nydusd id/domain_id; default empty
+```
+
+`nydus.fsDriver` selects the host snapshotter filesystem driver (`fscache`
+by default, `fusedev` as the documented fallback). `nydus.clusterId` is
+optional: when empty the installer uses the payload scheduler cluster ID and
+then the node hostname.
+
 The Ingress is optional and does not manage TLS or DNS.
 
 ## Bootstrap payload
@@ -78,12 +92,26 @@ deployed, and workloads do not need `runtimeClass: nydus`.
   global-nydus `config.toml.tmpl` with the same snapshotter and proxy settings.
 - The host unit starts before `rke2-server.service`/`rke2-agent.service`
   (`Before=`) and uses
-  `containerd-nydus-grpc --config /etc/nydus/config.toml --nydusd /usr/local/bin/nydusd --nydusd-config /etc/nydus/nydusd-config.json`.
-- `/etc/nydus/config.toml` uses `daemon_mode = "multiple"` and
-  `fs_driver = "fusedev"`. Under `[experimental]` it sets
-  `enable_referrer_detect = true` and `enable_index_detect = true`; tarfs is
-  not enabled. These are nydus-snapshotter `config.toml` options (in the
-  `[experimental]` table), not nydusd JSON fields.
+  `containerd-nydus-grpc --config /etc/nydus/config.toml --nydusd /usr/local/bin/nydusd --nydusd-config <config>`.
+  `<config>` is `/etc/nydus/nydusd-config.fscache.json` for `fscache` and
+  `/etc/nydus/nydusd-config.json` for `fusedev`.
+- `/etc/nydus/config.toml` uses the fscache shape by default:
+  `daemon_mode = "shared"`, `nydusd_config =
+  "/etc/nydus/nydusd-config.fscache.json"`, `fs_driver = "fscache"`,
+  `threads_number = 8`, `[remote] skip_ssl_verify = false`, and
+  `[remote.auth] enable_kubeconfig_keychain = true`. With
+  `nydus.fsDriver=fusedev` it instead uses `daemon_mode = "multiple"`,
+  `fs_driver = "fusedev"`, `[experimental] enable_referrer_detect =
+  true`/`enable_index_detect = true`, and the legacy
+  `/etc/nydus/nydusd-config.json`. Tarfs is never enabled.
+- `/etc/nydus/nydusd-config.fscache.json` is the nydusd bootstrap config for
+  EROFS over fscache. It is generated from the canonical
+  `files/nydusd-config.fscache.json` shape: `registry` backend over the local
+  Dragonfly proxy (`http://127.0.0.1:4001`, ping
+  `http://127.0.0.1:4003/healthy`, `fallback: true`), `fscache` cache under
+  `/var/lib/containerd-nydus/cache`, and `id`/`domain_id` from the chart
+  value, the payload `NYDUS_CLUSTER_ID`, the scheduler cluster ID, or the
+  node hostname. No cluster name is hardcoded.
 - `/etc/nydus/nydusd-config.json` uses the `registry` backend. Without
   `NYDUS_MIRROR_URL` it keeps the object-form dfdaemon proxy at
   `http://127.0.0.1:4001` with `fallback: true` and `use_http: false`. With
@@ -95,9 +123,24 @@ deployed, and workloads do not need `runtimeClass: nydus`.
   nydusd schema does not document those keys, and unknown fields can prevent
   nydusd from starting.
 
+### fscache kernel requirements
+
+The default `fscache` driver needs the `erofs`, `fscache`, and `cachefiles`
+kernel modules. `p2p-install.sh` runs `modprobe` for all three; if any module
+is unavailable (or `modprobe` is missing) it logs an error and falls back to
+`fusedev` with the legacy nydusd config, rather than starting a snapshotter
+that cannot mount images. Set `nydus.fsDriver=fusedev` to skip the fscache
+probe entirely. The installer does not manage `cachefilesd`; the node image
+must provide any fscache userspace setup the kernel requires.
+
 ### Nydus mirror config
 
-When `NYDUS_MIRROR_URL` is set, the installer writes:
+The mirror layout applies to the `fusedev` driver only. In the default
+`fscache` mode the installer keeps the local dfdaemon proxy in the nydusd
+bootstrap and logs a warning if `NYDUS_MIRROR_URL` is set; the fscache
+`config.toml` does not include `[remote.mirrors_config]`.
+
+When `NYDUS_MIRROR_URL` is set with `fusedev`, the installer writes:
 
 ```text
 /etc/nydus/mirrors/docker.io/hosts.toml
@@ -262,17 +305,25 @@ bash charts/p2p-static/files/test.sh
 
 The test uses temporary roots, `SKIP_DOWNLOAD=1`, and a fake `curl`/release
 asset for the snapshotter download path; it asserts the env payload decode,
-certificate files/modes, `dfget.yaml`, `dynconfig.yaml`, scheduler ID,
-`/etc/nydus/config.toml` (multiple/fusedev, no tarfs, certs.d behavior), the
-registry-backend `nydusd-config.json`, the optional nydus mirror layout and
+certificate files/modes, `dfget.yaml`, `dynconfig.yaml`, scheduler ID, the
+default fscache `/etc/nydus/config.toml` shape and the exact
+`nydusd-config.fscache.json` render (including dynamic `id`/`domain_id`),
+the `fusedev` fallback config and unit path, `modprobe` calls for
+`erofs`/`fscache`/`cachefiles` plus the module-failure fallback, the
+registry-backend `nydusd-config.json`, the fusedev nydus mirror layout and
 proxy-free backend, the global nydus drop-in (containerd
 2.x) and global template (containerd 1.x), the host snapshotter unit and
 release URL/checksum, the updater script/units, the fail-open direct-registry
-path, and absence of certificate values in logs. `scripts/test-p2p-static.sh` runs `bash -n`, `shellcheck` when
+path, and absence of certificate values in logs. `shellcheck` runs when
+installed. `scripts/test-p2p-static.sh` runs `bash -n`, `shellcheck` when
 available, the self-test, and a `helm template` render check.
 
 ## Pilot gaps
 
+- The fscache path is unit- and render-tested only. `erofs`/`fscache`/
+  `cachefiles` availability, any `cachefilesd` setup, and the pinned
+  snapshotter's support for `threads_number`/`enable_kubeconfig_keychain` need
+  a live poligon run before rollout.
 - Base-template merge and drop-in import behaviour need a live pilot, including
   `containerd config dump` after a manual `rke2-agent`/`rke2-server` restart.
 - The static `/bin` (or `/nydus/<version>`) volume must be populated externally

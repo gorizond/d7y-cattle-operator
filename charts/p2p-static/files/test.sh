@@ -33,15 +33,22 @@ assert_file() {
   fi
 }
 
+assert_dir() {
+  if [ ! -d "$1" ]; then
+    echo "p2p-static self-test: missing directory $1" >&2
+    exit 1
+  fi
+}
+
 assert_contains() {
-  if ! grep -Fq "$2" "$1"; then
+  if ! grep -Fq -- "$2" "$1"; then
     echo "p2p-static self-test: $1 does not contain '$2'" >&2
     exit 1
   fi
 }
 
 assert_not_contains() {
-  if grep -Fq "$2" "$1"; then
+  if grep -Fq -- "$2" "$1"; then
     echo "p2p-static self-test: $1 unexpectedly contains '$2'" >&2
     exit 1
   fi
@@ -52,7 +59,7 @@ assert_count() {
   file="$1"
   pattern="$2"
   expected="$3"
-  actual="$(grep -Fc "$pattern" "$file" || true)"
+  actual="$(grep -Fc -- "$pattern" "$file" || true)"
   if [ "$actual" -ne "$expected" ]; then
     echo "p2p-static self-test: $file has $actual occurrences of '$pattern', want $expected" >&2
     exit 1
@@ -72,6 +79,8 @@ assert_file "${ROOT_ONE}/etc/dragonfly/dfget.yaml"
 assert_file "${ROOT_ONE}/etc/dragonfly/dynconfig.yaml"
 assert_file "${ROOT_ONE}/etc/nydus/config.toml"
 assert_file "${ROOT_ONE}/etc/nydus/nydusd-config.json"
+assert_file "${ROOT_ONE}/etc/nydus/nydusd-config.fscache.json"
+assert_dir "${ROOT_ONE}/var/lib/containerd-nydus/cache"
 assert_file "${ROOT_ONE}/etc/nydus/updater.env"
 assert_file "${ROOT_ONE}/usr/local/bin/nydus-updater"
 assert_file "${ROOT_ONE}/var/lib/rancher/rke2/agent/etc/containerd/config.toml.tmpl"
@@ -94,13 +103,19 @@ assert_contains "${ROOT_ONE}/etc/dragonfly/dfget.yaml" 'autoIssueCert: false'
 assert_contains "${ROOT_ONE}/etc/dragonfly/dfget.yaml" 'caCert:'
 assert_not_contains "${ROOT_ONE}/etc/dragonfly/dfget.yaml" 'upload:'
 assert_not_contains "${ROOT_ONE}/etc/dragonfly/dfget.yaml" 'client:'
-assert_contains "${ROOT_ONE}/etc/nydus/config.toml" 'daemon_mode = "multiple"'
-assert_contains "${ROOT_ONE}/etc/nydus/config.toml" 'fs_driver = "fusedev"'
+assert_contains "${ROOT_ONE}/etc/nydus/config.toml" 'version = 1'
+assert_contains "${ROOT_ONE}/etc/nydus/config.toml" 'root = "/var/lib/containerd-nydus"'
+assert_contains "${ROOT_ONE}/etc/nydus/config.toml" 'address = "/run/containerd-nydus/containerd-nydus-grpc.sock"'
+assert_contains "${ROOT_ONE}/etc/nydus/config.toml" 'daemon_mode = "shared"'
+assert_contains "${ROOT_ONE}/etc/nydus/config.toml" 'fs_driver = "fscache"'
+assert_contains "${ROOT_ONE}/etc/nydus/config.toml" 'nydusd_config = "/etc/nydus/nydusd-config.fscache.json"'
 assert_contains "${ROOT_ONE}/etc/nydus/config.toml" 'nydusd_path = "/usr/local/bin/nydusd"'
 assert_contains "${ROOT_ONE}/etc/nydus/config.toml" 'nydusimage_path = "/usr/local/bin/nydus-image"'
-assert_contains "${ROOT_ONE}/etc/nydus/config.toml" 'enable_referrer_detect = true'
-assert_contains "${ROOT_ONE}/etc/nydus/config.toml" 'enable_index_detect = true'
-assert_contains "${ROOT_ONE}/etc/nydus/config.toml" 'containerd/certs.d'
+assert_contains "${ROOT_ONE}/etc/nydus/config.toml" 'threads_number = 8'
+assert_contains "${ROOT_ONE}/etc/nydus/config.toml" 'skip_ssl_verify = false'
+assert_contains "${ROOT_ONE}/etc/nydus/config.toml" 'enable_kubeconfig_keychain = true'
+assert_not_contains "${ROOT_ONE}/etc/nydus/config.toml" 'enable_referrer_detect'
+assert_not_contains "${ROOT_ONE}/etc/nydus/config.toml" 'enable_index_detect'
 assert_not_contains "${ROOT_ONE}/etc/nydus/config.toml" 'enable_tarfs'
 assert_not_contains "${ROOT_ONE}/etc/nydus/config.toml" 'mirrors_config'
 assert_contains "${ROOT_ONE}/etc/nydus/nydusd-config.json" '"type": "registry"'
@@ -113,6 +128,42 @@ assert_contains "${ROOT_ONE}/etc/nydus/nydusd-config.json" '"fs_prefetch": {'
 assert_contains "${ROOT_ONE}/etc/nydus/nydusd-config.json" '"threads_count": 8'
 assert_contains "${ROOT_ONE}/etc/nydus/nydusd-config.json" '"prefetch_all": true'
 assert_not_contains "${ROOT_ONE}/etc/nydus/nydusd-config.json" 'enable_oci_tar'
+
+CANONICAL_FSCACHE="${HERE}/nydusd-config.fscache.json"
+assert_file "$CANONICAL_FSCACHE"
+assert_count "$CANONICAL_FSCACHE" '__NYDUS_CLUSTER_ID__' 2
+assert_contains "$CANONICAL_FSCACHE" '"type": "bootstrap"'
+assert_contains "$CANONICAL_FSCACHE" '"type": "fscache"'
+assert_contains "$CANONICAL_FSCACHE" '"work_dir": "/var/lib/containerd-nydus/cache"'
+assert_contains "$CANONICAL_FSCACHE" '"url": "http://127.0.0.1:4001"'
+assert_contains "$CANONICAL_FSCACHE" '"ping_url": "http://127.0.0.1:4003/healthy"'
+assert_not_contains "$CANONICAL_FSCACHE" 'k3s-gpu-erofs'
+assert_not_contains "$CANONICAL_FSCACHE" '"type": "blobcache"'
+FSCACHE_JSON="${ROOT_ONE}/etc/nydus/nydusd-config.fscache.json"
+assert_contains "$FSCACHE_JSON" '"type": "bootstrap"'
+assert_contains "$FSCACHE_JSON" '"id": "2"'
+assert_contains "$FSCACHE_JSON" '"domain_id": "2"'
+assert_contains "$FSCACHE_JSON" '"version": 2'
+assert_contains "$FSCACHE_JSON" '"scheme": "https"'
+assert_contains "$FSCACHE_JSON" '"skip_verify": false'
+assert_contains "$FSCACHE_JSON" '"timeout": 10'
+assert_contains "$FSCACHE_JSON" '"retry_limit": 4'
+assert_contains "$FSCACHE_JSON" '"url": "http://127.0.0.1:4001"'
+assert_contains "$FSCACHE_JSON" '"ping_url": "http://127.0.0.1:4003/healthy"'
+assert_contains "$FSCACHE_JSON" '"fallback": true'
+assert_contains "$FSCACHE_JSON" '"check_interval": 5'
+assert_contains "$FSCACHE_JSON" '"type": "fscache"'
+assert_contains "$FSCACHE_JSON" '"work_dir": "/var/lib/containerd-nydus/cache"'
+assert_contains "$FSCACHE_JSON" '"metadata_path": "/var/lib/containerd-nydus/cache"'
+assert_not_contains "$FSCACHE_JSON" 'k3s-gpu-erofs'
+assert_not_contains "$FSCACHE_JSON" '"type": "blobcache"'
+# The generated bootstrap must stay byte-identical to the canonical chart
+# template, with only the cluster id substituted.
+sed 's/__NYDUS_CLUSTER_ID__/2/g' "$CANONICAL_FSCACHE" > "${WORK}/nydusd-config.fscache.expected.json"
+if ! cmp -s "${WORK}/nydusd-config.fscache.expected.json" "$FSCACHE_JSON"; then
+  echo "p2p-static self-test: nydusd fscache config does not match the canonical template" >&2
+  exit 1
+fi
 assert_contains "${ROOT_ONE}/etc/nydus/updater.env" 'NYDUS_VERSION=v0.16.0'
 assert_file "${ROOT_ONE}/usr/local/bin/dfdaemon-bootstrap-switch"
 assert_file "${ROOT_ONE}/etc/systemd/system/dfdaemon-bootstrap-boot.service"
@@ -132,7 +183,7 @@ assert_contains "${ROOT_ONE}/usr/local/bin/nydus-updater" 'systemctl restart nyd
 assert_contains "${ROOT_ONE}/etc/systemd/system/nydus-updater.timer" 'OnUnitActiveSec=24h'
 assert_contains "${ROOT_ONE}/etc/systemd/system/dfdaemon-bootstrap.service" 'Before=rke2-server.service rke2-agent.service'
 assert_contains "${ROOT_ONE}/etc/systemd/system/nydus-snapshotter-bootstrap.service" 'Before=rke2-server.service rke2-agent.service'
-assert_contains "${ROOT_ONE}/etc/systemd/system/nydus-snapshotter-bootstrap.service" 'ExecStart=/usr/local/bin/containerd-nydus-grpc --config /etc/nydus/config.toml --nydusd /usr/local/bin/nydusd --nydusd-config /etc/nydus/nydusd-config.json'
+assert_contains "${ROOT_ONE}/etc/systemd/system/nydus-snapshotter-bootstrap.service" 'ExecStart=/usr/local/bin/containerd-nydus-grpc --config /etc/nydus/config.toml --nydusd /usr/local/bin/nydusd --nydusd-config /etc/nydus/nydusd-config.fscache.json'
 assert_contains "${ROOT_ONE}/etc/systemd/system/nydus-snapshotter-bootstrap.service" 'ExecStartPost=/bin/sh -c'
 assert_contains "${ROOT_ONE}/etc/systemd/system/nydus-snapshotter-bootstrap.service" 'Restart=always'
 assert_contains "${ROOT_ONE}/etc/systemd/system/nydus-snapshotter-bootstrap.service" 'RuntimeDirectory=containerd-nydus'
@@ -255,7 +306,7 @@ fi
 
 ROOT_MIRROR="${WORK}/root-mirror"
 MIRROR_CFG="$(payload scheduler.example.test https://proxy.example.test/docker.io/)"
-P2P_ROOT="$ROOT_MIRROR" SKIP_DOWNLOAD=1 SKIP_MODULES=1 SKIP_SYSTEMD=1 SKIP_PREFLIGHT=1 CONTAINERD_MAJOR=1 \
+P2P_ROOT="$ROOT_MIRROR" NYDUS_FS_DRIVER=fusedev SKIP_DOWNLOAD=1 SKIP_MODULES=1 SKIP_SYSTEMD=1 SKIP_PREFLIGHT=1 CONTAINERD_MAJOR=1 \
   bash "$INSTALL" "$MIRROR_CFG" > "${WORK}/mirror.log" 2>&1
 for mirror_host in docker.io index.docker.io _default; do
   MIRROR_FILE="${ROOT_MIRROR}/etc/nydus/mirrors/${mirror_host}/hosts.toml"
@@ -393,5 +444,72 @@ if [ -f "${ROOT_NO_ASSET}/usr/local/bin/containerd-nydus-grpc" ]; then
 fi
 assert_file "${ROOT_NO_ASSET}/var/lib/rancher/rke2/agent/etc/containerd/config.toml.tmpl"
 assert_contains "${ROOT_NO_ASSET}/var/lib/rancher/rke2/agent/etc/containerd/config.toml.tmpl" 'snapshotter = "overlayfs"'
+
+ROOT_MIRROR_FSCACHE="${WORK}/root-mirror-fscache"
+P2P_ROOT="$ROOT_MIRROR_FSCACHE" SKIP_DOWNLOAD=1 SKIP_MODULES=1 SKIP_SYSTEMD=1 SKIP_PREFLIGHT=1 CONTAINERD_MAJOR=1 \
+  bash "$INSTALL" "$MIRROR_CFG" > "${WORK}/mirror-fscache.log" 2>&1
+assert_contains "${WORK}/mirror-fscache.log" 'only applied with fs_driver=fusedev'
+assert_contains "${ROOT_MIRROR_FSCACHE}/etc/nydus/config.toml" 'fs_driver = "fscache"'
+assert_not_contains "${ROOT_MIRROR_FSCACHE}/etc/nydus/config.toml" 'mirrors_config'
+assert_not_contains "${ROOT_MIRROR_FSCACHE}/etc/nydus/nydusd-config.fscache.json" 'proxy.example.test'
+
+ROOT_FUSEDEV="${WORK}/root-fusedev"
+P2P_ROOT="$ROOT_FUSEDEV" NYDUS_FS_DRIVER=fusedev SKIP_DOWNLOAD=1 SKIP_MODULES=1 SKIP_SYSTEMD=1 SKIP_PREFLIGHT=1 CONTAINERD_MAJOR=1 \
+  bash "$INSTALL" "$CFG" > "${WORK}/fusedev.log" 2>&1
+assert_contains "${ROOT_FUSEDEV}/etc/nydus/config.toml" 'daemon_mode = "multiple"'
+assert_contains "${ROOT_FUSEDEV}/etc/nydus/config.toml" 'fs_driver = "fusedev"'
+assert_contains "${ROOT_FUSEDEV}/etc/nydus/config.toml" 'nydusd_config = "/etc/nydus/nydusd-config.json"'
+assert_contains "${ROOT_FUSEDEV}/etc/nydus/config.toml" 'enable_referrer_detect = true'
+assert_contains "${ROOT_FUSEDEV}/etc/nydus/config.toml" 'enable_index_detect = true'
+assert_contains "${ROOT_FUSEDEV}/etc/nydus/config.toml" 'containerd/certs.d'
+assert_not_contains "${ROOT_FUSEDEV}/etc/nydus/config.toml" 'mirrors_config'
+assert_contains "${ROOT_FUSEDEV}/etc/systemd/system/nydus-snapshotter-bootstrap.service" \
+  'ExecStart=/usr/local/bin/containerd-nydus-grpc --config /etc/nydus/config.toml --nydusd /usr/local/bin/nydusd --nydusd-config /etc/nydus/nydusd-config.json'
+
+MODPROBE_OK="${WORK}/modprobe-ok"
+MODPROBE_CALLS="${WORK}/modprobe-calls"
+MODPROBE_FAIL="${WORK}/modprobe-fail"
+: > "$MODPROBE_CALLS"
+cat > "$MODPROBE_OK" <<'FAKEMODPROBE'
+#!/usr/bin/env bash
+printf '%s\n' "$1" >> "${MODPROBE_CALLS:?}"
+FAKEMODPROBE
+cat > "$MODPROBE_FAIL" <<'FAKEMODPROBE'
+#!/usr/bin/env bash
+[ "$1" = "cachefiles" ] && exit 1
+exit 0
+FAKEMODPROBE
+chmod 0755 "$MODPROBE_OK" "$MODPROBE_FAIL"
+
+ROOT_MOD_OK="${WORK}/root-mod-ok"
+MODPROBE="$MODPROBE_OK" MODPROBE_CALLS="$MODPROBE_CALLS" P2P_ROOT="$ROOT_MOD_OK" NYDUS_CLUSTER_ID=node-a \
+  SKIP_DOWNLOAD=1 SKIP_SYSTEMD=1 SKIP_PREFLIGHT=1 CONTAINERD_MAJOR=1 \
+  bash "$INSTALL" "$CFG" > "${WORK}/mod-ok.log" 2>&1
+assert_contains "$MODPROBE_CALLS" 'erofs'
+assert_contains "$MODPROBE_CALLS" 'fscache'
+assert_contains "$MODPROBE_CALLS" 'cachefiles'
+assert_contains "${ROOT_MOD_OK}/etc/nydus/config.toml" 'fs_driver = "fscache"'
+assert_contains "${ROOT_MOD_OK}/etc/nydus/nydusd-config.fscache.json" '"id": "node-a"'
+assert_contains "${ROOT_MOD_OK}/etc/nydus/nydusd-config.fscache.json" '"domain_id": "node-a"'
+assert_not_contains "${ROOT_MOD_OK}/etc/nydus/nydusd-config.fscache.json" 'k3s-gpu-erofs'
+
+ROOT_MOD_FAIL="${WORK}/root-mod-fail"
+MODPROBE="$MODPROBE_FAIL" P2P_ROOT="$ROOT_MOD_FAIL" SKIP_DOWNLOAD=1 SKIP_SYSTEMD=1 SKIP_PREFLIGHT=1 CONTAINERD_MAJOR=1 \
+  bash "$INSTALL" "$CFG" > "${WORK}/mod-fail.log" 2>&1
+assert_contains "${WORK}/mod-fail.log" 'ERROR: could not load kernel module cachefiles required by fscache'
+assert_contains "${WORK}/mod-fail.log" 'falling back to fusedev'
+assert_contains "${ROOT_MOD_FAIL}/etc/nydus/config.toml" 'fs_driver = "fusedev"'
+assert_contains "${ROOT_MOD_FAIL}/etc/nydus/config.toml" 'nydusd_config = "/etc/nydus/nydusd-config.json"'
+assert_contains "${ROOT_MOD_FAIL}/etc/systemd/system/nydus-snapshotter-bootstrap.service" \
+  '--nydusd-config /etc/nydus/nydusd-config.json'
+
+if command -v shellcheck >/dev/null 2>&1; then
+  shellcheck "$INSTALL" "$0" || {
+    echo "p2p-static self-test: shellcheck failed" >&2
+    exit 1
+  }
+else
+  echo "p2p-static self-test: shellcheck not installed; skipping"
+fi
 
 echo "p2p-static self-test: OK"
