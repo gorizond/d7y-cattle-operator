@@ -150,6 +150,9 @@ func TestSharedValuesUseFleetTemplates(t *testing.T) {
 	if got := valueAt(t, extras, "vpa", "targets", "data", "name"); got != "${ .ClusterName }-data-seed-client" {
 		t.Errorf("extras data VPA target = %v", got)
 	}
+	if got := valueAt(t, extras, "ingress", "enabled"); got != SharedManagerIngressEnabledTemplate {
+		t.Errorf("extras ingress.enabled = %v, want the manager-label template", got)
+	}
 
 	admission := SharedAdmission(c)
 	if admission.Spec.TargetNamespace != "" || admission.Spec.DefaultNamespace != TargetNamespace {
@@ -561,4 +564,52 @@ func fleetTemplateFuncs() template.FuncMap {
 		"trim":  strings.TrimSpace,
 		"quote": func(s string) string { return strconv.Quote(s) },
 	}
+}
+
+func TestSharedExtrasManagerIngressGate(t *testing.T) {
+	if got := valueAt(t, SharedExtras(sharedTestCluster(), ExtrasOptions{}).Spec.Helm.Values.Data, "ingress", "enabled"); got != SharedManagerIngressEnabledTemplate {
+		t.Errorf("SharedExtras ingress.enabled = %v, want the manager-label template", got)
+	}
+
+	seedOnly := map[string]string{LabelGate: "true", LabelRoleSeed: "true"}
+	if got := renderFleetBool(t, SharedManagerIngressEnabledTemplate, seedOnly); got {
+		t.Errorf("seed-only labels rendered ingress.enabled = true, want false")
+	}
+
+	manager := map[string]string{LabelGate: "true", LabelRoleManager: "true"}
+	if got := renderFleetBool(t, SharedManagerIngressEnabledTemplate, manager); !got {
+		t.Errorf("manager labels rendered ingress.enabled = false, want true")
+	}
+}
+
+// renderFleetBool renders a values template through the same YAML-marshal ->
+// ${ } text-template -> YAML-unmarshal flow Fleet uses and asserts the result is
+// a real bool. A quoted "false" would be a string and truthy in Helm.
+func renderFleetBool(t *testing.T, text string, labels map[string]string) bool {
+	t.Helper()
+	raw, err := kyaml.Marshal(map[string]any{"ingress": map[string]any{"enabled": text}})
+	if err != nil {
+		t.Fatalf("marshal values: %v", err)
+	}
+	tmpl, err := template.New("values").Funcs(fleetTemplateFuncs()).Option("missingkey=error").Delims("${", "}").Parse(string(raw))
+	if err != nil {
+		t.Fatalf("parse template: %v", err)
+	}
+	var b bytes.Buffer
+	if err := tmpl.Execute(&b, map[string]any{
+		"ClusterLabels":      labels,
+		"ClusterAnnotations": map[string]string{},
+	}); err != nil {
+		t.Fatalf("render template: %v", err)
+	}
+	var doc map[string]any
+	if err := kyaml.Unmarshal(b.Bytes(), &doc); err != nil {
+		t.Fatalf("parse rendered values %q: %v", b.String(), err)
+	}
+	ingress, _ := doc["ingress"].(map[string]any)
+	enabled, ok := ingress["enabled"].(bool)
+	if !ok {
+		t.Fatalf("ingress.enabled = %T (%v), want a YAML bool (a quoted string is truthy in Helm)", ingress["enabled"], ingress["enabled"])
+	}
+	return enabled
 }

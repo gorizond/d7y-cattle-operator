@@ -57,9 +57,10 @@ func Extras(c Cluster, opts ExtrasOptions) *fleetv1alpha1.HelmOp {
 
 // SharedExtras returns the shared dragonfly-extras HelmOp. It targets seed
 // Clusters: the public scheduler front, its DNS alias and the VPA target names
-// are per-target Fleet templates. The manager Ingress is enabled unconditionally
-// because Fleet cannot template booleans; seed Clusters that only consume a
-// remote manager render an Ingress with no local backend.
+// are per-target Fleet templates. The manager Ingress is gated per target by a
+// templated boolean on the d7y-operator-manager label: seed-only Clusters
+// render ingress.enabled=false, so the chart skips the manager Ingress and
+// IngressRouteTCP entirely.
 func SharedExtras(c Cluster, opts ExtrasOptions) *fleetv1alpha1.HelmOp {
 	c = sharedCluster(c)
 	names := SharedNames()
@@ -72,8 +73,10 @@ func SharedExtras(c Cluster, opts ExtrasOptions) *fleetv1alpha1.HelmOp {
 	opts.SchedulerClusterID = SharedSchedulerClusterIDTemplate
 	opts.SchedulerService = names.ControlScheduler
 	opts.SchedulerPort = SchedulerPort
+	values := extrasValues(c, opts, names)
+	values["ingress"].(map[string]any)["enabled"] = SharedManagerIngressEnabledTemplate
 	return newSharedHelmOp(SharedExtrasName(), TargetNamespace, c, c.ExtrasChart, "extras",
-		extrasValues(c, opts, names), nil, SharedSelector())
+		values, nil, SharedSelector())
 }
 
 func extrasValues(c Cluster, opts ExtrasOptions, names Names) map[string]any {
