@@ -238,4 +238,10 @@ func TestManagerDoesNotRetryNonConvertible(t *testing.T) {
 	if state.Attempts != 1 || !strings.Contains(state.LastError, "not convertible") {
 		t.Errorf("state = %+v", state)
 	}
+	if !state.Permanent {
+		t.Error("non-convertible job was not marked permanent")
+	}
+	if manager.Enqueue(job) {
+		t.Error("permanent non-convertible job was accepted for another attempt")
+	}
 }

@@ -131,6 +131,11 @@ func (b *HarborBackend) enqueueTagConversion(manifest Manifest, registry, repo, 
 	if state, ok := b.Jobs.State(job.Key()); ok {
 		switch state.State {
 		case "failed":
+			// A platform mismatch is permanent: re-copying the image on every
+			// pull cannot make it convertible.
+			if state.Permanent {
+				return false
+			}
 			if time.Since(state.UpdatedAt) >= conversionRetryDelay {
 				b.Jobs.Enqueue(job)
 			}
