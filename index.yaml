@@ -76,6 +76,20 @@ entries:
     version: 0.1.0
   d7y-cattle-operator:
   - apiVersion: v2
+    appVersion: 0.1.66
+    created: "2026-11-19T23:57:38.879730454Z"
+    description: Dragonfly P2P operator for Rancher-managed RKE2 clusters
+    digest: cb3fa5bc19f8ed6ca3dc1747cd4465bcd25d2eab13f19102d7202ba74107b4e4
+    home: https://github.com/gorizond/d7y-cattle-operator
+    kubeVersion: '>=1.28.0-0'
+    name: d7y-cattle-operator
+    sources:
+    - https://github.com/gorizond/d7y-cattle-operator
+    type: application
+    urls:
+    - https://github.com/gorizond/d7y-cattle-operator/releases/download/d7y-cattle-operator-0.1.66/d7y-cattle-operator-0.1.66.tgz
+    version: 0.1.66
+  - apiVersion: v2
     appVersion: 0.1.65
     created: "2026-11-19T23:30:44.231130766Z"
     description: Dragonfly P2P operator for Rancher-managed RKE2 clusters
@@ -1144,6 +1158,20 @@ entries:
   registry-proxy:
   - apiVersion: v2
     appVersion: 0.1.45
+    created: "2026-11-19T23:57:39.480225403Z"
+    description: Smart OCI registry proxy fronting Harbor for Dragonfly/nydus clusters
+    digest: 28026869adaa1c2e461d465ec1d9d54fe10aaafa487cfc235c6aad93cac9d699
+    home: https://github.com/gorizond/d7y-cattle-operator
+    kubeVersion: '>=1.28.0-0'
+    name: registry-proxy
+    sources:
+    - https://github.com/gorizond/d7y-cattle-operator
+    type: application
+    urls:
+    - https://github.com/gorizond/d7y-cattle-operator/releases/download/registry-proxy-0.1.23/registry-proxy-0.1.23.tgz
+    version: 0.1.23
+  - apiVersion: v2
+    appVersion: 0.1.45
     created: "2026-11-19T23:11:46.720643615Z"
     description: Smart OCI registry proxy fronting Harbor for Dragonfly/nydus clusters
     digest: 2f7796c694007971c0a06985e79e120b6e0048488e01cadef30cb38621302924
@@ -1436,4 +1464,4 @@ entries:
     urls:
     - https://github.com/gorizond/d7y-cattle-operator/releases/download/registry-proxy-0.1.0/registry-proxy-0.1.0.tgz
     version: 0.1.0
-generated: "2026-11-19T23:30:44.594657959Z"
+generated: "2026-11-19T23:57:39.480451482Z"
