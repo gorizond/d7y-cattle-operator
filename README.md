@@ -532,10 +532,11 @@ is the security boundary. The first segment must still look like a registry
 `index.docker.io`) are canonicalized to `docker.io` before Harbor project
 mapping.
 
-On the first manifest request for a tag the proxy starts the copy and nydus
-conversion job and answers `503` with `Retry-After` while it runs; after the
-job completes the same tag returns the nydus OCI index. Digest references
-cannot carry a same-digest nydus index and keep the source OCI manifest. Blob
+On the first manifest request for a tag the proxy returns the source OCI
+manifest immediately and starts the copy and nydus conversion job in the
+background; after the job completes the same tag returns the nydus OCI index.
+Digest references cannot carry a same-digest nydus index and keep the source
+OCI manifest. Blob
 requests never copy the image: they read the `mirror` project first and fall
 back to the Harbor proxy project, so a multi-arch copy still walks every index
 child once in the background job.

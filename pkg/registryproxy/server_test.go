@@ -500,6 +500,48 @@ func TestServerDirectRefRejectsAmbiguousAndUnknown(t *testing.T) {
 	}
 }
 
+func TestServerFirstPullServesSourceOCIThenNydus(t *testing.T) {
+	source := newFakeRegistry()
+	mirror := newFakeRegistry()
+	source.manifests["dockerio/library/nginx:1.27"] = Manifest{
+		Digest: "sha256:source", MediaType: ociManifestType,
+		Body: []byte(`{"schemaVersion":2,"mediaType":"application/vnd.oci.image.manifest.v1+json","config":{"digest":"sha256:config"},"layers":[]}`),
+	}
+	manager := NewManager(nil)
+	server := directServer(&HarborBackend{Source: source, Mirror: mirror, MirrorProject: "mirror", Jobs: manager})
+	target := "/v2/docker.io/library/nginx/manifests/1.27"
+
+	for i := 0; i < 2; i++ {
+		rec := httptest.NewRecorder()
+		server.Handler().ServeHTTP(rec, httptest.NewRequest(http.MethodGet, target, nil))
+		if rec.Code != http.StatusOK {
+			t.Fatalf("pull %d = %d %q, want 200", i+1, rec.Code, rec.Body.String())
+		}
+		if got := rec.Header().Get("Docker-Content-Digest"); got != "sha256:source" {
+			t.Errorf("pull %d digest = %q, want the source manifest", i+1, got)
+		}
+	}
+	if got := manager.Pending(); got != 1 {
+		t.Errorf("pending jobs = %d, want 1", got)
+	}
+
+	// The job finishes and the mirror exposes the converted nydus index.
+	job := Job{Registry: "docker.io", Repository: "library/nginx", Reference: "1.27", Tag: "1.27", Digest: "sha256:source"}
+	manager.setState(job.Key(), "ready", 1, "")
+	mirror.manifests["mirror/docker.io/library/nginx:1.27"] = Manifest{
+		Digest: "sha256:nydus", MediaType: ociIndexType,
+		Body: []byte(`{"schemaVersion":2,"mediaType":"application/vnd.oci.image.index.v1+json","manifests":[]}`),
+	}
+	rec := httptest.NewRecorder()
+	server.Handler().ServeHTTP(rec, httptest.NewRequest(http.MethodGet, target, nil))
+	if rec.Code != http.StatusOK {
+		t.Fatalf("converted pull = %d %q, want 200", rec.Code, rec.Body.String())
+	}
+	if got := rec.Header().Get("Docker-Content-Digest"); got != "sha256:nydus" {
+		t.Errorf("converted digest = %q, want the nydus index", got)
+	}
+}
+
 func TestServerConversionInProgress(t *testing.T) {
 	server := directServer(&fakeBackend{})
 	server.Backend = backendFunc(func(context.Context, string, string, string) (Manifest, error) {
@@ -737,8 +779,12 @@ func TestHarborBackendReconvertsStaleCachedIndex(t *testing.T) {
 		Source: newFakeRegistry(), Mirror: mirror, MirrorProject: "mirror",
 		ProxyPublicURL: testProxyURL, Jobs: manager,
 	}
-	if _, err := backend.GetManifest(context.Background(), "docker.io", "library/nginx", "1.27"); !errors.Is(err, ErrConverting) {
-		t.Fatalf("stale cached tag error = %v, want ErrConverting", err)
+	manifest, err := backend.GetManifest(context.Background(), "docker.io", "library/nginx", "1.27")
+	if err != nil {
+		t.Fatalf("stale cached tag error = %v, want the mirror manifest", err)
+	}
+	if manifest.Digest != "sha256:stale" {
+		t.Errorf("manifest digest = %q, want the stale mirror manifest", manifest.Digest)
 	}
 	if got := manager.Pending(); got != 1 {
 		t.Errorf("pending reconversions = %d, want 1", got)
