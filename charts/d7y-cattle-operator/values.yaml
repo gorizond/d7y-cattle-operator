@@ -92,7 +92,7 @@ registryProxy:
   chart:
     repo: https://gorizond.github.io/d7y-cattle-operator
     name: registry-proxy
-    version: 0.1.14
+    version: 0.1.15
 
 # Opt-in admission webhook chart (p2p.dragonfly.io/admission). Independent of
 # Harbor/proxy/seed: it only needs proxy.domain and is never auto-installed.

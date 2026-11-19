@@ -107,6 +107,14 @@ func TestRegistryProxyHelmOp(t *testing.T) {
 	if got := valueAt(t, values, "harbor", "url"); got != "https://harbor.example.com" {
 		t.Errorf("harbor.url = %v", got)
 	}
+	// The chart renders these values into both the pod mounts/config and the
+	// robot Secret Role, so a mismatch would break bootstrap RBAC.
+	if got := valueAt(t, values, "harbor", "robotSecret"); got != "c1-registry-proxy-robot" {
+		t.Errorf("harbor.robotSecret = %v", got)
+	}
+	if got := valueAt(t, values, "webhook", "secretName"); got != "c1-registry-proxy-webhook" {
+		t.Errorf("webhook.secretName = %v", got)
+	}
 	if got := valueAt(t, values, "mirror", "project"); got != "mirror" {
 		t.Errorf("mirror.project = %v", got)
 	}

@@ -7,10 +7,18 @@ metadata:
   labels:
     {{- include "registry-proxy.labels" . | nindent 4 }}
 rules:
+  # Read/refresh is limited to the Harbor robot Secret. Create cannot be
+  # restricted the same way: a create request carries no resource name, so
+  # Kubernetes cannot match a resourceNames entry (the name in the request
+  # body is not used for authorization). Keep create secrets-only and
+  # namespace-scoped; the proxy never deletes Secrets.
   - apiGroups: [""]
     resources: ["secrets"]
     resourceNames: [{{ .Values.harbor.robotSecret | quote }}]
-    verbs: ["get", "create", "update"]
+    verbs: ["get", "update"]
+  - apiGroups: [""]
+    resources: ["secrets"]
+    verbs: ["create"]
 ---
 apiVersion: rbac.authorization.k8s.io/v1
 kind: RoleBinding

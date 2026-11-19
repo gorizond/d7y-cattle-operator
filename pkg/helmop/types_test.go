@@ -5,6 +5,14 @@ import (
 	"testing"
 )
 
+func TestRegistryProxyChartVersion(t *testing.T) {
+	// The operator values and HelmOp defaults must pin the chart that contains
+	// the robot Secret RBAC split (create is not name-scopable).
+	if RegistryProxyChartVersion != "0.1.15" {
+		t.Errorf("RegistryProxyChartVersion = %q, want 0.1.15", RegistryProxyChartVersion)
+	}
+}
+
 func TestHelmOpSerializesPromotedFields(t *testing.T) {
 	data, err := json.Marshal(Manager(testCluster()))
 	if err != nil {

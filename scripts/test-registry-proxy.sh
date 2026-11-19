@@ -89,6 +89,35 @@ grep -q 'optional: true' "$tmp/proxy.yaml" || fail "proxy robot/webhook Secrets 
 grep -q '/usr/local/bin/nydus-image' "$tmp/proxy.yaml" || fail "conversion nydus image path is missing"
 grep -q -- '- "*"' "$tmp/proxy.yaml" || fail "proxy allow-any allowlist is missing"
 
+# The Role must match the Secret the proxy actually writes. Render with a
+# cluster-specific name so a value that reaches the ConfigMap but not RBAC
+# (the 0.1.14 bootstrap failure) is caught here.
+helm template poligon-registry-proxy "$chart" --namespace dragonfly-system \
+  --set harbor.robotSecret=poligon-registry-proxy-robot \
+  --set webhook.secretName=poligon-registry-proxy-webhook >"$tmp/named.yaml"
+grep -q 'robot_secret: "poligon-registry-proxy-robot"' "$tmp/named.yaml" || \
+  fail "proxy config robot Secret name is missing"
+grep -q 'secretName: poligon-registry-proxy-robot' "$tmp/named.yaml" || \
+  fail "proxy robot Secret mount does not use the configured name"
+grep -q 'name: poligon-registry-proxy-robot-secret' "$tmp/named.yaml" || \
+  fail "proxy robot Secret Role name is missing"
+grep -q 'resourceNames: \["poligon-registry-proxy-robot"\]' "$tmp/named.yaml" || \
+  fail "RBAC resourceNames does not scope the robot Secret"
+grep -q 'verbs: \["get", "update"\]' "$tmp/named.yaml" || \
+  fail "RBAC does not grant get/update on the robot Secret"
+if grep -q 'resourceNames: .*"\*"' "$tmp/named.yaml"; then
+  fail "RBAC must not use a wildcard resourceNames entry"
+fi
+if grep -Eq 'verbs: .*"delete' "$tmp/named.yaml"; then
+  fail "RBAC must not grant delete on the robot Secret"
+fi
+# A resourceNames-scoped create is ignored by Kubernetes: keep create in its
+# own secrets-only rule.
+grep -q 'verbs: \["create"\]' "$tmp/named.yaml" || \
+  fail "RBAC does not grant create on secrets for first bootstrap"
+awk '/resourceNames:/{f=1} /verbs: \["create"\]/{if (f) exit 1} /verbs: \["get", "update"\]/{f=0}' "$tmp/named.yaml" || \
+  fail "create must not be in the resourceNames-scoped rule"
+
 if grep -q 'kind: PersistentVolumeClaim' "$tmp/proxy.yaml"; then
   fail "registry-proxy must not render a PVC"
 fi
