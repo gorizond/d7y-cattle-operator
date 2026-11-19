@@ -81,6 +81,16 @@ webhooks:
         {{- with .Values.namespaceSelector.matchExpressions }}
         {{- toYaml . | nindent 8 }}
         {{- end }}
+        {{- /* Extra namespaces come from the operator annotation; empty means
+               no custom expression is rendered. */}}
+        {{- with .Values.namespaceSelector.excludedNamespaces }}
+        - key: kubernetes.io/metadata.name
+          operator: NotIn
+          values:
+            {{- range . }}
+            - {{ . | quote }}
+            {{- end }}
+        {{- end }}
         {{- /* Always exclude the Helm release namespace so the webhook cannot
                block its own Deployment, wherever the chart is installed. */}}
         - key: kubernetes.io/metadata.name

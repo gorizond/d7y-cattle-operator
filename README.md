@@ -41,7 +41,9 @@ Live envtest/pilot verification remains deferred.
   `p2p.dragonfly.io/admission: "true"` (`<cluster>-admission-webhook`). It
   rewrites any explicit registry (and Docker Hub shorthand) to
   `<proxy.domain>/<registry>/<repo>:<tag>`,
-  preserves `@sha256`, and is independent of Harbor/proxy/seed.
+  preserves `@sha256`, and is independent of Harbor/proxy/seed. The
+  `p2p.dragonfly.io/mutate-exclure` annotation adds per-cluster namespace
+  exclusions to the webhook's `namespaceSelector`.
 - Manages the manager Ingresses, the public scheduler TCP front, and optional
   VPAs through the separate `<cluster>-extras` HelmOp and the
   `dragonfly-extras` chart. The operator has no Ingress, IngressRouteTCP, or
@@ -614,6 +616,7 @@ The operator only acts on Clusters labeled `p2p-dragonfly-io: "true"`.
 | `p2p.dragonfly.io/harbor-domain` | DNS name | Harbor Ingress host / `externalURL` |
 | `p2p.dragonfly.io/harbor-url` | HTTPS URL | Use an existing/external Harbor; no Harbor HelmOp |
 | `p2p.dragonfly.io/proxy` | `"true"` | Deploy the independent registry proxy HelmOp |
+| `p2p.dragonfly.io/mutate-exclure` | comma-separated namespaces | Extra namespaces the admission webhook skips (added to the system and release-namespace exclusions); invalid DNS-1123 labels are logged and skipped |
 | `p2p.dragonfly.io/p2p-data-tls` | `"true"` or `"enabled"` | Keep mTLS on the P2P data path (`seedClient`/`client` upload and scheduler `seedPeer`). Default/off uses plaintext P2P data; scheduler server, manager gRPC/API, and monitoring TLS are unaffected. |
 | `p2p.dragonfly.io/node-config-key` | field name | Machine-config `spec` field patched by the webhook (default `userData`, e.g. `postBootScript`) |
 

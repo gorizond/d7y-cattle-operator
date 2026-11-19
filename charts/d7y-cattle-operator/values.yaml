@@ -100,7 +100,7 @@ admission:
   chart:
     repo: https://gorizond.github.io/d7y-cattle-operator
     name: admission-webhook
-    version: 0.1.1
+    version: 0.1.2
   # Optional credential injection for proxy pulls. With networkOnly=true (the
   # default) no imagePullSecrets/serviceAccountName are injected.
   networkOnly: true

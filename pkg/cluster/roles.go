@@ -2,6 +2,7 @@ package cluster
 
 import (
 	"fmt"
+	"log/slog"
 	"net/url"
 	"strings"
 
@@ -38,6 +39,10 @@ const (
 	// AnnotationAdmission deploys the opt-in Pod image rewriting webhook. It is
 	// independent of Harbor, the proxy, and the seed role.
 	AnnotationAdmission = "p2p.dragonfly.io/admission"
+	// AnnotationAdmissionExclude lists namespaces the admission webhook must
+	// skip, in addition to the chart's system namespaces and release namespace.
+	// The annotation spelling is part of the external contract.
+	AnnotationAdmissionExclude = "p2p.dragonfly.io/mutate-exclure"
 )
 
 // Roles is the resolved role set for a Cluster.
@@ -52,6 +57,9 @@ type Roles struct {
 	// ingress/externalURL host; HarborURL selects an existing/external Harbor.
 	HarborDomain string
 	HarborURL    string
+	// AdmissionExclude is the resolved namespace skip list for the admission
+	// webhook, parsed from p2p.dragonfly.io/mutate-exclure.
+	AdmissionExclude []string
 }
 
 // ResolveRoles applies the label gate first, then the role annotations.
@@ -72,7 +80,40 @@ func ResolveRoles(cluster *provv1.Cluster) Roles {
 		Admission:    cluster.Annotations[AnnotationAdmission] == "true",
 		HarborDomain: strings.TrimSpace(cluster.Annotations[AnnotationHarborDomain]),
 		HarborURL:    strings.TrimSpace(cluster.Annotations[AnnotationHarborURL]),
+
+		AdmissionExclude: parseAdmissionExclude(cluster.Annotations[AnnotationAdmissionExclude]),
 	}
+}
+
+// parseAdmissionExclude splits the comma-separated namespace annotation,
+// trims entries, drops blanks, and deduplicates while preserving order.
+// Invalid DNS-1123 labels are logged and skipped; the list is never allowed to
+// break reconciliation.
+func parseAdmissionExclude(raw string) []string {
+	if strings.TrimSpace(raw) == "" {
+		return nil
+	}
+	seen := make(map[string]struct{})
+	var namespaces []string
+	for _, entry := range strings.Split(raw, ",") {
+		namespace := strings.TrimSpace(entry)
+		if namespace == "" {
+			continue
+		}
+		if errs := validation.IsDNS1123Label(namespace); len(errs) > 0 {
+			slog.Warn("skipping invalid admission exclude namespace",
+				"annotation", AnnotationAdmissionExclude,
+				"namespace", namespace,
+				"reason", strings.Join(errs, "; "))
+			continue
+		}
+		if _, ok := seen[namespace]; ok {
+			continue
+		}
+		seen[namespace] = struct{}{}
+		namespaces = append(namespaces, namespace)
+	}
+	return namespaces
 }
 
 // validateHarborDomain verifies the Harbor ingress/externalURL host. Scheme,

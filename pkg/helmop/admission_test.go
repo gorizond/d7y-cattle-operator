@@ -9,6 +9,7 @@ func TestAdmissionHelmOp(t *testing.T) {
 	c.AdmissionEnabled = true
 	c.AdmissionImagePullSecret = "proxy-pull"
 	c.AdmissionServiceAccount = "proxy-sa"
+	c.AdmissionExcludeNamespaces = []string{"ns-a", "ns-b"}
 
 	op := Admission(c)
 
@@ -46,6 +47,29 @@ func TestAdmissionHelmOp(t *testing.T) {
 	}
 	if got := valueAt(t, values, "networkOnly"); got != false {
 		t.Errorf("networkOnly = %v", got)
+	}
+	excluded, ok := valueAt(t, values, "namespaceSelector", "excludedNamespaces").([]string)
+	if !ok {
+		t.Fatalf("namespaceSelector.excludedNamespaces = %T, want []string", valueAt(t, values, "namespaceSelector", "excludedNamespaces"))
+	}
+	if len(excluded) != 2 || excluded[0] != "ns-a" || excluded[1] != "ns-b" {
+		t.Errorf("namespaceSelector.excludedNamespaces = %v, want [ns-a ns-b]", excluded)
+	}
+}
+
+func TestAdmissionHelmOpDefaultExcludedNamespaces(t *testing.T) {
+	c := testCluster()
+	c.AdmissionChart = Chart{Repo: "https://charts.example.com", Name: "admission-webhook", Version: "0.1.2"}
+	c.ProxyDomain = "proxy.example.com"
+	c.AdmissionEnabled = true
+
+	values := Admission(c).Spec.Helm.Values.Data
+	excluded, ok := valueAt(t, values, "namespaceSelector", "excludedNamespaces").([]string)
+	if !ok {
+		t.Fatalf("namespaceSelector.excludedNamespaces = %T, want []string", valueAt(t, values, "namespaceSelector", "excludedNamespaces"))
+	}
+	if len(excluded) != 0 {
+		t.Errorf("namespaceSelector.excludedNamespaces = %v, want empty", excluded)
 	}
 }
 

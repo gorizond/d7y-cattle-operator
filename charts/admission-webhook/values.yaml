@@ -47,6 +47,9 @@ timeoutSeconds: 5
 # always appended as an extra NotIn expression so the webhook can never block
 # its own Deployment.
 namespaceSelector:
+  # Operator-driven extra exclusions from the Cluster annotation
+  # p2p.dragonfly.io/mutate-exclure. Empty renders no custom expression.
+  excludedNamespaces: []
   matchExpressions:
     - key: kubernetes.io/metadata.name
       operator: NotIn

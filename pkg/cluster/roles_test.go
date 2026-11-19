@@ -1,6 +1,7 @@
 package cluster
 
 import (
+	"reflect"
 	"testing"
 
 	provv1 "github.com/rancher/rancher/pkg/apis/provisioning.cattle.io/v1"
@@ -17,8 +18,9 @@ func TestResolveRoles(t *testing.T) {
 		{
 			name: "label missing",
 			annotations: map[string]string{
-				AnnotationManager: "true",
-				AnnotationSeed:    "true",
+				AnnotationManager:          "true",
+				AnnotationSeed:             "true",
+				AnnotationAdmissionExclude: "ns-a",
 			},
 			want: Roles{},
 		},
@@ -63,6 +65,42 @@ func TestResolveRoles(t *testing.T) {
 			want:        Roles{Enabled: true, Admission: true},
 		},
 		{
+			name:        "admission exclude empty annotation",
+			labels:      map[string]string{LabelEnabled: "true"},
+			annotations: map[string]string{AnnotationAdmission: "true", AnnotationAdmissionExclude: ""},
+			want:        Roles{Enabled: true, Admission: true},
+		},
+		{
+			name:        "admission exclude one namespace",
+			labels:      map[string]string{LabelEnabled: "true"},
+			annotations: map[string]string{AnnotationAdmission: "true", AnnotationAdmissionExclude: "ns-a"},
+			want:        Roles{Enabled: true, Admission: true, AdmissionExclude: []string{"ns-a"}},
+		},
+		{
+			name:        "admission exclude comma and spaces",
+			labels:      map[string]string{LabelEnabled: "true"},
+			annotations: map[string]string{AnnotationAdmission: "true", AnnotationAdmissionExclude: " ns-a, ns-b ,ns-c "},
+			want:        Roles{Enabled: true, Admission: true, AdmissionExclude: []string{"ns-a", "ns-b", "ns-c"}},
+		},
+		{
+			name:        "admission exclude duplicates preserve order",
+			labels:      map[string]string{LabelEnabled: "true"},
+			annotations: map[string]string{AnnotationAdmission: "true", AnnotationAdmissionExclude: "ns-b,ns-a,ns-b"},
+			want:        Roles{Enabled: true, Admission: true, AdmissionExclude: []string{"ns-b", "ns-a"}},
+		},
+		{
+			name:        "admission exclude invalid skipped",
+			labels:      map[string]string{LabelEnabled: "true"},
+			annotations: map[string]string{AnnotationAdmission: "true", AnnotationAdmissionExclude: "ns-a,Bad_NS,ns-b"},
+			want:        Roles{Enabled: true, Admission: true, AdmissionExclude: []string{"ns-a", "ns-b"}},
+		},
+		{
+			name:        "admission exclude blank entries",
+			labels:      map[string]string{LabelEnabled: "true"},
+			annotations: map[string]string{AnnotationAdmission: "true", AnnotationAdmissionExclude: " , ,ns-a, , "},
+			want:        Roles{Enabled: true, Admission: true, AdmissionExclude: []string{"ns-a"}},
+		},
+		{
 			name:        "all current toggles",
 			labels:      map[string]string{LabelEnabled: "true"},
 			annotations: map[string]string{AnnotationHarbor: "true", AnnotationHarborDomain: "harbor.example.com", AnnotationProxy: "true", AnnotationAdmission: "true", AnnotationSeed: "true"},
@@ -87,7 +125,7 @@ func TestResolveRoles(t *testing.T) {
 					Annotations: test.annotations,
 				},
 			}
-			if got := ResolveRoles(cluster); got != test.want {
+			if got := ResolveRoles(cluster); !reflect.DeepEqual(got, test.want) {
 				t.Errorf("ResolveRoles() = %+v, want %+v", got, test.want)
 			}
 		})

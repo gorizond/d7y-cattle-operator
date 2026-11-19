@@ -78,6 +78,34 @@ helm template "$release" "$chart" --namespace custom-ns \
 grep -q -- '- "custom-ns"' "$tmp/mwc-custom.yaml" || \
   fail "release namespace exclusion is not dynamic"
 
+# Default: only the system NotIn and the release-namespace NotIn.
+count="$(grep -c 'operator: NotIn' "$tmp/mwc.yaml" || true)"
+[ "$count" -eq 2 ] || fail "default namespaceSelector has $count NotIn expressions, want 2"
+
+# Operator-driven annotation list: one extra NotIn containing both namespaces.
+helm template "$release" "$chart" --namespace "$namespace" \
+  --set proxy.domain=proxy.example.test \
+  --set "namespaceSelector.excludedNamespaces={ns-a,ns-b}" \
+  --show-only templates/webhook.yaml >"$tmp/mwc-exclude.yaml"
+count="$(grep -c 'operator: NotIn' "$tmp/mwc-exclude.yaml" || true)"
+[ "$count" -eq 3 ] || fail "custom namespaceSelector has $count NotIn expressions, want 3"
+awk '
+  /- key: kubernetes.io\/metadata.name/ {
+    if (inValues && hasA && hasB) found = 1
+    inValues = 0; hasA = 0; hasB = 0; next
+  }
+  /operator: NotIn/ { inValues = 1; next }
+  inValues && /^            - / {
+    if ($0 ~ /ns-a/) hasA = 1
+    if ($0 ~ /ns-b/) hasB = 1
+    next
+  }
+  END { if (inValues && hasA && hasB) found = 1; exit(found ? 0 : 1) }
+' "$tmp/mwc-exclude.yaml" || fail "ns-a and ns-b are not in one custom NotIn expression"
+grep -q 'kube-system' "$tmp/mwc-exclude.yaml" || fail "system exclusions are not preserved"
+grep -q -- "- \"$namespace\"" "$tmp/mwc-exclude.yaml" || \
+  fail "release namespace exclusion is not preserved with the custom list"
+
 if grep -q 'kind: PersistentVolumeClaim' "$tmp/admission.yaml"; then
   fail "admission-webhook must not render a PVC"
 fi
