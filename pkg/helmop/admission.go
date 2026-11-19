@@ -18,15 +18,32 @@ func Admission(c Cluster) *fleetv1alpha1.HelmOp {
 	return op
 }
 
-// SharedAdmission returns the shared admission-webhook HelmOp. The excluded
-// namespace list is a per-Cluster annotation and Fleet values templates cannot
-// render a list, so shared admission keeps the chart's system-namespace
-// exclusions only.
+// sharedAdmissionExcludedNamespacesTemplate renders the per-Cluster
+// mutate-exclure annotation into a real YAML list.
+//
+// Fleet marshals helm.values to YAML, renders ${ } over the whole document and
+// parses the result back into values. "$" is not a YAML indicator, so this
+// string stays unquoted in the marshalled document and the rendered [...] is
+// parsed as a list. Do not wrap the template in quotes and do not JSON-encode
+// splitList: an absent annotation would render [""] instead of [].
+//
+// missingkey=error applies to field lookups; index on a missing map key
+// returns nil, so the if guard is what turns an absent annotation into [].
+// quote keeps names with special characters safe inside the flow sequence.
+// The chart's static namespaceSelector.matchExpressions are untouched.
+const sharedAdmissionExcludedNamespacesTemplate = `${ if index .ClusterAnnotations "p2p.dragonfly.io/mutate-exclure" }[${ range $i, $v := splitList "," (index .ClusterAnnotations "p2p.dragonfly.io/mutate-exclure") }${ if $i },${ end }${ trim $v | quote }${ end }]${ else }[]${ end }`
+
+// SharedAdmission returns the shared admission-webhook HelmOp. It renders the
+// per-Cluster mutate-exclure annotation through the Fleet values template above
+// so the chart receives a real list; the per-cluster builder keeps the parsed
+// list from the operator.
 func SharedAdmission(c Cluster) *fleetv1alpha1.HelmOp {
 	c = sharedCluster(c)
 	c.AdmissionExcludeNamespaces = nil
+	values := admissionValues(c)
+	values["namespaceSelector"].(map[string]any)["excludedNamespaces"] = sharedAdmissionExcludedNamespacesTemplate
 	op := newSharedHelmOp(SharedAdmissionName(), "", c, c.AdmissionChart, "admission-webhook",
-		admissionValues(c), nil, AdmissionSelector())
+		values, nil, AdmissionSelector())
 	op.Spec.TargetNamespace = ""
 	op.Spec.DefaultNamespace = TargetNamespace
 	return op
