@@ -2,6 +2,7 @@ package registryproxy
 
 import (
 	"context"
+	"errors"
 	"fmt"
 	"log/slog"
 	"strings"
@@ -10,8 +11,13 @@ import (
 	"time"
 )
 
-// Job is one requested image copy/conversion. Digest is preferred for
-// deduplication; Reference is the tag or digest used for the Harbor copy.
+// defaultAttemptTimeout bounds one conversion attempt. A stuck nydusify or
+// registry call must not occupy the single worker forever; the default is
+// deliberately generous because large layer copies are slow.
+const defaultAttemptTimeout = 30 * time.Minute
+
+// Job is one requested image copy/conversion. Reference is the tag or digest
+// used for the Harbor copy; Tag is the user-visible tag when known.
 type Job struct {
 	Registry   string
 	Repository string
@@ -35,17 +41,21 @@ type JobState struct {
 	State     string
 	Attempts  int
 	LastError string
+	Digest    string
 	UpdatedAt time.Time
 }
 
-// Manager deduplicates jobs by registry/repo/digest and runs one worker. It is
-// intentionally in-memory: Harbor is the source of truth after restart.
+// Manager deduplicates jobs by registry/repo/tag-or-digest and runs one
+// worker. It is intentionally in-memory: Harbor is the source of truth after
+// restart.
 type Manager struct {
 	mu      sync.Mutex
 	jobs    map[string]*JobState
 	queue   chan Job
 	work    func(context.Context, Job) error
 	started bool
+	// AttemptTimeout bounds each work call. Zero uses defaultAttemptTimeout.
+	AttemptTimeout time.Duration
 
 	enqueued  atomic.Uint64
 	succeeded atomic.Uint64
@@ -61,43 +71,60 @@ func NewManager(work func(context.Context, Job) error) *Manager {
 	}
 }
 
-// Key returns the deduplication key for a job.
+// Key returns the deduplication key: registry/repo/<tag-or-digest>. Tags are
+// keyed by tag, not by digest, so a moved tag is visibly a new conversion
+// while a repeated webhook for the same tag+digest stays deduplicated.
 func (j Job) Key() string {
-	ref := j.Digest
+	ref := j.TagOrReference()
 	if ref == "" {
-		ref = j.Reference
+		ref = j.Digest
 	}
 	return j.Registry + "/" + j.Repository + "/" + ref
 }
 
 // Enqueue accepts a job once. Duplicate pending/converting/ready jobs are
-// ignored; failed jobs may be retried by a later webhook/pull.
+// ignored unless the tag moved to a different digest; failed jobs may be
+// retried by a later webhook/pull.
 func (m *Manager) Enqueue(job Job) bool {
 	key := job.Key()
 	m.mu.Lock()
 	defer m.mu.Unlock()
 	if existing, ok := m.jobs[key]; ok {
-		if existing.State != "failed" {
-			return false
-		}
-		existing.State = "pending"
-		existing.LastError = ""
-		existing.UpdatedAt = time.Now().UTC()
-		select {
-		case m.queue <- job:
-			m.enqueued.Add(1)
-			return true
-		default:
+		if existing.State != "failed" && (job.Digest == "" || existing.Digest == job.Digest) {
 			return false
 		}
 	}
-	m.jobs[key] = &JobState{State: "pending", UpdatedAt: time.Now().UTC()}
+	return m.enqueueLocked(key, job)
+}
+
+// Requeue drops a finished or failed job state and enqueues the job again.
+// A pending/converting job is left alone. Used by the authenticated one-shot
+// reconvert endpoint to refresh cached tags with a stale source reference.
+func (m *Manager) Requeue(job Job) bool {
+	key := job.Key()
+	m.mu.Lock()
+	if existing, ok := m.jobs[key]; ok && (existing.State == "pending" || existing.State == "converting") {
+		m.mu.Unlock()
+		return false
+	}
+	delete(m.jobs, key)
+	m.mu.Unlock()
+	return m.Enqueue(job)
+}
+
+func (m *Manager) enqueueLocked(key string, job Job) bool {
+	previous, had := m.jobs[key]
+	m.jobs[key] = &JobState{State: "pending", Digest: job.Digest, UpdatedAt: time.Now().UTC()}
 	select {
 	case m.queue <- job:
 		m.enqueued.Add(1)
 		return true
 	default:
-		delete(m.jobs, key)
+		if had {
+			m.jobs[key] = previous
+		} else {
+			delete(m.jobs, key)
+		}
 		return false
 	}
 }
@@ -126,11 +153,21 @@ func (m *Manager) Start(ctx context.Context) {
 func (m *Manager) run(ctx context.Context, job Job) {
 	key := job.Key()
 	m.setState(key, "converting", 0, "")
+	timeout := m.AttemptTimeout
+	if timeout <= 0 {
+		timeout = defaultAttemptTimeout
+	}
 	var err error
 	for attempt := 1; attempt <= 3; attempt++ {
-		if m.work != nil {
-			err = m.work(ctx, job)
+		if ctx.Err() != nil {
+			m.finishFailed(key, attempt-1, ctx.Err())
+			return
 		}
+		attemptCtx, cancel := context.WithTimeout(ctx, timeout)
+		if m.work != nil {
+			err = m.work(attemptCtx, job)
+		}
+		cancel()
 		if err == nil {
 			m.setState(key, "ready", attempt, "")
 			m.succeeded.Add(1)
@@ -144,9 +181,22 @@ func (m *Manager) run(ctx context.Context, job Job) {
 			"attempt", attempt,
 			"error", err,
 		)
+		if errors.Is(err, context.DeadlineExceeded) || errors.Is(err, context.Canceled) || ctx.Err() != nil {
+			// A timed-out or shutting-down attempt is not retried: retrying a
+			// stuck conversion only extends the worker stall.
+			m.finishFailed(key, attempt, err)
+			return
+		}
 		m.setState(key, "converting", attempt, err.Error())
 	}
-	m.setState(key, "failed", 3, err.Error())
+	m.finishFailed(key, 3, err)
+}
+
+func (m *Manager) finishFailed(key string, attempts int, err error) {
+	if err == nil {
+		err = errors.New("job failed")
+	}
+	m.setState(key, "failed", attempts, err.Error())
 	m.failed.Add(1)
 }
 

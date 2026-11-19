@@ -3,9 +3,11 @@ package registryproxy
 import (
 	"context"
 	"crypto/subtle"
+	"encoding/json"
 	"errors"
 	"fmt"
 	"io"
+	"log/slog"
 	"net/http"
 	"net/url"
 	"path"
@@ -48,8 +50,11 @@ type HarborBackend struct {
 	Source        Registry
 	Mirror        Registry
 	MirrorProject string
-	Provisioner   *Provisioner
-	Jobs          *Manager
+	// ProxyPublicURL enables the cached-tag freshness check: a mirrored index
+	// whose nydus source reference still points elsewhere is reconverted.
+	ProxyPublicURL string
+	Provisioner    *Provisioner
+	Jobs           *Manager
 }
 
 func (b *HarborBackend) ensure(ctx context.Context, registry string) error {
@@ -68,55 +73,110 @@ func (b *HarborBackend) mirrorRepo(registry, repo string) string {
 }
 
 func (b *HarborBackend) GetManifest(ctx context.Context, registry, repo, ref string) (Manifest, error) {
-	if err := b.ensure(ctx, registry); err != nil {
-		return Manifest{}, err
-	}
+	// Warm mirror reads need no Harbor admin calls and stay available while
+	// the admin API or the upstream registry is unhealthy.
 	if b.Mirror != nil {
 		if manifest, err := b.Mirror.GetManifest(ctx, b.mirrorRepo(registry, repo), ref); err == nil {
+			// A converted tag whose nydus source reference still points at
+			// the upstream registry (older conversion or changed proxy host)
+			// is reconverted instead of serving a broken nydus index.
+			if b.needsFreshConversion(manifest, registry, repo, ref) &&
+				b.enqueueTagConversion(manifest, registry, repo, ref, "stale-source") {
+				return Manifest{}, ErrConverting
+			}
 			return manifest, nil
 		}
 	}
+	if err := b.ensure(ctx, registry); err != nil {
+		return Manifest{}, fmt.Errorf("provision Harbor for %q: %w", registry, err)
+	}
 	manifest, err := b.Source.GetManifest(ctx, sourceRepo(registry, repo), ref)
 	if err != nil {
-		return Manifest{}, err
+		return Manifest{}, fmt.Errorf("read source manifest %s/%s:%s: %w", registry, repo, ref, err)
 	}
 	// Copy-on-read: the first pull of a tag starts the mirror copy and nydus
-	// conversion. While it runs, answer 503/Retry-After instead of returning a
-	// plain OCI manifest that nydus would skip. Digest refs cannot get a nydus
-	// index under the same reference, so they keep the source OCI manifest.
-	if b.Jobs != nil && !strings.HasPrefix(ref, "sha256:") {
-		job := Job{
-			Registry:   registry,
-			Repository: repo,
-			Reference:  ref,
-			Tag:        ref,
-			Digest:     manifest.Digest,
-			Trigger:    "pull",
-		}
-		if state, ok := b.Jobs.State(job.Key()); ok {
-			switch state.State {
-			case "failed":
-				// Conversion already failed: serve the original OCI manifest
-				// and retry in the background at most once per cooldown.
-				if time.Since(state.UpdatedAt) >= conversionRetryDelay {
-					b.Jobs.Enqueue(job)
-				}
-				return manifest, nil
-			case "pending", "converting":
-				return Manifest{}, ErrConverting
-			}
-		}
-		if b.Jobs.Enqueue(job) {
-			return Manifest{}, ErrConverting
-		}
+	// conversion once the source manifest is resolved. While it runs, answer
+	// 503/Retry-After instead of returning a plain OCI manifest that nydus
+	// would skip. Digest refs cannot get a nydus index under the same
+	// reference, so they keep the source OCI manifest and never enqueue.
+	if b.Jobs == nil || strings.HasPrefix(ref, "sha256:") {
+		return manifest, nil
+	}
+	if b.enqueueTagConversion(manifest, registry, repo, ref, "pull") {
+		return Manifest{}, ErrConverting
 	}
 	return manifest, nil
 }
 
-func (b *HarborBackend) GetBlob(ctx context.Context, registry, repo, digest, rangeHeader string) (io.ReadCloser, int64, string, error) {
-	if err := b.ensure(ctx, registry); err != nil {
-		return nil, 0, "", err
+// enqueueTagConversion starts (or observes) a tag conversion and reports
+// whether the caller should answer ErrConverting. A failed conversion serves
+// the source OCI manifest and retries in the background at most once per
+// cooldown.
+func (b *HarborBackend) enqueueTagConversion(manifest Manifest, registry, repo, ref, trigger string) bool {
+	if b.Jobs == nil || strings.HasPrefix(ref, "sha256:") {
+		return false
 	}
+	job := Job{
+		Registry:   registry,
+		Repository: repo,
+		Reference:  ref,
+		Tag:        ref,
+		Digest:     manifest.Digest,
+		Trigger:    trigger,
+	}
+	if state, ok := b.Jobs.State(job.Key()); ok {
+		switch state.State {
+		case "failed":
+			if time.Since(state.UpdatedAt) >= conversionRetryDelay {
+				b.Jobs.Enqueue(job)
+			}
+			return false
+		case "pending", "converting":
+			return true
+		}
+	}
+	if b.Jobs.Enqueue(job) {
+		slog.Info("registry proxy conversion queued",
+			"registry", registry,
+			"repository", repo,
+			"reference", ref,
+			"digest", manifest.Digest,
+			"trigger", trigger,
+		)
+		return true
+	}
+	return false
+}
+
+// needsFreshConversion reports whether a mirrored index carries a
+// nydus-source-reference annotation that does not match this proxy's public
+// reference. Body parsing is in-memory; no extra registry request is made.
+func (b *HarborBackend) needsFreshConversion(manifest Manifest, registry, repo, ref string) bool {
+	if b.ProxyPublicURL == "" || b.Jobs == nil || strings.HasPrefix(ref, "sha256:") ||
+		!isIndexMediaType(manifest.MediaType) {
+		return false
+	}
+	var index indexDocument
+	if err := json.Unmarshal(manifest.Body, &index); err != nil {
+		return false
+	}
+	expected, err := proxySourceReference(b.ProxyPublicURL, registry, repo, ref)
+	if err != nil {
+		return false
+	}
+	for key, value := range index.Annotations {
+		if key != sourceReferenceKey && key != "nydus-source-reference" &&
+			!strings.HasSuffix(key, "/nydus-source-reference") {
+			continue
+		}
+		if value != "" && value != expected {
+			return true
+		}
+	}
+	return false
+}
+
+func (b *HarborBackend) GetBlob(ctx context.Context, registry, repo, digest, rangeHeader string) (io.ReadCloser, int64, string, error) {
 	if b.Mirror != nil {
 		body, size, contentRange, err := b.Mirror.GetBlob(ctx, b.mirrorRepo(registry, repo), digest, rangeHeader)
 		if err == nil {
@@ -126,19 +186,30 @@ func (b *HarborBackend) GetBlob(ctx context.Context, registry, repo, digest, ran
 			body.Close()
 		}
 	}
-	return b.Source.GetBlob(ctx, sourceRepo(registry, repo), digest, rangeHeader)
+	if err := b.ensure(ctx, registry); err != nil {
+		return nil, 0, "", fmt.Errorf("provision Harbor for %q: %w", registry, err)
+	}
+	body, size, contentRange, err := b.Source.GetBlob(ctx, sourceRepo(registry, repo), digest, rangeHeader)
+	if err != nil {
+		return nil, 0, "", fmt.Errorf("read source blob %s/%s@%s: %w", registry, repo, digest, err)
+	}
+	return body, size, contentRange, nil
 }
 
 func (b *HarborBackend) Referrers(ctx context.Context, registry, repo, digest string) ([]byte, error) {
-	if err := b.ensure(ctx, registry); err != nil {
-		return nil, err
-	}
 	if b.Mirror != nil {
 		if refs, err := b.Mirror.Referrers(ctx, b.mirrorRepo(registry, repo), digest); err == nil {
 			return refs, nil
 		}
 	}
-	return b.Source.Referrers(ctx, sourceRepo(registry, repo), digest)
+	if err := b.ensure(ctx, registry); err != nil {
+		return nil, fmt.Errorf("provision Harbor for %q: %w", registry, err)
+	}
+	refs, err := b.Source.Referrers(ctx, sourceRepo(registry, repo), digest)
+	if err != nil {
+		return nil, fmt.Errorf("read source referrers %s/%s@%s: %w", registry, repo, digest, err)
+	}
+	return refs, nil
 }
 
 // Server exposes the read-only OCI API, health/readiness, metrics, and the
@@ -384,7 +455,7 @@ func (s *Server) manifest(w http.ResponseWriter, r *http.Request, registry, repo
 	defer cancel()
 	manifest, err := s.Backend.GetManifest(ctx, registry, repo, ref)
 	if err != nil {
-		s.writeError(w, err)
+		s.writeError(w, registry, repo, ref, err)
 		return
 	}
 	mediaType := manifest.MediaType
@@ -405,7 +476,7 @@ func (s *Server) blob(w http.ResponseWriter, r *http.Request, registry, repo, di
 	defer cancel()
 	body, size, contentRange, err := s.Backend.GetBlob(ctx, registry, repo, digest, r.Header.Get("Range"))
 	if err != nil {
-		s.writeError(w, err)
+		s.writeError(w, registry, repo, digest, err)
 		return
 	}
 	defer body.Close()
@@ -433,14 +504,17 @@ func (s *Server) referrers(w http.ResponseWriter, r *http.Request, registry, rep
 	defer cancel()
 	body, err := s.Backend.Referrers(ctx, registry, repo, digest)
 	if err != nil {
-		s.writeError(w, err)
+		s.writeError(w, registry, repo, digest, err)
 		return
 	}
 	w.Header().Set("Content-Type", "application/vnd.oci.image.index.v1+json")
 	_, _ = w.Write(body)
 }
 
-func (s *Server) writeError(w http.ResponseWriter, err error) {
+// writeError maps backend errors to OCI responses. Only an in-flight
+// conversion is a retryable 503; provisioning and upstream failures are 502
+// and are logged with structured registry/repo/ref context.
+func (s *Server) writeError(w http.ResponseWriter, registry, repo, ref string, err error) {
 	s.errors.Add(1)
 	if errors.Is(err, ErrConverting) {
 		w.Header().Set("Retry-After", "5")
@@ -451,7 +525,13 @@ func (s *Server) writeError(w http.ResponseWriter, err error) {
 		http.Error(w, err.Error(), http.StatusNotFound)
 		return
 	}
-	http.Error(w, err.Error(), http.StatusServiceUnavailable)
+	slog.Error("registry proxy upstream request failed",
+		"registry", registry,
+		"repository", repo,
+		"reference", ref,
+		"error", err,
+	)
+	http.Error(w, "upstream registry unavailable", http.StatusBadGateway)
 }
 
 func (s *Server) metrics(w http.ResponseWriter) {

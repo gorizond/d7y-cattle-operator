@@ -195,7 +195,12 @@ func initialize(ctx context.Context, cfg *registryproxy.Config, bootstrap *boots
 		_, err = converter.Convert(ctx, job.Registry, job.Repository, job.TagOrReference(), sourceDigest)
 		return err
 	})
-	backend := &registryproxy.HarborBackend{Source: source, Mirror: mirror, MirrorProject: cfg.Mirror.Project, Provisioner: provisioner, Jobs: manager}
+	jobTimeout, _ := time.ParseDuration(cfg.Conversion.JobTimeout)
+	manager.AttemptTimeout = jobTimeout
+	backend := &registryproxy.HarborBackend{
+		Source: source, Mirror: mirror, MirrorProject: cfg.Mirror.Project,
+		ProxyPublicURL: cfg.Proxy.PublicURL, Provisioner: provisioner, Jobs: manager,
+	}
 	webhook := &registryproxy.Webhook{Secret: webhookSecret, Manager: manager, Config: cfg, Provisioner: provisioner}
 	server := &registryproxy.Server{Config: cfg, Backend: backend, Convert: webhook, Manager: manager}
 	if cfg.Auth.Mode == "basic" {

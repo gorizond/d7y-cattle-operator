@@ -3,7 +3,9 @@ package registryproxy
 import (
 	"bytes"
 	"context"
+	"encoding/json"
 	"errors"
+	"fmt"
 	"io"
 	"net/http"
 	"testing"
@@ -112,8 +114,15 @@ func TestCopierCopiesOCIIndexChildren(t *testing.T) {
 		t.Errorf("digest = %q", digest)
 	}
 	top, ok := mirror.manifests["mirror/docker.io/library/nginx:1.27"]
-	if !ok || string(top.Body) != string(index) {
-		t.Error("mirror index was not written with the original descriptors")
+	if !ok {
+		t.Fatal("mirror index was not written")
+	}
+	var mirrored indexDocument
+	if err := json.Unmarshal(top.Body, &mirrored); err != nil {
+		t.Fatal(err)
+	}
+	if len(mirrored.Manifests) != 2 || mirrored.Manifests[0].Digest != "sha256:child1" {
+		t.Errorf("mirror index descriptors = %+v", mirrored.Manifests)
 	}
 	for _, child := range []string{"sha256:child1", "sha256:child2"} {
 		if _, ok := mirror.manifests["mirror/docker.io/library/nginx:"+child]; !ok {
@@ -203,5 +212,75 @@ func TestHarborBackendServesSourceOCIAfterFailedConversion(t *testing.T) {
 	}
 	if manifest.Digest != "sha256:source" {
 		t.Errorf("digest = %q, want source OCI fallback", manifest.Digest)
+	}
+}
+
+func TestCopierDropsAttestationsFromMultiarchIndex(t *testing.T) {
+	source := newFakeRegistry()
+	mirror := newFakeRegistry()
+	platforms := []struct {
+		arch string
+		blob string
+	}{
+		{"amd64", "sha256:layer1"},
+		{"arm64", "sha256:layer2"},
+		{"arm", "sha256:layer3"},
+		{"386", "sha256:layer4"},
+		{"ppc64le", "sha256:layer5"},
+		{"s390x", "sha256:layer6"},
+		{"riscv64", "sha256:layer7"},
+		{"mips64le", "sha256:layer8"},
+	}
+	var descriptors []map[string]any
+	var realDigests []string
+	for i, platform := range platforms {
+		digest := fmt.Sprintf("sha256:platform%d", i)
+		realDigests = append(realDigests, digest)
+		descriptors = append(descriptors, map[string]any{
+			"mediaType": ociManifestType, "digest": digest, "size": 10,
+			"platform": map[string]string{"os": "linux", "architecture": platform.arch},
+		})
+		body := fmt.Sprintf(`{"schemaVersion":2,"mediaType":%q,"config":{"digest":"sha256:config%d"},"layers":[{"digest":%q}]}`,
+			ociManifestType, i, platform.blob)
+		source.manifests["dockerio/library/busybox:"+digest] = Manifest{Digest: digest, MediaType: ociManifestType, Body: []byte(body)}
+		source.blobs["dockerio/library/busybox:sha256:config"+fmt.Sprint(i)] = []byte("config")
+		source.blobs["dockerio/library/busybox:"+platform.blob] = []byte(platform.blob)
+	}
+	for i := 0; i < 9; i++ {
+		descriptors = append(descriptors, map[string]any{
+			"mediaType": ociManifestType, "digest": fmt.Sprintf("sha256:attestation%d", i), "size": 5,
+			"artifactType": "application/vnd.in-toto+json",
+			"platform":     map[string]string{"os": "unknown", "architecture": "unknown"},
+		})
+	}
+	indexBody, _ := json.Marshal(map[string]any{
+		"schemaVersion": 2,
+		"mediaType":     ociIndexType,
+		"manifests":     descriptors,
+	})
+	source.manifests["dockerio/library/busybox:1.36"] = Manifest{Digest: "sha256:index", MediaType: ociIndexType, Body: indexBody}
+
+	copier := &Copier{Source: source, Mirror: mirror, MirrorProject: "mirror"}
+	if _, err := copier.Copy(context.Background(), "docker.io", "library/busybox", "1.36"); err != nil {
+		t.Fatalf("Copy() error = %v", err)
+	}
+	top := mirror.manifests["mirror/docker.io/library/busybox:1.36"]
+	var mirrored indexDocument
+	if err := json.Unmarshal(top.Body, &mirrored); err != nil {
+		t.Fatal(err)
+	}
+	if len(mirrored.Manifests) != len(platforms) {
+		t.Fatalf("mirrored manifests = %d, want %d real platforms", len(mirrored.Manifests), len(platforms))
+	}
+	for _, digest := range realDigests {
+		if _, ok := mirror.manifests["mirror/docker.io/library/busybox:"+digest]; !ok {
+			t.Errorf("real platform manifest %s was not copied", digest)
+		}
+	}
+	for i := 0; i < 9; i++ {
+		digest := fmt.Sprintf("sha256:attestation%d", i)
+		if _, ok := mirror.manifests["mirror/docker.io/library/busybox:"+digest]; ok {
+			t.Errorf("attestation manifest %s was copied", digest)
+		}
 	}
 }

@@ -53,6 +53,9 @@ type Config struct {
 		NydusImage string `yaml:"nydus_image"`
 		WorkDir    string `yaml:"work_dir"`
 		Timeout    string `yaml:"timeout"`
+		// JobTimeout bounds one copy/conversion attempt. Empty uses the
+		// manager default (30m).
+		JobTimeout string `yaml:"job_timeout"`
 	} `yaml:"conversion"`
 	Service struct {
 		Port int `yaml:"port"`
@@ -124,6 +127,9 @@ func applyEnv(cfg *Config) {
 	}
 	if value := os.Getenv("CONVERSION_TIMEOUT"); value != "" {
 		cfg.Conversion.Timeout = value
+	}
+	if value := os.Getenv("CONVERSION_JOB_TIMEOUT"); value != "" {
+		cfg.Conversion.JobTimeout = value
 	}
 }
 
@@ -210,6 +216,11 @@ func (c *Config) Validate() error {
 	if c.Conversion.Timeout != "" {
 		if _, err := time.ParseDuration(c.Conversion.Timeout); err != nil {
 			return fmt.Errorf("conversion.timeout: %w", err)
+		}
+	}
+	if c.Conversion.JobTimeout != "" {
+		if _, err := time.ParseDuration(c.Conversion.JobTimeout); err != nil {
+			return fmt.Errorf("conversion.job_timeout: %w", err)
 		}
 	}
 	return nil

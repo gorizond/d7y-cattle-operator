@@ -29,6 +29,7 @@ conversion:
   nydus_image: /usr/local/bin/nydus-image
   work_dir: /tmp/nydusify
   timeout: 10m
+  job_timeout: 20m
 service:
   port: 8080
 `
@@ -67,6 +68,9 @@ func TestLoadConfig(t *testing.T) {
 	}
 	if cfg.Webhook.Address != "https://proxy.example.com/api/convert" {
 		t.Errorf("webhook.address = %q, want the public URL default", cfg.Webhook.Address)
+	}
+	if timeout, err := time.ParseDuration(cfg.Conversion.JobTimeout); err != nil || timeout != 20*time.Minute {
+		t.Errorf("conversion.job_timeout = %q, %v", cfg.Conversion.JobTimeout, err)
 	}
 }
 

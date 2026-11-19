@@ -133,3 +133,85 @@ func waitState(t *testing.T, manager *Manager, key, want string) {
 	state, _ := manager.State(key)
 	t.Fatalf("state for %s = %+v, want %s", key, state, want)
 }
+
+func TestJobKeyUsesTagNotDigest(t *testing.T) {
+	tagged := Job{Registry: "docker.io", Repository: "library/nginx", Reference: "1.27", Tag: "1.27", Digest: "sha256:abc"}
+	if got, want := tagged.Key(), "docker.io/library/nginx/1.27"; got != want {
+		t.Errorf("tagged Key() = %q, want %q", got, want)
+	}
+	digestOnly := Job{Registry: "docker.io", Repository: "library/nginx", Reference: "sha256:abc", Digest: "sha256:abc"}
+	if got, want := digestOnly.Key(), "docker.io/library/nginx/sha256:abc"; got != want {
+		t.Errorf("digest Key() = %q, want %q", got, want)
+	}
+}
+
+func TestManagerReconvertsMovedTag(t *testing.T) {
+	var calls atomic.Int32
+	manager := NewManager(func(context.Context, Job) error {
+		calls.Add(1)
+		return nil
+	})
+	ctx, cancel := context.WithCancel(context.Background())
+	defer cancel()
+	manager.Start(ctx)
+
+	first := Job{Registry: "docker.io", Repository: "library/nginx", Reference: "1.27", Tag: "1.27", Digest: "sha256:first"}
+	if !manager.Enqueue(first) {
+		t.Fatal("first Enqueue() = false")
+	}
+	waitState(t, manager, first.Key(), "ready")
+	if manager.Enqueue(first) {
+		t.Fatal("unchanged tag+digest Enqueue() = true")
+	}
+	moved := first
+	moved.Digest = "sha256:second"
+	if !manager.Enqueue(moved) {
+		t.Fatal("moved tag Enqueue() = false, want a fresh conversion")
+	}
+	waitState(t, manager, moved.Key(), "ready")
+	if calls.Load() != 2 {
+		t.Errorf("work calls = %d, want 2", calls.Load())
+	}
+}
+
+func TestManagerAttemptTimeoutDoesNotStarveWorker(t *testing.T) {
+	manager := NewManager(func(ctx context.Context, job Job) error {
+		if job.Tag == "stuck" {
+			<-ctx.Done()
+			return ctx.Err()
+		}
+		return nil
+	})
+	manager.AttemptTimeout = 50 * time.Millisecond
+	ctx, cancel := context.WithCancel(context.Background())
+	defer cancel()
+	manager.Start(ctx)
+
+	stuck := Job{Registry: "docker.io", Repository: "library/stuck", Reference: "stuck", Tag: "stuck", Digest: "sha256:stuck"}
+	next := Job{Registry: "docker.io", Repository: "library/next", Reference: "next", Tag: "next", Digest: "sha256:next"}
+	if !manager.Enqueue(stuck) || !manager.Enqueue(next) {
+		t.Fatal("Enqueue() = false")
+	}
+	waitState(t, manager, stuck.Key(), "failed")
+	waitState(t, manager, next.Key(), "ready")
+}
+
+func TestManagerRequeueRefreshesCachedJob(t *testing.T) {
+	var calls atomic.Int32
+	manager := NewManager(func(context.Context, Job) error {
+		calls.Add(1)
+		return nil
+	})
+	job := Job{Registry: "docker.io", Repository: "library/nginx", Reference: "1.27", Tag: "1.27", Digest: "sha256:abc"}
+	manager.setState(job.Key(), "ready", 1, "")
+	if !manager.Requeue(job) {
+		t.Fatal("Requeue(ready) = false")
+	}
+	if got := manager.Pending(); got != 1 {
+		t.Errorf("pending after requeue = %d, want 1", got)
+	}
+	manager.setState(job.Key(), "converting", 1, "")
+	if manager.Requeue(job) {
+		t.Fatal("Requeue(converting) = true, want false")
+	}
+}

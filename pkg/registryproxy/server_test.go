@@ -3,6 +3,8 @@ package registryproxy
 import (
 	"bytes"
 	"context"
+	"encoding/json"
+	"errors"
 	"fmt"
 	"io"
 	"net/http"
@@ -654,5 +656,131 @@ func TestServerAllowAnyRegistry(t *testing.T) {
 		"/v2/library/nginx/manifests/1.27", nil))
 	if rec.Code != http.StatusForbidden {
 		t.Errorf("unqualified path = %d, want 403", rec.Code)
+	}
+}
+
+func TestServerUpstreamFailuresReturnBadGateway(t *testing.T) {
+	for name, backendErr := range map[string]error{
+		"provisioning": fmt.Errorf("provision Harbor for %q: %w", "docker.io", errors.New("admin api unavailable")),
+		"source":       fmt.Errorf("read source manifest docker.io/library/nginx:1.27: %w", errors.New("upstream 500")),
+	} {
+		t.Run(name, func(t *testing.T) {
+			server := directServer(backendFunc(func(context.Context, string, string, string) (Manifest, error) {
+				return Manifest{}, backendErr
+			}))
+			rec := httptest.NewRecorder()
+			server.Handler().ServeHTTP(rec, httptest.NewRequest(http.MethodGet,
+				"/v2/docker.io/library/nginx/manifests/1.27", nil))
+			if rec.Code != http.StatusBadGateway {
+				t.Errorf("status = %d, want 502", rec.Code)
+			}
+			if got := rec.Header().Get("Retry-After"); got != "" {
+				t.Errorf("Retry-After = %q on a non-conversion error", got)
+			}
+		})
+	}
+}
+
+func TestHarborBackendDoesNotEnqueueOnSourceError(t *testing.T) {
+	source := newFakeRegistry()
+	mirror := newFakeRegistry()
+	manager := NewManager(nil)
+	backend := &HarborBackend{Source: source, Mirror: mirror, MirrorProject: "mirror", Jobs: manager}
+	if _, err := backend.GetManifest(context.Background(), "docker.io", "library/nginx", "1.27"); !IsNotFound(err) {
+		t.Fatalf("GetManifest() error = %v, want 404", err)
+	}
+	if got := manager.Pending(); got != 0 {
+		t.Errorf("pending jobs = %d, want 0", got)
+	}
+	if enqueued, _, _ := manager.Metrics(); enqueued != 0 {
+		t.Errorf("enqueued jobs = %d, want 0", enqueued)
+	}
+}
+
+func TestHarborBackendSkipsEnqueueForDigestRefs(t *testing.T) {
+	source := newFakeRegistry()
+	mirror := newFakeRegistry()
+	digest := "sha256:source"
+	source.manifests["dockerio/library/nginx:"+digest] = Manifest{
+		Digest: digest, MediaType: ociManifestType, Body: []byte(`{"schemaVersion":2}`),
+	}
+	manager := NewManager(nil)
+	backend := &HarborBackend{Source: source, Mirror: mirror, MirrorProject: "mirror", Jobs: manager}
+	manifest, err := backend.GetManifest(context.Background(), "docker.io", "library/nginx", digest)
+	if err != nil {
+		t.Fatalf("GetManifest(digest) error = %v", err)
+	}
+	if manifest.Digest != digest {
+		t.Errorf("manifest digest = %q", manifest.Digest)
+	}
+	if got := manager.Pending(); got != 0 {
+		t.Errorf("digest ref enqueued a job: pending = %d", got)
+	}
+}
+
+func TestHarborBackendReconvertsStaleCachedIndex(t *testing.T) {
+	stale := indexDocument{
+		SchemaVersion: 2,
+		MediaType:     ociIndexType,
+		Manifests: []indexDescriptor{
+			{MediaType: ociManifestType, Digest: "sha256:oci", ArtifactType: nydusArtifactType, Platform: &indexPlatform{OS: "linux", Architecture: "amd64"}},
+		},
+		Annotations: map[string]string{sourceReferenceKey: "registry.example.test/team/app:1.27"},
+	}
+	staleBody, _ := json.Marshal(stale)
+	mirror := newFakeRegistry()
+	mirror.manifests["mirror/docker.io/library/nginx:1.27"] = Manifest{
+		Digest: "sha256:stale", MediaType: ociIndexType, Body: staleBody,
+	}
+	manager := NewManager(nil)
+	backend := &HarborBackend{
+		Source: newFakeRegistry(), Mirror: mirror, MirrorProject: "mirror",
+		ProxyPublicURL: testProxyURL, Jobs: manager,
+	}
+	if _, err := backend.GetManifest(context.Background(), "docker.io", "library/nginx", "1.27"); !errors.Is(err, ErrConverting) {
+		t.Fatalf("stale cached tag error = %v, want ErrConverting", err)
+	}
+	if got := manager.Pending(); got != 1 {
+		t.Errorf("pending reconversions = %d, want 1", got)
+	}
+}
+
+func TestHarborBackendServesCachedIndexWithFreshSourceReference(t *testing.T) {
+	fresh := indexDocument{
+		SchemaVersion: 2,
+		MediaType:     ociIndexType,
+		Manifests: []indexDescriptor{
+			{MediaType: ociManifestType, Digest: "sha256:oci", ArtifactType: nydusArtifactType, Platform: &indexPlatform{OS: "linux", Architecture: "amd64"}},
+		},
+		Annotations: map[string]string{sourceReferenceKey: "proxy.example.test/docker.io/library/nginx:1.27"},
+	}
+	freshBody, _ := json.Marshal(fresh)
+	mirror := newFakeRegistry()
+	mirror.manifests["mirror/docker.io/library/nginx:1.27"] = Manifest{
+		Digest: "sha256:fresh", MediaType: ociIndexType, Body: freshBody,
+	}
+	manager := NewManager(nil)
+	backend := &HarborBackend{
+		Source: newFakeRegistry(), Mirror: mirror, MirrorProject: "mirror",
+		ProxyPublicURL: testProxyURL, Jobs: manager,
+	}
+	manifest, err := backend.GetManifest(context.Background(), "docker.io", "library/nginx", "1.27")
+	if err != nil {
+		t.Fatalf("fresh cached tag error = %v", err)
+	}
+	if manifest.Digest != "sha256:fresh" {
+		t.Errorf("manifest digest = %q", manifest.Digest)
+	}
+	if got := manager.Pending(); got != 0 {
+		t.Errorf("fresh cached tag enqueued a job: pending = %d", got)
+	}
+}
+
+func TestDefaultHTTPClientsAreBounded(t *testing.T) {
+	if got := (&HTTPRegistry{}).client().Timeout; got != defaultHTTPTimeout {
+		t.Errorf("HTTPRegistry default timeout = %v, want %v", got, defaultHTTPTimeout)
+	}
+	if got := (&HarborClient{}).client().Timeout; got != defaultHTTPTimeout {
+		t.Errorf("HarborClient default timeout = %v, want %v", got, defaultHTTPTimeout)
 	}
 }

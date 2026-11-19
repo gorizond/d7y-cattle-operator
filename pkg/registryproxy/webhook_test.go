@@ -24,8 +24,8 @@ func TestWebhookAcceptsPushAndDeduplicates(t *testing.T) {
 	if manager.Pending() != 1 {
 		t.Errorf("pending jobs = %d, want 1", manager.Pending())
 	}
-	if _, ok := manager.State("docker.io/library/nginx/sha256:abc"); !ok {
-		t.Error("expected digest-deduplicated job")
+	if _, ok := manager.State("docker.io/library/nginx/1.27"); !ok {
+		t.Error("expected tag-deduplicated job")
 	}
 }
 
@@ -90,7 +90,47 @@ func TestWebhookWildcardMapsProvisionedProject(t *testing.T) {
 	if rec.Code != http.StatusAccepted {
 		t.Fatalf("webhook response = %d %q", rec.Code, rec.Body.String())
 	}
-	if _, ok := manager.State("quay.io/org/image/sha256:def"); !ok {
+	if _, ok := manager.State("quay.io/org/image/v1"); !ok {
 		t.Error("wildcard project job missing")
+	}
+}
+
+func TestWebhookOneShotReconvert(t *testing.T) {
+	manager := NewManager(nil)
+	webhook := &Webhook{Secret: "shared", Manager: manager, Config: testConfig(t)}
+	target := "/api/convert?registry=docker.io&repository=library/nginx&tag=1.27"
+
+	req := httptest.NewRequest(http.MethodPost, target, nil)
+	req.Header.Set("Authorization", "Bearer shared")
+	rec := httptest.NewRecorder()
+	webhook.ServeHTTP(rec, req)
+	if rec.Code != http.StatusAccepted {
+		t.Fatalf("reconvert = %d %q", rec.Code, rec.Body.String())
+	}
+	if _, ok := manager.State("docker.io/library/nginx/1.27"); !ok {
+		t.Error("reconvert job missing")
+	}
+
+	req = httptest.NewRequest(http.MethodPost, target, nil)
+	req.Header.Set("Authorization", "Bearer shared")
+	rec = httptest.NewRecorder()
+	webhook.ServeHTTP(rec, req)
+	if rec.Code != http.StatusConflict {
+		t.Errorf("duplicate reconvert = %d, want 409", rec.Code)
+	}
+
+	req = httptest.NewRequest(http.MethodPost, "/api/convert?registry=evil.example.test&repository=library/nginx&tag=1.27", nil)
+	req.Header.Set("Authorization", "Bearer shared")
+	rec = httptest.NewRecorder()
+	webhook.ServeHTTP(rec, req)
+	if rec.Code != http.StatusForbidden {
+		t.Errorf("non-allowlisted reconvert = %d, want 403", rec.Code)
+	}
+
+	req = httptest.NewRequest(http.MethodPost, target, nil)
+	rec = httptest.NewRecorder()
+	webhook.ServeHTTP(rec, req)
+	if rec.Code != http.StatusUnauthorized {
+		t.Errorf("anonymous reconvert = %d, want 401", rec.Code)
 	}
 }

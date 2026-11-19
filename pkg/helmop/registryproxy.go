@@ -68,6 +68,7 @@ func RegistryProxy(c Cluster) *fleetv1alpha1.HelmOp {
 			"nydusImage": "/usr/local/bin/nydus-image",
 			"workDir":    "/tmp/nydusify",
 			"timeout":    "10m",
+			"jobTimeout": "30m",
 		},
 		"service": map[string]any{"port": RegistryProxyPort},
 	}
