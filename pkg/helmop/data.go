@@ -27,7 +27,7 @@ func SharedData(c Cluster) *fleetv1alpha1.HelmOp {
 	c = sharedCluster(c)
 	names := SharedNames()
 	op := newSharedHelmOp(SharedDataName(), TargetNamespace, c, c.Chart, "data",
-		dataValues(c, names, schedulerAddr(c.SchedulerHost)),
+		dataValues(c, names, SharedSchedulerAddrTemplate(c.P2PDomain)),
 		[]string{SharedControlName(), SharedKeyDBName(), SharedExtrasName()}, SharedSelector())
 	return withMTLS(op, c.MTLSSecretName)
 }

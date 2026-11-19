@@ -1,6 +1,7 @@
 package helmop
 
 import (
+	"strings"
 	"testing"
 
 	fleetv1alpha1 "github.com/rancher/fleet/pkg/apis/fleet.cattle.io/v1alpha1"
@@ -101,9 +102,12 @@ func TestSharedValuesUseFleetTemplates(t *testing.T) {
 	if got := data["fullnameOverride"]; got != "${ .ClusterName }-data" {
 		t.Errorf("data fullnameOverride = %v", got)
 	}
-	wantAddr := SchedulerHostTemplate("example.com") + ":443"
+	wantAddr := SharedSchedulerAddrTemplate("example.com")
 	if got := valueAt(t, data, "seedClient", "dynconfig", "scheduler", "addr"); got != wantAddr {
-		t.Errorf("data scheduler addr = %v, want %v", got, wantAddr)
+		t.Errorf("seedClient dynconfig addr = %v, want %v", got, wantAddr)
+	}
+	if got := valueAt(t, data, "client", "dynconfig", "scheduler", "addr"); got != wantAddr {
+		t.Errorf("client dynconfig addr = %v, want %v", got, wantAddr)
 	}
 	if got := valueAt(t, data, "client", "config", "host", "schedulerClusterID"); got != SharedSchedulerClusterIDTemplate {
 		t.Errorf("data schedulerClusterID = %v", got)
@@ -136,6 +140,31 @@ func TestSchedulerHostTemplate(t *testing.T) {
 	}
 	if got := SchedulerHostTemplate(""); got != "" {
 		t.Errorf("SchedulerHostTemplate(\"\") = %q, want empty", got)
+	}
+}
+
+// TestSharedDynconfigUsesSchedulerHost guards the Traefik TCP-TLS HostSNI
+// contract: the seed client's dynconfig must dial the scheduler hostname, not
+// the public IP, otherwise the TLS session carries no SNI and is not routed.
+func TestSharedDynconfigUsesSchedulerHost(t *testing.T) {
+	c := sharedTestCluster()
+	values := SharedData(c).Spec.Helm.Values.Data
+	for _, path := range [][]string{
+		{"seedClient", "dynconfig", "scheduler", "addr"},
+		{"client", "dynconfig", "scheduler", "addr"},
+	} {
+		addr, _ := valueAt(t, values, path...).(string)
+		if !strings.Contains(addr, `d7y-scheduler.${ index .ClusterLabels`) {
+			t.Errorf("%v = %q, want the scheduler host template", path, addr)
+		}
+		if strings.Contains(addr, "scheduler-public-ip") {
+			t.Errorf("%v = %q, must not use the public-IP template for dynconfig", path, addr)
+		}
+	}
+	// The IP remains required for the scheduler's advertised address.
+	control := SharedControl(c).Spec.Helm.Values.Data
+	if got := valueAt(t, control, "scheduler", "config", "server", "advertiseIP"); got != SharedSchedulerPublicIPTemplate {
+		t.Errorf("control advertiseIP = %v, want the public-IP template", got)
 	}
 }
 
