@@ -164,6 +164,37 @@ func (h *HarborClient) EnsureRegistry(ctx context.Context, host string) (HarborR
 	return created, nil
 }
 
+// CleanupStaleRegistry removes the exact-name endpoint for host when its type
+// no longer matches registrySpec. It is an explicit, bounded cleanup: one
+// endpoint lookup and at most one DELETE. It never touches a "-generic"
+// endpoint and never scans the endpoint list. Harbor answers 412 when a
+// proxy-cache project still references the endpoint; that state is normal
+// before EnsureProject re-points the project, so it is logged and ignored.
+func (h *HarborClient) CleanupStaleRegistry(ctx context.Context, host string) error {
+	stale, err := h.findRegistry(ctx, host)
+	if err != nil {
+		return err
+	}
+	if stale == nil || stale.Name == genericRegistryName(host) || stale.Type == registrySpec(host).Type {
+		return nil
+	}
+	path := "/api/v2.0/registries/" + strconv.Itoa(stale.ID)
+	status, err := h.do(ctx, http.MethodDelete, path, nil, nil)
+	if err != nil {
+		if status == http.StatusPreconditionFailed {
+			slog.Info("harbor stale registry endpoint is still referenced; leaving it",
+				"registry", stale.Name, "type", stale.Type, "id", stale.ID)
+			return nil
+		}
+		slog.Warn("harbor stale registry endpoint cleanup failed; leaving it",
+			"registry", stale.Name, "type", stale.Type, "id", stale.ID, "error", err)
+		return nil
+	}
+	slog.Info("harbor stale registry endpoint removed",
+		"registry", stale.Name, "type", stale.Type, "id", stale.ID)
+	return nil
+}
+
 // reconcileRegistryURL updates a same-type endpoint whose URL drifted. Failure
 // is non-fatal: Harbor keeps serving the existing endpoint.
 func (h *HarborClient) reconcileRegistryURL(ctx context.Context, existing, spec HarborRegistry, credentialsHost string) (HarborRegistry, error) {
@@ -516,6 +547,12 @@ func (p *Provisioner) Ensure(ctx context.Context, registry string) error {
 	project, err := p.Harbor.EnsureProject(ctx, ProjectName(registry), endpoint.ID)
 	if err != nil {
 		return fmt.Errorf("ensure Harbor source project %q: %w", ProjectName(registry), err)
+	}
+	// Now that the project has been re-pointed (or a generic project was
+	// selected), the stale-type endpoint can be unreferenced. Best-effort:
+	// a referenced endpoint answers 412 and stays.
+	if err := p.Harbor.CleanupStaleRegistry(ctx, registry); err != nil {
+		slog.Warn("harbor stale registry endpoint cleanup skipped", "registry", registry, "error", err)
 	}
 	if _, err := p.Harbor.EnsureProject(ctx, p.MirrorProject, 0); err != nil {
 		return fmt.Errorf("ensure Harbor mirror project %q: %w", p.MirrorProject, err)

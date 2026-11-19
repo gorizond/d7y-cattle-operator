@@ -470,15 +470,26 @@ bootstrap layer rather than descriptor position, and moves that index to
 `<tag>`. A multiarch tag is converted through its target-platform child digest;
 the published index keeps only that child plus the nydus artifact, because
 nydusify copies only the converted child and Harbor rejects an index whose
-descriptors are absent from the target repository. Harbor registry endpoints are
+descriptors are absent from the target repository. A digest reference is copied
+byte-for-byte (attestation descriptors included) so its content-addressed
+identity stays valid; before publishing, the proxy also copies a missing
+target-platform source child manifest and its blobs into the target repository,
+then publishes only descriptors that resolve there. A digest-triggered
+conversion publishes its nydus index under a short `nd-<digest12>` tag; the
+digest reference itself still resolves to the source OCI manifest. Tag copies
+and conversions are unchanged. Harbor registry endpoints are
 reconciled without changing an existing type: Docker Hub keeps the
 `docker-hub` adapter, every other host uses the generic `docker-registry`
 adapter (the typed GitHub/GitLab/Quay adapters embed it), and a stale-type
-endpoint is left untouched while a deterministic `<host>-generic` endpoint is
-created. A same-type URL drift is updated in place. When a source project still
+endpoint is kept while a deterministic `<host>-generic` endpoint is created.
+A same-type URL drift is updated in place. When a source project still
 points at the old endpoint, the proxy re-points the project `registry_id` if Harbor
 allows, otherwise it creates and uses a deterministic `<project>-generic`
-project. `/api/convert` is a Harbor-reachable shared-secret endpoint
+project. After the re-point, an explicit bounded cleanup deletes the old
+exact-name stale endpoint when nothing references it; Harbor's 412 response
+means a project still references it and the endpoint is left alone. Cleanup
+never touches a `-generic` endpoint and never scans the endpoint list.
+`/api/convert` is a Harbor-reachable shared-secret endpoint
 and returns 202 before the asynchronous copy/conversion.
 
 The proxy Manager is intentionally in-memory. After a proxy restart, in-flight

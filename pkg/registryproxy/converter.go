@@ -7,6 +7,7 @@ import (
 	"encoding/hex"
 	"encoding/json"
 	"fmt"
+	"log/slog"
 	"net/url"
 	"os"
 	"os/exec"
@@ -50,7 +51,10 @@ type Converter struct {
 	SourceUser     string
 	SourcePass     string
 	Registry       Registry
-	Command        func(ctx context.Context, name string, args ...string) *exec.Cmd
+	// Copier fills a missing target-platform source child for digest
+	// conversions. Tag conversions already copy the whole tag tree.
+	Copier  *Copier
+	Command func(ctx context.Context, name string, args ...string) *exec.Cmd
 }
 
 type ConversionResult struct {
@@ -123,6 +127,15 @@ func (c *Converter) Convert(ctx context.Context, registry, repo, tag, sourceDige
 			return ConversionResult{}, fmt.Errorf("source index has no %s image manifest", platform)
 		}
 		source = host + "/" + repoPath + "@" + child.Digest
+	}
+	// A digest reference is converted without a tag copy that could have
+	// carried every child. Make the source descriptor resolvable in the target
+	// repository before nydusify or Harbor validates an index that references
+	// it; Harbor rejects missing descriptors with 400.
+	if strings.HasPrefix(tag, "sha256:") {
+		if err := c.ensureSourceDescriptors(ctx, registry, repo, repoPath, sourceDescriptors); err != nil {
+			return ConversionResult{}, err
+		}
 	}
 
 	workDir := c.WorkDir
@@ -221,6 +234,32 @@ func (c *Converter) Convert(ctx context.Context, registry, repo, tag, sourceDige
 		IndexDigest:  "sha256:" + hex.EncodeToString(sum[:]),
 		SourceDigest: sourceDigest,
 	}, nil
+}
+
+// ensureSourceDescriptors makes every published source descriptor resolvable
+// in the target repository. A digest conversion starts from an untagged
+// proxy-cache artifact; its target-platform child may not have been copied by
+// the initial manifest copy. The Copier fills it in (manifest and blobs, since
+// Harbor validates blobs on manifest push); an unresolvable descriptor is
+// never published, because Harbor rejects the whole index.
+func (c *Converter) ensureSourceDescriptors(ctx context.Context, registry, repo, repoPath string, descriptors []indexDescriptor) error {
+	for _, descriptor := range descriptors {
+		if _, err := c.Registry.GetManifest(ctx, repoPath, descriptor.Digest); err == nil {
+			continue
+		}
+		if c.Copier == nil {
+			return fmt.Errorf("source manifest %s is missing in %s and no copier is configured", descriptor.Digest, repoPath)
+		}
+		slog.Info("copying missing digest source child into the target repository",
+			"registry", registry, "repository", repo, "digest", descriptor.Digest)
+		if _, err := c.Copier.CopyExact(ctx, registry, repo, descriptor.Digest); err != nil {
+			return fmt.Errorf("copy source descriptor %s for digest conversion: %w", descriptor.Digest, err)
+		}
+		if _, err := c.Registry.GetManifest(ctx, repoPath, descriptor.Digest); err != nil {
+			return fmt.Errorf("source descriptor %s is still missing in %s: %w", descriptor.Digest, repoPath, err)
+		}
+	}
+	return nil
 }
 
 // publishedSourceDescriptors returns the source descriptors that the published
