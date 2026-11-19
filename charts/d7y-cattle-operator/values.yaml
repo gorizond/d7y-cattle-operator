@@ -95,7 +95,7 @@ registryProxy:
   chart:
     repo: https://gorizond.github.io/d7y-cattle-operator
     name: registry-proxy
-    version: 0.1.22
+    version: 0.1.23
 
 # Opt-in admission webhook chart (p2p.dragonfly.io/admission). Independent of
 # Harbor/proxy/seed: it only needs proxy.domain and is never auto-installed.
@@ -137,6 +137,9 @@ proxy:
   # the webhook secret.
   basicAuthEnabled: false
   basicAuthUsername: d7y-proxy
+  # Optional Secret in the operator namespace with a credentials.yaml key.
+  # Empty keeps private-upstream credentials disabled.
+  upstreamCredentialsSecret: ""
 
 # Strict node-local containerd registry mirror for seed/data clusters.
 containerdMirror:

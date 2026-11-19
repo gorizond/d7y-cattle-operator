@@ -150,6 +150,30 @@ if helm template registry-proxy "$chart" --namespace dragonfly-system \
   fail "basic auth without auth.passwordSecret must fail"
 fi
 
+# Optional private-upstream credentials: config path plus the mounted Secret
+# only when configured; the default stays without an upstream block.
+helm template registry-proxy "$chart" --namespace dragonfly-system \
+  --set upstream.credentialsSecret=upstream-creds \
+  --show-only templates/configmap.yaml >"$tmp/upstream-config.yaml"
+grep -q 'upstream:' "$tmp/upstream-config.yaml" || fail "upstream config block is missing"
+grep -q 'credentials_file: "/etc/registry-proxy/secrets/upstream/credentials.yaml"' "$tmp/upstream-config.yaml" || \
+  fail "upstream credentials_file is missing"
+
+helm template registry-proxy "$chart" --namespace dragonfly-system \
+  --set upstream.credentialsSecret=upstream-creds \
+  --show-only templates/deployment.yaml >"$tmp/upstream-deployment.yaml"
+grep -q 'name: upstream-credentials' "$tmp/upstream-deployment.yaml" || fail "upstream credentials volume is missing"
+grep -q 'secretName: "upstream-creds"' "$tmp/upstream-deployment.yaml" || fail "upstream credentials Secret mount is missing"
+grep -q 'mountPath: /etc/registry-proxy/secrets/upstream' "$tmp/upstream-deployment.yaml" || \
+  fail "upstream credentials mount path is missing"
+grep -q 'key: credentials.yaml' "$tmp/upstream-deployment.yaml" || fail "upstream credentials key is missing"
+if grep -q 'upstream:' "$tmp/proxy.yaml"; then fail "default render has an upstream block"; fi
+if grep -q 'name: upstream-credentials' "$tmp/proxy.yaml"; then fail "default render mounts upstream credentials"; fi
+if helm template registry-proxy "$chart" --namespace dragonfly-system \
+  --set upstream.credentialsFile=/tmp/credentials.yaml >/dev/null 2>&1; then
+  fail "upstream.credentialsFile without upstream.credentialsSecret must fail"
+fi
+
 if grep -q 'kind: PersistentVolumeClaim' "$tmp/proxy.yaml"; then
   fail "registry-proxy must not render a PVC"
 fi

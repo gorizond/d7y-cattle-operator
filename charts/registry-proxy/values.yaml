@@ -37,6 +37,15 @@ auth:
   username: ""
   passwordSecret: "" # Secret with a `password` key
 
+# Optional private-upstream credentials. The file is host-keyed YAML:
+#   registry.gitlab.com:
+#     access_key: <user>
+#     access_secret: <token>
+# Exact registry-host lookup only; path-prefix keys do not match.
+upstream:
+  credentialsSecret: "" # Secret with a credentials.yaml key
+  credentialsFile: "" # defaults to /etc/registry-proxy/secrets/upstream/credentials.yaml when credentialsSecret is set
+
 mirror:
   project: mirror
 

@@ -106,6 +106,12 @@ func (c *Controller) ensureSharedRegistryProxy(cluster *provv1.Cluster, hc helmo
 		hc.ProxyBasicAuthUsername = username
 	}
 	hc.ProxyBasicAuthEnabled = c.opts.ProxyBasicAuthEnabled
+	if c.opts.ProxyUpstreamCredentialsSecret != "" {
+		if err := c.ensureRegistryProxyUpstreamCredentials(cluster, c.opts.ProxyUpstreamCredentialsSecret); err != nil {
+			return err
+		}
+	}
+	hc.ProxyUpstreamCredentialsSecret = c.opts.ProxyUpstreamCredentialsSecret
 	// A rotated robot Secret must roll the proxy pods, which read the mounted
 	// credentials only at bootstrap.
 	hc.ProxyRobotSecretRevision = c.robotSecretRevision(cluster, hc.ProxyRobotSecretName)
@@ -316,6 +322,23 @@ func (c *Controller) ensureRegistryProxyBasicAuthSecret(cluster *provv1.Cluster,
 		return "", fmt.Errorf("registry proxy Basic auth Secret %s/%s has no password", c.opts.OperatorNamespace, name)
 	}
 	return username, nil
+}
+
+// ensureRegistryProxyUpstreamCredentials validates the operator-namespace
+// credentials Secret and replicates it to the HelmOp namespace. The Secret is
+// supplied by the operator user; it is never generated or rewritten.
+func (c *Controller) ensureRegistryProxyUpstreamCredentials(cluster *provv1.Cluster, name string) error {
+	source, err := c.secrets.Get(c.opts.OperatorNamespace, name, metav1.GetOptions{})
+	if err != nil {
+		return fmt.Errorf("get registry proxy upstream credentials Secret %s/%s: %w", c.opts.OperatorNamespace, name, err)
+	}
+	if len(source.Data["credentials.yaml"]) == 0 {
+		return fmt.Errorf("registry proxy upstream credentials Secret %s/%s has no credentials.yaml key", c.opts.OperatorNamespace, name)
+	}
+	if _, err := apply.ReplicateSecret(source, cluster.Namespace, c.secrets); err != nil {
+		return fmt.Errorf("replicate registry proxy upstream credentials Secret to %s/%s: %w", cluster.Namespace, name, err)
+	}
+	return nil
 }
 
 // ensureGeneratedSecret creates a per-cluster random Secret once and preserves

@@ -111,6 +111,8 @@ spec:
               value: {{ .Values.proxy.basicAuthEnabled | quote }}
             - name: PROXY_BASIC_AUTH_USERNAME
               value: {{ .Values.proxy.basicAuthUsername | quote }}
+            - name: PROXY_UPSTREAM_CREDENTIALS_SECRET
+              value: {{ .Values.proxy.upstreamCredentialsSecret | quote }}
             - name: EXTRAS_INGRESS_CONTROLLER
               value: {{ .Values.extras.ingress.controller | quote }}
             - name: EXTRAS_INGRESS_CLASS_NAME

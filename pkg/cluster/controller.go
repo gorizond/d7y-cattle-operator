@@ -38,44 +38,45 @@ type eventStore interface {
 
 // Options carries the operator configuration needed for reconciliation.
 type Options struct {
-	OperatorNamespace           string
-	MTLSSecretName              string
-	ManagerGRPCDomain           string
-	ManagerGRPCPort             int
-	ManagerAPIHost              string
-	ManagerAPIURL               string
-	ManagerAPICredentialsSecret string
-	P2PDomain                   string
-	ClusterIDFallback           string
-	Resolver                    Resolver
-	DragonflyChart              helmop.Chart
-	ExtrasChart                 helmop.Chart
-	MirrorChart                 helmop.Chart
-	HarborChart                 helmop.Chart
-	RegistryProxyChart          helmop.Chart
-	AdmissionChart              helmop.Chart
-	HarborIngressClass          string
-	ProxyDomain                 string
-	ProxyHarborURL              string
-	ProxyHarborAdminSecret      string
-	ProxyRegistries             []string
-	ProxyBasePath               string
-	ProxyTLSSecret              string
-	ProxyBasicAuthEnabled       bool
-	ProxyBasicAuthUsername      string
-	ProxyHostAliases            []helmop.HostAlias
-	AdmissionImagePullSecret    string
-	AdmissionServiceAccount     string
-	AdmissionNetworkOnly        bool
-	OperatorImageRepository     string
-	OperatorImageTag            string
-	ExtrasIngressController     string
-	ExtrasIngressClassName      string
-	ExtrasIngressGRPCEnabled    bool
-	ExtrasIngressRESTEnabled    bool
-	ExtrasIngressTLSSecret      string
-	ExtrasTraefikTransport      bool
-	VPAEnabled                  bool
+	OperatorNamespace              string
+	MTLSSecretName                 string
+	ManagerGRPCDomain              string
+	ManagerGRPCPort                int
+	ManagerAPIHost                 string
+	ManagerAPIURL                  string
+	ManagerAPICredentialsSecret    string
+	P2PDomain                      string
+	ClusterIDFallback              string
+	Resolver                       Resolver
+	DragonflyChart                 helmop.Chart
+	ExtrasChart                    helmop.Chart
+	MirrorChart                    helmop.Chart
+	HarborChart                    helmop.Chart
+	RegistryProxyChart             helmop.Chart
+	AdmissionChart                 helmop.Chart
+	HarborIngressClass             string
+	ProxyDomain                    string
+	ProxyHarborURL                 string
+	ProxyHarborAdminSecret         string
+	ProxyRegistries                []string
+	ProxyBasePath                  string
+	ProxyTLSSecret                 string
+	ProxyBasicAuthEnabled          bool
+	ProxyBasicAuthUsername         string
+	ProxyUpstreamCredentialsSecret string
+	ProxyHostAliases               []helmop.HostAlias
+	AdmissionImagePullSecret       string
+	AdmissionServiceAccount        string
+	AdmissionNetworkOnly           bool
+	OperatorImageRepository        string
+	OperatorImageTag               string
+	ExtrasIngressController        string
+	ExtrasIngressClassName         string
+	ExtrasIngressGRPCEnabled       bool
+	ExtrasIngressRESTEnabled       bool
+	ExtrasIngressTLSSecret         string
+	ExtrasTraefikTransport         bool
+	VPAEnabled                     bool
 }
 
 // Controller reconciles provisioning.cattle.io/v1 Clusters.
@@ -457,45 +458,46 @@ func (c *Controller) ensureMTLSSecret(cluster *provv1.Cluster) error {
 func (c *Controller) helmopCluster(cluster *provv1.Cluster) helmop.Cluster {
 	roles := ResolveRoles(cluster)
 	hc := helmop.Cluster{
-		Name:                        cluster.Name,
-		Namespace:                   cluster.Namespace,
-		MTLSSecretName:              c.opts.MTLSSecretName,
-		Chart:                       c.opts.DragonflyChart,
-		ExtrasChart:                 c.opts.ExtrasChart,
-		MirrorChart:                 c.opts.MirrorChart,
-		HarborChart:                 c.opts.HarborChart,
-		RegistryProxyChart:          c.opts.RegistryProxyChart,
-		AdmissionChart:              c.opts.AdmissionChart,
-		HarborAdminSecret:           helmop.SharedHarborAdminSecretName(),
-		HarborSecretKey:             helmop.SharedHarborSecretKeyName(),
-		ProxyWebhookSecretName:      helmop.SharedRegistryProxyWebhookSecretName(),
-		ProxyRobotSecretName:        helmop.SharedRegistryProxyRobotSecretName(),
-		ProxyDomain:                 c.opts.ProxyDomain,
-		ProxyHarborURL:              c.opts.ProxyHarborURL,
-		ProxyPublicURL:              proxyPublicURL(c.opts.ProxyDomain, c.opts.ProxyBasePath),
-		ProxyBasePath:               c.opts.ProxyBasePath,
-		ProxyTLSSecret:              c.opts.ProxyTLSSecret,
-		ProxyBasicAuthEnabled:       c.opts.ProxyBasicAuthEnabled,
-		ProxyBasicAuthUsername:      c.opts.ProxyBasicAuthUsername,
-		ProxyHostAliases:            c.opts.ProxyHostAliases,
-		ProxyRegistries:             c.opts.ProxyRegistries,
-		AdmissionImagePullSecret:    c.opts.AdmissionImagePullSecret,
-		AdmissionServiceAccount:     c.opts.AdmissionServiceAccount,
-		AdmissionNetworkOnly:        c.opts.AdmissionNetworkOnly,
-		AdmissionExcludeNamespaces:  roles.AdmissionExclude,
-		OperatorImageRepository:     c.opts.OperatorImageRepository,
-		OperatorImageTag:            c.opts.OperatorImageTag,
-		ManagerGRPCDomain:           c.opts.ManagerGRPCDomain,
-		P2PDomain:                   c.opts.P2PDomain,
-		ManagerGRPCPort:             c.opts.ManagerGRPCPort,
-		ManagerAPIHost:              c.opts.ManagerAPIHost,
-		ManagerAPICredentialsSecret: c.opts.ManagerAPICredentialsSecret,
-		SchedulerClusterID:          schedulerClusterID(cluster),
-		SchedulerReplicas:           helmop.ReplicasOrOne(AnnotationSchedulerReplicas, cluster.Annotations[AnnotationSchedulerReplicas]),
-		SeedClientReplicas:          helmop.ReplicasOrOne(AnnotationSeedClientReplicas, cluster.Annotations[AnnotationSeedClientReplicas]),
-		Monitoring:                  monitoringEnabled(cluster),
-		P2PDataTLS:                  p2pDataTLSEnabled(cluster),
-		Labels:                      apply.Labels(cluster.Namespace, cluster.Name),
+		Name:                           cluster.Name,
+		Namespace:                      cluster.Namespace,
+		MTLSSecretName:                 c.opts.MTLSSecretName,
+		Chart:                          c.opts.DragonflyChart,
+		ExtrasChart:                    c.opts.ExtrasChart,
+		MirrorChart:                    c.opts.MirrorChart,
+		HarborChart:                    c.opts.HarborChart,
+		RegistryProxyChart:             c.opts.RegistryProxyChart,
+		AdmissionChart:                 c.opts.AdmissionChart,
+		HarborAdminSecret:              helmop.SharedHarborAdminSecretName(),
+		HarborSecretKey:                helmop.SharedHarborSecretKeyName(),
+		ProxyWebhookSecretName:         helmop.SharedRegistryProxyWebhookSecretName(),
+		ProxyRobotSecretName:           helmop.SharedRegistryProxyRobotSecretName(),
+		ProxyDomain:                    c.opts.ProxyDomain,
+		ProxyHarborURL:                 c.opts.ProxyHarborURL,
+		ProxyPublicURL:                 proxyPublicURL(c.opts.ProxyDomain, c.opts.ProxyBasePath),
+		ProxyBasePath:                  c.opts.ProxyBasePath,
+		ProxyTLSSecret:                 c.opts.ProxyTLSSecret,
+		ProxyBasicAuthEnabled:          c.opts.ProxyBasicAuthEnabled,
+		ProxyBasicAuthUsername:         c.opts.ProxyBasicAuthUsername,
+		ProxyUpstreamCredentialsSecret: c.opts.ProxyUpstreamCredentialsSecret,
+		ProxyHostAliases:               c.opts.ProxyHostAliases,
+		ProxyRegistries:                c.opts.ProxyRegistries,
+		AdmissionImagePullSecret:       c.opts.AdmissionImagePullSecret,
+		AdmissionServiceAccount:        c.opts.AdmissionServiceAccount,
+		AdmissionNetworkOnly:           c.opts.AdmissionNetworkOnly,
+		AdmissionExcludeNamespaces:     roles.AdmissionExclude,
+		OperatorImageRepository:        c.opts.OperatorImageRepository,
+		OperatorImageTag:               c.opts.OperatorImageTag,
+		ManagerGRPCDomain:              c.opts.ManagerGRPCDomain,
+		P2PDomain:                      c.opts.P2PDomain,
+		ManagerGRPCPort:                c.opts.ManagerGRPCPort,
+		ManagerAPIHost:                 c.opts.ManagerAPIHost,
+		ManagerAPICredentialsSecret:    c.opts.ManagerAPICredentialsSecret,
+		SchedulerClusterID:             schedulerClusterID(cluster),
+		SchedulerReplicas:              helmop.ReplicasOrOne(AnnotationSchedulerReplicas, cluster.Annotations[AnnotationSchedulerReplicas]),
+		SeedClientReplicas:             helmop.ReplicasOrOne(AnnotationSeedClientReplicas, cluster.Annotations[AnnotationSeedClientReplicas]),
+		Monitoring:                     monitoringEnabled(cluster),
+		P2PDataTLS:                     p2pDataTLSEnabled(cluster),
+		Labels:                         apply.Labels(cluster.Namespace, cluster.Name),
 	}
 	hc.HarborDomain = roles.HarborDomain
 	hc.HarborURL = roles.HarborURL

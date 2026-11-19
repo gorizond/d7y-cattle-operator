@@ -2,6 +2,9 @@
 {{- if not .Values.auth.username }}{{ fail "registry-proxy: auth.username is required when auth.mode is basic" }}{{ end }}
 {{- if not .Values.auth.passwordSecret }}{{ fail "registry-proxy: auth.passwordSecret is required when auth.mode is basic" }}{{ end }}
 {{- end }}
+{{- if and .Values.upstream.credentialsFile (not .Values.upstream.credentialsSecret) }}
+{{- fail "registry-proxy: upstream.credentialsFile requires upstream.credentialsSecret" }}
+{{- end }}
 apiVersion: apps/v1
 kind: Deployment
 metadata:
@@ -107,6 +110,11 @@ spec:
               mountPath: /etc/registry-proxy/secrets/auth
               readOnly: true
             {{- end }}
+            {{- if .Values.upstream.credentialsSecret }}
+            - name: upstream-credentials
+              mountPath: /etc/registry-proxy/secrets/upstream
+              readOnly: true
+            {{- end }}
             - name: work
               mountPath: /tmp
       volumes:
@@ -131,6 +139,14 @@ spec:
             items:
               - key: password
                 path: password
+        {{- end }}
+        {{- if .Values.upstream.credentialsSecret }}
+        - name: upstream-credentials
+          secret:
+            secretName: {{ .Values.upstream.credentialsSecret | quote }}
+            items:
+              - key: credentials.yaml
+                path: credentials.yaml
         {{- end }}
         - name: work
           emptyDir: {}
