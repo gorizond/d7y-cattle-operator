@@ -36,7 +36,7 @@ const (
 	DefaultHarborChartVersion            = "1.19.4"
 	DefaultRegistryProxyChartRepo        = "https://gorizond.github.io/d7y-cattle-operator"
 	DefaultRegistryProxyChartName        = "registry-proxy"
-	DefaultRegistryProxyChartVersion     = "0.1.15"
+	DefaultRegistryProxyChartVersion     = "0.1.20"
 	DefaultAdmissionChartRepo            = "https://gorizond.github.io/d7y-cattle-operator"
 	DefaultAdmissionChartName            = "admission-webhook"
 	DefaultAdmissionChartVersion         = "0.1.2"
