@@ -105,6 +105,8 @@ spec:
               value: {{ .Values.proxy.basePath | quote }}
             - name: PROXY_TLS_SECRET
               value: {{ .Values.proxy.tlsSecret | quote }}
+            - name: PROXY_HOST_ALIASES
+              value: {{ .Values.proxy.hostAliases | default list | toJson | quote }}
             - name: EXTRAS_INGRESS_CONTROLLER
               value: {{ .Values.extras.ingress.controller | quote }}
             - name: EXTRAS_INGRESS_CLASS_NAME

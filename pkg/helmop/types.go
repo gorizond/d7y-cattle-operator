@@ -95,6 +95,9 @@ const (
 	// AnnotationProxyTLSSecret carries the per-cluster registry-proxy ingress
 	// TLS Secret. The operator stamps the configured default only when absent.
 	AnnotationProxyTLSSecret = "p2p.dragonfly.io/proxy-tls-secret"
+	// AnnotationProxyHostAliases carries per-Cluster registry-proxy /etc/hosts
+	// entries as comma-separated ip=hostname pairs.
+	AnnotationProxyHostAliases = "p2p.dragonfly.io/proxy-host-aliases"
 	// AnnotationHarborTLSSecret optionally pins a per-cluster Harbor ingress
 	// TLS Secret; empty falls back to the fleet-wide d7y-harbor-tls.
 	AnnotationHarborTLSSecret    = "p2p.dragonfly.io/harbor-tls-secret"
@@ -301,6 +304,12 @@ type Chart struct {
 	Version string
 }
 
+// HostAlias is a pod /etc/hosts entry, rendered as a Kubernetes HostAlias.
+type HostAlias struct {
+	IP        string   `json:"ip"`
+	Hostnames []string `json:"hostnames"`
+}
+
 // Cluster carries the per-cluster inputs shared by the HelmOp builders.
 type Cluster struct {
 	Name               string
@@ -332,6 +341,7 @@ type Cluster struct {
 	ProxyPublicURL         string
 	ProxyBasePath          string
 	ProxyTLSSecret         string
+	ProxyHostAliases       []HostAlias
 	ProxyRegistries        []string
 	ProxyWebhookSecretName string
 	ProxyRobotSecretName   string

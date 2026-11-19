@@ -3,6 +3,7 @@ package helmop
 import (
 	"fmt"
 	"net/url"
+	"strconv"
 	"strings"
 
 	fleetv1alpha1 "github.com/rancher/fleet/pkg/apis/fleet.cattle.io/v1alpha1"
@@ -22,6 +23,7 @@ func RegistryProxy(c Cluster) *fleetv1alpha1.HelmOp {
 		webhookSecret:     c.ProxyWebhookSecretName,
 		harborURL:         harborURL,
 		webhookAddress:    registryProxyWebhookAddress(c),
+		hostAliases:       registryProxyHostAliases(c.ProxyHostAliases),
 	})
 	// Harbor is an independent, replaceable component: the proxy HelmOp has
 	// no dependsOn on it. Use harbor-url/proxy.domain for external endpoints.
@@ -33,7 +35,9 @@ func RegistryProxy(c Cluster) *fleetv1alpha1.HelmOp {
 
 // SharedRegistryProxy returns the shared registry-proxy HelmOp. The fullname is
 // a Fleet template so the chart still renders <cluster>-registry-proxy on every
-// target; the robot and webhook Secrets are fleet-wide fixed names.
+// target; the robot and webhook Secrets are fleet-wide fixed names. Per-Cluster
+// host aliases come from the p2p.dragonfly.io/proxy-host-aliases annotation,
+// falling back to the operator-wide static list.
 func SharedRegistryProxy(c Cluster) *fleetv1alpha1.HelmOp {
 	c = sharedCluster(c)
 	harborURL := strings.TrimSpace(c.ProxyHarborURL)
@@ -48,6 +52,7 @@ func SharedRegistryProxy(c Cluster) *fleetv1alpha1.HelmOp {
 		webhookSecret:     SharedRegistryProxyWebhookSecretName(),
 		harborURL:         harborURL,
 		webhookAddress:    SharedProxyWebhookAddressTemplate,
+		hostAliases:       sharedProxyHostAliasesTemplate(c.ProxyHostAliases),
 	})
 	op := newSharedHelmOp(SharedRegistryProxyName(), TargetNamespace, c, c.RegistryProxyChart,
 		"registry-proxy", values, nil, ProxySelector())
@@ -75,6 +80,60 @@ func registryProxyWebhookAddress(c Cluster) string {
 		RegistryProxyName(c.Name), TargetNamespace, RegistryProxyPort)
 }
 
+// registryProxyHostAliases converts the static operator list into the chart's
+// hostAliases list (used by the legacy per-cluster builder).
+func registryProxyHostAliases(aliases []HostAlias) []any {
+	result := make([]any, 0, len(aliases))
+	for _, alias := range aliases {
+		result = append(result, map[string]any{"ip": alias.IP, "hostnames": alias.Hostnames})
+	}
+	return result
+}
+
+// sharedProxyHostAliasesTemplate renders the per-Cluster
+// p2p.dragonfly.io/proxy-host-aliases annotation into a real YAML list of
+// {ip, hostnames:[host]} objects. Fleet marshals helm.values to YAML, renders
+// ${ } over the whole document and parses it back; "$" is not a YAML indicator,
+// so this string stays unquoted and the rendered [...] becomes a list.
+//
+// The annotation is a comma-separated list of ip=hostname pairs, e.g.
+// "10.43.110.19=harbor.koldun.negash.ru". Items are trimmed and quoted so the
+// flow sequence stays valid. Keep the map syntax JSON-style (no space after
+// ':') so the YAML marshaller emits this template as an unquoted plain scalar;
+// a ": " sequence would force quoting and render a string instead of a list.
+// An absent or blank annotation falls back to the static operator-wide list
+// (PROXY_HOST_ALIASES), or [] when that is empty.
+// The if guard is needed because missingkey=error applies to field lookups,
+// but index on a missing map key returns nil.
+func sharedProxyHostAliasesTemplate(static []HostAlias) string {
+	return fmt.Sprintf(
+		`${ if (trim (index .ClusterAnnotations "p2p.dragonfly.io/proxy-host-aliases")) }`+
+			`[${ range $i, $pair := splitList "," (index .ClusterAnnotations "p2p.dragonfly.io/proxy-host-aliases") }${ if $i },${ end }`+
+			`{"ip":${ trim (index (splitn "=" 2 $pair) "_0") | quote },"hostnames":[${ trim (index (splitn "=" 2 $pair) "_1") | quote }]}`+
+			`${ end }]${ else }%s${ end }`,
+		hostAliasesYAML(static),
+	)
+}
+
+// hostAliasesYAML renders the static operator list as a valid YAML flow
+// sequence. The config validates the IPs and hostnames, so strconv.Quote is
+// enough to keep the values safe.
+func hostAliasesYAML(aliases []HostAlias) string {
+	if len(aliases) == 0 {
+		return "[]"
+	}
+	items := make([]string, 0, len(aliases))
+	for _, alias := range aliases {
+		hostnames := make([]string, 0, len(alias.Hostnames))
+		for _, hostname := range alias.Hostnames {
+			hostnames = append(hostnames, strconv.Quote(hostname))
+		}
+		items = append(items, fmt.Sprintf(`{"ip":%s,"hostnames":[%s]}`,
+			strconv.Quote(alias.IP), strings.Join(hostnames, ",")))
+	}
+	return "[" + strings.Join(items, ",") + "]"
+}
+
 type registryProxyOptions struct {
 	fullnameOverride  string
 	tlsSecret         string
@@ -83,6 +142,7 @@ type registryProxyOptions struct {
 	webhookSecret     string
 	harborURL         string
 	webhookAddress    string
+	hostAliases       any
 }
 
 func registryProxyValues(c Cluster, opts registryProxyOptions) map[string]any {
@@ -113,8 +173,9 @@ func registryProxyValues(c Cluster, opts registryProxyOptions) map[string]any {
 			"allowlist": c.ProxyRegistries,
 		},
 		"proxy": map[string]any{
-			"publicURL": c.ProxyPublicURL,
-			"basePath":  c.ProxyBasePath,
+			"publicURL":   c.ProxyPublicURL,
+			"basePath":    c.ProxyBasePath,
+			"hostAliases": opts.hostAliases,
 		},
 		"webhook": map[string]any{
 			"secretName": opts.webhookSecret,

@@ -3,6 +3,7 @@ package cluster
 import (
 	"errors"
 	"reflect"
+	"strings"
 	"testing"
 
 	provv1 "github.com/rancher/rancher/pkg/apis/provisioning.cattle.io/v1"
@@ -325,6 +326,10 @@ func testHarborCluster() *provv1.Cluster {
 // same-cluster webhook address into the registry-proxy Helm values.
 func TestReconcileRegistryProxyIngressAndWebhook(t *testing.T) {
 	controller, store, _ := newTestController(t)
+	controller.opts.ProxyHostAliases = []helmop.HostAlias{{
+		IP:        "10.43.0.10",
+		Hostnames: []string{"harbor.example.test"},
+	}}
 	cluster := testHarborCluster()
 	controller.clusters.(*fakeClusterStore).set(cluster)
 
@@ -351,6 +356,10 @@ func TestReconcileRegistryProxyIngressAndWebhook(t *testing.T) {
 	}
 	if got := controller.clusters.(*fakeClusterStore).annotation(helmop.AnnotationProxyTLSSecret); got != "poligon-harbor-tls" {
 		t.Errorf("proxy-tls-secret annotation = %q, want the operator default", got)
+	}
+	aliases, ok := valueAtPath(t, values, "proxy", "hostAliases").(string)
+	if !ok || !strings.Contains(aliases, `{"ip":"10.43.0.10","hostnames":["harbor.example.test"]}`) {
+		t.Errorf("proxy.hostAliases = %v, want the static fallback in the Fleet template", aliases)
 	}
 }
 
