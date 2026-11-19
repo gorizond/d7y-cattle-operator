@@ -32,8 +32,31 @@ func (c *Copier) sourceRepo(registry, repo string) string {
 }
 
 // Copy copies registry/repo:ref into <mirror>/<registry>/<repo>:ref and
-// returns the source manifest digest.
+// returns the source manifest digest. Tag copies drop attestation descriptors
+// from the top-level index; conversion publishes only the platform child and
+// the nydus artifact anyway.
 func (c *Copier) Copy(ctx context.Context, registry, repo, ref string) (string, error) {
+	return c.copy(ctx, registry, repo, ref, true)
+}
+
+// CopyExact copies a digest reference without filtering the top-level index.
+// A digest is content-addressed: rewriting the body would change its digest
+// and make every descriptor that references it invalid in the target
+// repository.
+func (c *Copier) CopyExact(ctx context.Context, registry, repo, ref string) (string, error) {
+	return c.copy(ctx, registry, repo, ref, false)
+}
+
+// CopyRef chooses the copy mode from the reference: tags are filtered,
+// digests are copied byte-for-byte.
+func (c *Copier) CopyRef(ctx context.Context, registry, repo, ref string) (string, error) {
+	if strings.HasPrefix(ref, "sha256:") {
+		return c.CopyExact(ctx, registry, repo, ref)
+	}
+	return c.Copy(ctx, registry, repo, ref)
+}
+
+func (c *Copier) copy(ctx context.Context, registry, repo, ref string, filter bool) (string, error) {
 	if c.Source == nil || c.Mirror == nil {
 		return "", fmt.Errorf("copier is not configured")
 	}
@@ -46,7 +69,7 @@ func (c *Copier) Copy(ctx context.Context, registry, repo, ref string) (string, 
 	if err != nil {
 		return "", fmt.Errorf("read source manifest: %w", err)
 	}
-	if err := c.copyTree(ctx, sourceRepo, mirrorRepo, ref, manifest, true); err != nil {
+	if err := c.copyTree(ctx, sourceRepo, mirrorRepo, ref, manifest, filter); err != nil {
 		return "", err
 	}
 	return manifest.Digest, nil

@@ -177,10 +177,10 @@ func initialize(ctx context.Context, cfg *registryproxy.Config, bootstrap *boots
 		NydusifyPath: cfg.Conversion.Nydusify,
 		NydusImage:   cfg.Conversion.NydusImage, Platform: cfg.Conversion.Platform,
 		WorkDir: cfg.Conversion.WorkDir, Timeout: timeout,
-		SourceUser: robot.Name, SourcePass: robot.Secret, Registry: mirror,
+		SourceUser: robot.Name, SourcePass: robot.Secret, Registry: mirror, Copier: copier,
 	}
 	manager := registryproxy.NewManager(func(ctx context.Context, job registryproxy.Job) error {
-		sourceDigest, err := copier.Copy(ctx, job.Registry, job.Repository, job.TagOrReference())
+		sourceDigest, err := copier.CopyRef(ctx, job.Registry, job.Repository, job.TagOrReference())
 		if err != nil {
 			return err
 		}

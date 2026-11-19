@@ -306,3 +306,54 @@ func TestCopierDropsAttestationsFromMultiarchIndex(t *testing.T) {
 		}
 	}
 }
+
+func TestCopyRefKeepsDigestIndexBytesExact(t *testing.T) {
+	source := newFakeRegistry()
+	mirror := newFakeRegistry()
+	index := []byte(`{"schemaVersion":2,"mediaType":"application/vnd.oci.image.index.v1+json","manifests":[` +
+		`{"mediaType":"application/vnd.oci.image.manifest.v1+json","digest":"sha256:child","platform":{"architecture":"amd64","os":"linux"}},` +
+		`{"mediaType":"application/vnd.oci.image.manifest.v1+json","digest":"sha256:attestation","platform":{"architecture":"unknown","os":"unknown"}}]}`)
+	const digest = "sha256:0123456789abcdef0123456789abcdef0123456789abcdef0123456789abcdef"
+	source.manifests["dockerio/library/nginx:"+digest] = Manifest{Digest: digest, MediaType: ociIndexType, Body: index}
+	for _, child := range []string{"sha256:child", "sha256:attestation"} {
+		body := []byte(`{"schemaVersion":2,"mediaType":"` + ociManifestType + `","config":{"digest":"sha256:config"},"layers":[]}`)
+		source.manifests["dockerio/library/nginx:"+child] = Manifest{Digest: child, MediaType: ociManifestType, Body: body}
+		source.blobs["dockerio/library/nginx:sha256:config"] = []byte("config")
+	}
+	copier := &Copier{Source: source, Mirror: mirror, MirrorProject: "mirror"}
+	if _, err := copier.CopyRef(context.Background(), "docker.io", "library/nginx", digest); err != nil {
+		t.Fatalf("CopyRef() error = %v", err)
+	}
+	mirrored, ok := mirror.manifests["mirror/docker.io/library/nginx:"+digest]
+	if !ok {
+		t.Fatal("digest index was not copied")
+	}
+	if string(mirrored.Body) != string(index) {
+		t.Error("digest index body was rewritten; a content-addressed reference must stay byte-exact")
+	}
+	if _, ok := mirror.manifests["mirror/docker.io/library/nginx:sha256:attestation"]; !ok {
+		t.Error("digest copy dropped the attestation child")
+	}
+}
+
+func TestCopyRefFiltersTagCopy(t *testing.T) {
+	source := newFakeRegistry()
+	mirror := newFakeRegistry()
+	index := []byte(`{"schemaVersion":2,"mediaType":"application/vnd.oci.image.index.v1+json","manifests":[` +
+		`{"mediaType":"application/vnd.oci.image.manifest.v1+json","digest":"sha256:child","platform":{"architecture":"amd64","os":"linux"}},` +
+		`{"mediaType":"application/vnd.oci.image.manifest.v1+json","digest":"sha256:attestation","platform":{"architecture":"unknown","os":"unknown"}}]}`)
+	source.manifests["dockerio/library/nginx:1.27"] = Manifest{Digest: "sha256:index", MediaType: ociIndexType, Body: index}
+	for _, child := range []string{"sha256:child", "sha256:attestation"} {
+		body := []byte(`{"schemaVersion":2,"mediaType":"` + ociManifestType + `","config":{"digest":"sha256:config"},"layers":[]}`)
+		source.manifests["dockerio/library/nginx:"+child] = Manifest{Digest: child, MediaType: ociManifestType, Body: body}
+		source.blobs["dockerio/library/nginx:sha256:config"] = []byte("config")
+	}
+	copier := &Copier{Source: source, Mirror: mirror, MirrorProject: "mirror"}
+	if _, err := copier.CopyRef(context.Background(), "docker.io", "library/nginx", "1.27"); err != nil {
+		t.Fatalf("CopyRef(tag) error = %v", err)
+	}
+	mirrored := mirror.manifests["mirror/docker.io/library/nginx:1.27"]
+	if string(mirrored.Body) == string(index) {
+		t.Error("tag copy kept the attestation descriptor")
+	}
+}

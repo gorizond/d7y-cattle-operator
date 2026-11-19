@@ -859,3 +859,112 @@ func TestEnsureRobotSecretRecreatesMissingRobot(t *testing.T) {
 		t.Errorf("robot POST = %d, want 1", fake.posts["robot"])
 	}
 }
+
+func TestCleanupStaleRegistryDeletesUnreferencedEndpoint(t *testing.T) {
+	fake := &fakeHarbor{
+		registries: []HarborRegistry{
+			{ID: 4, Name: "quay.io", Type: "quay", URL: "https://quay.io"},
+			{ID: 13, Name: "quay.io-generic", Type: "docker-registry", URL: "https://quay.io"},
+		},
+		projects: []HarborProject{{ProjectID: 1, Name: "quayio", RegistryID: 13}},
+	}
+	server := httptest.NewServer(fake.handler())
+	defer server.Close()
+
+	if err := (&HarborClient{BaseURL: server.URL}).CleanupStaleRegistry(context.Background(), "quay.io"); err != nil {
+		t.Fatalf("CleanupStaleRegistry() error = %v", err)
+	}
+	fake.mu.Lock()
+	defer fake.mu.Unlock()
+	if fake.posts["registry_delete"] != 1 {
+		t.Errorf("registry DELETE = %d, want 1", fake.posts["registry_delete"])
+	}
+	if len(fake.registries) != 1 || fake.registries[0].Name != "quay.io-generic" {
+		t.Errorf("registries = %+v, want only the generic endpoint", fake.registries)
+	}
+}
+
+func TestCleanupStaleRegistryKeepsReferencedEndpoint(t *testing.T) {
+	fake := &fakeHarbor{
+		registries: []HarborRegistry{
+			{ID: 4, Name: "quay.io", Type: "quay", URL: "https://quay.io"},
+			{ID: 13, Name: "quay.io-generic", Type: "docker-registry", URL: "https://quay.io"},
+		},
+		// The project still points at the stale endpoint: Harbor answers 412.
+		projects: []HarborProject{{ProjectID: 1, Name: "quayio", RegistryID: 4}},
+	}
+	server := httptest.NewServer(fake.handler())
+	defer server.Close()
+
+	if err := (&HarborClient{BaseURL: server.URL}).CleanupStaleRegistry(context.Background(), "quay.io"); err != nil {
+		t.Fatalf("CleanupStaleRegistry() error = %v, want nil on 412", err)
+	}
+	fake.mu.Lock()
+	defer fake.mu.Unlock()
+	if fake.posts["registry_delete"] != 1 {
+		t.Errorf("registry DELETE = %d, want one attempt", fake.posts["registry_delete"])
+	}
+	if len(fake.registries) != 2 || fake.registries[0].Name != "quay.io" {
+		t.Errorf("referenced stale endpoint was deleted: %+v", fake.registries)
+	}
+}
+
+func TestProvisionerCleansStaleEndpointAfterRepoint(t *testing.T) {
+	fake := &fakeHarbor{
+		registries: []HarborRegistry{{ID: 3, Name: "quay.io", Type: "quay", URL: "https://quay.io"}},
+		projects:   []HarborProject{{ProjectID: 1, Name: "quayio", RegistryID: 3}},
+	}
+	server := httptest.NewServer(fake.handler())
+	defer server.Close()
+	provisioner := &Provisioner{
+		Harbor:        &HarborClient{BaseURL: server.URL},
+		MirrorProject: "mirror",
+	}
+	if err := provisioner.Ensure(context.Background(), "quay.io"); err != nil {
+		t.Fatalf("Ensure() error = %v", err)
+	}
+	fake.mu.Lock()
+	defer fake.mu.Unlock()
+	if fake.posts["registry_delete"] != 1 {
+		t.Errorf("registry DELETE = %d, want the unreferenced stale endpoint removed", fake.posts["registry_delete"])
+	}
+	var generic *HarborRegistry
+	for i := range fake.registries {
+		if fake.registries[i].Name == "quay.io" {
+			t.Errorf("stale endpoint still present: %+v", fake.registries[i])
+		}
+		if fake.registries[i].Name == "quay.io-generic" {
+			generic = &fake.registries[i]
+		}
+	}
+	if generic == nil || generic.Type != "docker-registry" {
+		t.Errorf("generic endpoint = %+v", generic)
+	}
+	if generic != nil {
+		for _, project := range fake.projects {
+			if project.Name == "quayio" && project.RegistryID != generic.ID {
+				t.Errorf("project registry_id = %d, want %d", project.RegistryID, generic.ID)
+			}
+		}
+	}
+}
+
+func TestCleanupStaleRegistryIgnoresMatchingAndGenericEndpoints(t *testing.T) {
+	fake := &fakeHarbor{registries: []HarborRegistry{
+		{ID: 1, Name: "quay.io-generic", Type: "docker-registry", URL: "https://quay.io"},
+		{ID: 2, Name: "ghcr.io", Type: "docker-registry", URL: "https://ghcr.io"},
+	}}
+	server := httptest.NewServer(fake.handler())
+	defer server.Close()
+	client := &HarborClient{BaseURL: server.URL}
+	for _, host := range []string{"quay.io-generic", "ghcr.io"} {
+		if err := client.CleanupStaleRegistry(context.Background(), host); err != nil {
+			t.Fatalf("CleanupStaleRegistry(%s) error = %v", host, err)
+		}
+	}
+	fake.mu.Lock()
+	defer fake.mu.Unlock()
+	if fake.posts["registry_delete"] != 0 {
+		t.Errorf("registry DELETE = %d, want 0 for matching/generic endpoints", fake.posts["registry_delete"])
+	}
+}

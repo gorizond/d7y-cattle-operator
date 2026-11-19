@@ -532,3 +532,89 @@ func TestRewriteNydusSourceReferencesHandlesBareKey(t *testing.T) {
 		t.Errorf("annotation = %q", got)
 	}
 }
+
+func TestConverterDigestCopiesMissingChildBeforePublishing(t *testing.T) {
+	const registryHost = "registry.access.redhat.com"
+	const digest = "sha256:d574000000000000000000000000000000000000000000000000000000000000"
+	const targetTag = "nd-d57400000000"
+	const child = "sha256:ubi-micro-amd64"
+	repoPath := "mirror/" + registryHost + "/ubi9/ubi-micro"
+
+	source := newFakeRegistry()
+	mirror := newFakeRegistry()
+	indexBody, _ := json.Marshal(indexDocument{
+		SchemaVersion: 2,
+		MediaType:     ociIndexType,
+		Manifests: []indexDescriptor{{
+			MediaType: ociManifestType, Digest: child, Size: 100,
+			Platform: &indexPlatform{OS: "linux", Architecture: "amd64"},
+		}},
+	})
+	mirror.manifests[repoPath+":"+digest] = Manifest{Digest: digest, MediaType: ociIndexType, Body: indexBody}
+
+	childBody := []byte(`{"schemaVersion":2,"mediaType":"` + ociManifestType + `","config":{"digest":"sha256:config"},"layers":[{"digest":"sha256:layer"}]}`)
+	sourceRepo := ProjectName(registryHost) + "/ubi9/ubi-micro"
+	source.manifests[sourceRepo+":"+child] = Manifest{Digest: child, MediaType: ociManifestType, Body: childBody}
+	source.blobs[sourceRepo+":sha256:config"] = []byte("config")
+	source.blobs[sourceRepo+":sha256:layer"] = []byte("layer")
+
+	mergedBody, _ := json.Marshal(indexDocument{Manifests: []indexDescriptor{
+		{MediaType: ociManifestType, Digest: child, Platform: &indexPlatform{OS: "linux", Architecture: "amd64"}},
+		{MediaType: ociManifestType, Digest: "sha256:nydus", ArtifactType: nydusArtifactType, Platform: &indexPlatform{OS: "linux", Architecture: "amd64"}},
+	}})
+	mirror.manifests[repoPath+":"+targetTag+"-merged"] = Manifest{Digest: "sha256:merged", MediaType: ociIndexType, Body: mergedBody}
+	mirror.manifests[repoPath+":sha256:nydus"] = Manifest{MediaType: ociManifestType, Body: nydusManifestBody("")}
+
+	converter := &Converter{
+		HarborURL: "https://harbor.example.com", MirrorProject: "mirror", ProxyPublicURL: testProxyURL,
+		NydusifyPath: "nydusify", NydusImage: "/usr/local/bin/nydus-image", Registry: mirror,
+		Copier:  &Copier{Source: source, Mirror: mirror, MirrorProject: "mirror"},
+		Command: func(context.Context, string, ...string) *exec.Cmd { return exec.Command("true") },
+	}
+	if _, err := converter.Convert(context.Background(), registryHost, "ubi9/ubi-micro", digest, digest); err != nil {
+		t.Fatalf("Convert() error = %v", err)
+	}
+	if _, ok := mirror.manifests[repoPath+":"+child]; !ok {
+		t.Error("missing digest source child was not copied into the target repository")
+	}
+	for _, blob := range []string{"sha256:config", "sha256:layer"} {
+		if len(mirror.blobs[repoPath+":"+blob]) == 0 {
+			t.Errorf("child blob %s was not copied", blob)
+		}
+	}
+	published, ok := mirror.manifests[repoPath+":"+targetTag]
+	if !ok {
+		t.Fatal("digest conversion index was not published")
+	}
+	var index indexDocument
+	if err := json.Unmarshal(published.Body, &index); err != nil {
+		t.Fatal(err)
+	}
+	if len(index.Manifests) != 2 || index.Manifests[0].Digest != child {
+		t.Errorf("published manifests = %+v, want the copied child plus nydus", index.Manifests)
+	}
+	if index.Manifests[1].ArtifactType != nydusArtifactType {
+		t.Errorf("nydus descriptor = %+v", index.Manifests[1])
+	}
+}
+
+func TestConverterTagPathDoesNotUseCopier(t *testing.T) {
+	registry := newFakeRegistry()
+	singleSourceManifest(t, registry, "sha256:source-manifest", []byte(`{"schemaVersion":2,"config":{"digest":"sha256:config"},"layers":[]}`))
+	indexBody, _ := json.Marshal(indexDocument{Manifests: []indexDescriptor{
+		{MediaType: ociManifestType, Digest: "sha256:source-manifest", Platform: &indexPlatform{OS: "linux", Architecture: "amd64"}},
+		{MediaType: ociManifestType, Digest: "sha256:nydus", ArtifactType: nydusArtifactType, Platform: &indexPlatform{OS: "linux", Architecture: "amd64"}},
+	}})
+	registry.manifests["mirror/docker.io/library/nginx:1.27-merged"] = Manifest{Digest: "sha256:index", MediaType: ociIndexType, Body: indexBody}
+	registry.manifests["mirror/docker.io/library/nginx:sha256:nydus"] = Manifest{MediaType: ociManifestType, Body: nydusManifestBody("")}
+	converter := &Converter{
+		HarborURL: "https://harbor.example.com", MirrorProject: "mirror", ProxyPublicURL: testProxyURL,
+		NydusifyPath: "nydusify", NydusImage: "/usr/local/bin/nydus-image", Registry: registry,
+		// A copier with no source fails if the tag path ever calls it.
+		Copier:  &Copier{Mirror: registry, MirrorProject: "mirror"},
+		Command: func(context.Context, string, ...string) *exec.Cmd { return exec.Command("true") },
+	}
+	if _, err := converter.Convert(context.Background(), "docker.io", "library/nginx", "1.27", "sha256:source"); err != nil {
+		t.Fatalf("tag conversion used the digest-only copier: %v", err)
+	}
+}
