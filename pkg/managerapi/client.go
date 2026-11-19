@@ -125,6 +125,38 @@ func (c *Client) SignIn(ctx context.Context) error {
 	return err
 }
 
+// CreatePersonalAccessToken creates a PAT for userID and returns the token.
+// The manager returns the token only once; callers must store it and never log
+// it. expiredAt is sent as RFC3339 (UTC).
+func (c *Client) CreatePersonalAccessToken(ctx context.Context, name string, userID int64, scopes []string, expiredAt time.Time) (string, error) {
+	if strings.TrimSpace(name) == "" {
+		return "", fmt.Errorf("manager api: personal access token name is required")
+	}
+	if userID < 1 {
+		return "", fmt.Errorf("manager api: personal access token user ID must be positive")
+	}
+	if len(scopes) == 0 {
+		return "", fmt.Errorf("manager api: personal access token scopes are required")
+	}
+	body, err := json.Marshal(CreatePersonalAccessTokenRequest{
+		Name:      name,
+		ExpiredAt: expiredAt.UTC().Format(time.RFC3339),
+		UserID:    userID,
+		Scopes:    scopes,
+	})
+	if err != nil {
+		return "", fmt.Errorf("manager api: encode personal access token: %w", err)
+	}
+	var out CreatePersonalAccessTokenResponse
+	if err := c.do(ctx, http.MethodPost, PersonalAccessTokensPath, nil, body, &out); err != nil {
+		return "", err
+	}
+	if out.Token == "" {
+		return "", fmt.Errorf("manager api: personal access token response has no token")
+	}
+	return out.Token, nil
+}
+
 // ListSchedulerClusters returns all scheduler clusters, following the Link
 // header rel=next pagination. A null response is treated as an empty list.
 func (c *Client) ListSchedulerClusters(ctx context.Context) ([]SchedulerCluster, error) {

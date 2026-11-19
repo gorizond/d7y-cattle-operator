@@ -668,3 +668,73 @@ func writeJSON(w http.ResponseWriter, status int, value any) {
 	w.WriteHeader(status)
 	_ = json.NewEncoder(w).Encode(value)
 }
+
+func TestCreatePersonalAccessToken(t *testing.T) {
+	const token = "pat-token-1"
+	var sawPAT atomic.Bool
+	client := newTestClient(t, http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		switch r.URL.Path {
+		case SignInPath:
+			writeJSON(w, http.StatusOK, SignInResponse{Token: "jwt-1"})
+		case PersonalAccessTokensPath:
+			sawPAT.Store(true)
+			if r.Method != http.MethodPost {
+				t.Errorf("PAT method = %s, want POST", r.Method)
+			}
+			if got := r.Header.Get("Authorization"); got != "Bearer jwt-1" {
+				t.Errorf("PAT Authorization = %q", got)
+			}
+			var body CreatePersonalAccessTokenRequest
+			if err := json.NewDecoder(r.Body).Decode(&body); err != nil {
+				t.Fatalf("decode PAT body: %v", err)
+			}
+			if body.Name != "harbor-preheat" || body.UserID != 1 {
+				t.Errorf("PAT name/user_id = %q/%d", body.Name, body.UserID)
+			}
+			if len(body.Scopes) != 1 || body.Scopes[0] != "job" {
+				t.Errorf("PAT scopes = %v, want [job]", body.Scopes)
+			}
+			expires, err := time.Parse(time.RFC3339, body.ExpiredAt)
+			if err != nil {
+				t.Fatalf("PAT expired_at %q is not RFC3339: %v", body.ExpiredAt, err)
+			}
+			if expires.Before(time.Now().AddDate(9, 11, 0)) {
+				t.Errorf("PAT expires too early: %s", body.ExpiredAt)
+			}
+			writeJSON(w, http.StatusCreated, CreatePersonalAccessTokenResponse{Token: token})
+		default:
+			t.Errorf("unexpected path %s", r.URL.Path)
+			w.WriteHeader(http.StatusNotFound)
+		}
+	}))
+
+	got, err := client.CreatePersonalAccessToken(context.Background(), "harbor-preheat", 1, []string{"job"},
+		time.Now().AddDate(10, 0, 0))
+	if err != nil {
+		t.Fatalf("CreatePersonalAccessToken() error = %v", err)
+	}
+	if got != token {
+		t.Errorf("token = %q, want %q", got, token)
+	}
+	if !sawPAT.Load() {
+		t.Error("PAT endpoint was not called")
+	}
+}
+
+func TestCreatePersonalAccessTokenEmptyResponse(t *testing.T) {
+	client := newTestClient(t, http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		switch r.URL.Path {
+		case SignInPath:
+			writeJSON(w, http.StatusOK, SignInResponse{Token: "jwt-1"})
+		case PersonalAccessTokensPath:
+			writeJSON(w, http.StatusCreated, CreatePersonalAccessTokenResponse{})
+		default:
+			w.WriteHeader(http.StatusNotFound)
+		}
+	}))
+
+	if _, err := client.CreatePersonalAccessToken(context.Background(), "harbor-preheat", 1, []string{"job"},
+		time.Now().AddDate(10, 0, 0)); err == nil {
+		t.Fatal("CreatePersonalAccessToken() error = nil, want missing-token error")
+	}
+}
