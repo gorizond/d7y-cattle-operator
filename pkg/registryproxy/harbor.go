@@ -34,10 +34,11 @@ type HarborCredential struct {
 }
 
 type HarborRegistry struct {
-	ID   int    `json:"id"`
-	Name string `json:"name"`
-	Type string `json:"type"`
-	URL  string `json:"url"`
+	ID       int    `json:"id"`
+	Name     string `json:"name"`
+	Type     string `json:"type"`
+	URL      string `json:"url"`
+	Insecure bool   `json:"insecure"`
 }
 
 type HarborProject struct {
@@ -106,26 +107,64 @@ func registrySpec(host string) HarborRegistry {
 	}
 }
 
-// EnsureRegistry returns the Harbor registry endpoint ID, creating it once.
+// EnsureRegistry returns a Harbor registry endpoint matching
+// registrySpec(host). An existing endpoint with a stale type or URL (for
+// example the retired "quay" adapter) is updated in place; if Harbor refuses
+// the update the endpoint is deleted and recreated so a stale type is never
+// reused by EnsureProject.
 func (h *HarborClient) EnsureRegistry(ctx context.Context, host string) (HarborRegistry, error) {
 	var list []HarborRegistry
 	if _, err := h.do(ctx, http.MethodGet, "/api/v2.0/registries?name="+url.QueryEscape(host), nil, &list); err != nil {
 		return HarborRegistry{}, err
 	}
+	spec := registrySpec(host)
 	for _, item := range list {
-		if item.Name == host {
+		if item.Name != host {
+			continue
+		}
+		if item.Type == spec.Type && item.URL == spec.URL {
 			return item, nil
 		}
+		reconciled, err := h.updateRegistry(ctx, item, spec)
+		if err == nil {
+			return reconciled, nil
+		}
+		if _, deleteErr := h.do(ctx, http.MethodDelete, "/api/v2.0/registries/"+strconv.Itoa(item.ID), nil, nil); deleteErr != nil {
+			return HarborRegistry{}, fmt.Errorf("reconcile harbor registry %q: update: %w; delete: %v", host, err, deleteErr)
+		}
+		break
 	}
-	spec := registrySpec(host)
+	return h.createRegistry(ctx, host, spec)
+}
+
+// registryBody builds the Harbor create/update payload. Without configured
+// credentials access_key/access_secret stay empty; Harbor keeps the stored
+// credential in that case, so an update never drops upstream auth.
+func (h *HarborClient) registryBody(spec HarborRegistry, insecure bool) map[string]any {
 	body := map[string]any{
-		"name": spec.Name, "type": spec.Type, "url": spec.URL, "insecure": false,
+		"name": spec.Name, "type": spec.Type, "url": spec.URL, "insecure": insecure,
 	}
-	if credential, ok := h.Credentials[host]; ok && credential.AccessKey != "" {
+	if credential, ok := h.Credentials[spec.Name]; ok && credential.AccessKey != "" {
 		body["access_key"] = credential.AccessKey
 		body["access_secret"] = credential.AccessSecret
 	}
-	status, err := h.do(ctx, http.MethodPost, "/api/v2.0/registries", body, nil)
+	return body
+}
+
+func (h *HarborClient) updateRegistry(ctx context.Context, existing, spec HarborRegistry) (HarborRegistry, error) {
+	path := "/api/v2.0/registries/" + strconv.Itoa(existing.ID)
+	status, err := h.do(ctx, http.MethodPut, path, h.registryBody(spec, existing.Insecure), nil)
+	if err != nil {
+		return HarborRegistry{}, err
+	}
+	if status != http.StatusOK && status != http.StatusNoContent {
+		return HarborRegistry{}, fmt.Errorf("harbor PUT %s: status %d", path, status)
+	}
+	return h.getRegistry(ctx, existing.Name)
+}
+
+func (h *HarborClient) createRegistry(ctx context.Context, host string, spec HarborRegistry) (HarborRegistry, error) {
+	status, err := h.do(ctx, http.MethodPost, "/api/v2.0/registries", h.registryBody(spec, false), nil)
 	if err == nil && (status == http.StatusCreated || status == http.StatusOK) {
 		return h.getRegistry(ctx, host)
 	}

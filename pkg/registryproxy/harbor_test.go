@@ -26,6 +26,8 @@ type fakeHarbor struct {
 	// webhookFail/registryFail simulate optional and required Harbor failures.
 	webhookFail  bool
 	registryFail bool
+	// registryUpdateFail simulates a Harbor that rejects registry updates.
+	registryUpdateFail bool
 	// lastRegistryBody/lastRobotBody are raw create bodies (checks that
 	// credentials and wildcard permissions reach Harbor).
 	lastRegistryBody map[string]any
@@ -51,10 +53,39 @@ func (f *fakeHarbor) handler() http.Handler {
 			_ = json.NewDecoder(r.Body).Decode(&body)
 			f.lastRegistryBody = body
 			item := HarborRegistry{Name: fmt.Sprint(body["name"]), Type: fmt.Sprint(body["type"]), URL: fmt.Sprint(body["url"])}
+			item.Insecure, _ = body["insecure"].(bool)
 			f.posts["registry"]++
 			item.ID = len(f.registries) + 1
 			f.registries = append(f.registries, item)
 			w.WriteHeader(http.StatusCreated)
+		case r.Method == http.MethodPut && strings.HasPrefix(r.URL.Path, "/api/v2.0/registries/"):
+			f.posts["registry_update"]++
+			if f.registryUpdateFail {
+				http.Error(w, "harbor registry update failed", http.StatusInternalServerError)
+				return
+			}
+			id, _ := strconv.Atoi(strings.TrimPrefix(r.URL.Path, "/api/v2.0/registries/"))
+			var body map[string]any
+			_ = json.NewDecoder(r.Body).Decode(&body)
+			f.lastRegistryBody = body
+			for i := range f.registries {
+				if f.registries[i].ID == id {
+					f.registries[i].Type = fmt.Sprint(body["type"])
+					f.registries[i].URL = fmt.Sprint(body["url"])
+					f.registries[i].Insecure, _ = body["insecure"].(bool)
+				}
+			}
+			w.WriteHeader(http.StatusOK)
+		case r.Method == http.MethodDelete && strings.HasPrefix(r.URL.Path, "/api/v2.0/registries/"):
+			id, _ := strconv.Atoi(strings.TrimPrefix(r.URL.Path, "/api/v2.0/registries/"))
+			f.posts["registry_delete"]++
+			for i, item := range f.registries {
+				if item.ID == id {
+					f.registries = append(f.registries[:i], f.registries[i+1:]...)
+					break
+				}
+			}
+			w.WriteHeader(http.StatusOK)
 		case r.Method == http.MethodGet && r.URL.Path == "/api/v2.0/projects":
 			_ = json.NewEncoder(w).Encode(f.projects)
 		case r.Method == http.MethodPost && r.URL.Path == "/api/v2.0/projects":
@@ -434,6 +465,117 @@ func TestEnsureRegistryMapsQuayToDockerRegistry(t *testing.T) {
 	defer fake.mu.Unlock()
 	if got := fake.lastRegistryBody["type"]; got != "docker-registry" {
 		t.Errorf("quay registry type = %v, want the generic docker-registry adapter", got)
+	}
+}
+
+func TestEnsureRegistryReconcilesStaleQuayType(t *testing.T) {
+	fake := &fakeHarbor{registries: []HarborRegistry{{
+		ID: 3, Name: "quay.io", Type: "quay", URL: "https://quay.io", Insecure: true,
+	}}}
+	server := httptest.NewServer(fake.handler())
+	defer server.Close()
+
+	got, err := (&HarborClient{BaseURL: server.URL}).EnsureRegistry(context.Background(), "quay.io")
+	if err != nil {
+		t.Fatalf("EnsureRegistry() error = %v", err)
+	}
+	if got.Type != "docker-registry" || got.URL != "https://quay.io" {
+		t.Errorf("reconciled registry = %+v", got)
+	}
+	fake.mu.Lock()
+	defer fake.mu.Unlock()
+	if fake.posts["registry_update"] != 1 || fake.posts["registry"] != 0 || fake.posts["registry_delete"] != 0 {
+		t.Errorf("registry POST/PUT/DELETE = %d/%d/%d, want 0/1/0",
+			fake.posts["registry"], fake.posts["registry_update"], fake.posts["registry_delete"])
+	}
+	if fake.lastRegistryBody["type"] != "docker-registry" || fake.lastRegistryBody["url"] != "https://quay.io" {
+		t.Errorf("update body = %v", fake.lastRegistryBody)
+	}
+	if fake.lastRegistryBody["insecure"] != true {
+		t.Errorf("update body did not preserve insecure: %v", fake.lastRegistryBody)
+	}
+	if len(fake.registries) != 1 || fake.registries[0].Type != "docker-registry" {
+		t.Errorf("stale endpoint was not reconciled in place: %+v", fake.registries)
+	}
+}
+
+func TestEnsureRegistryReconcilesURLMismatch(t *testing.T) {
+	fake := &fakeHarbor{registries: []HarborRegistry{{
+		ID: 7, Name: "ghcr.io", Type: "github-ghcr", URL: "http://ghcr.io",
+	}}}
+	server := httptest.NewServer(fake.handler())
+	defer server.Close()
+	client := &HarborClient{
+		BaseURL: server.URL,
+		Credentials: map[string]HarborCredential{
+			"ghcr.io": {AccessKey: "test-user", AccessSecret: "test-secret"},
+		},
+	}
+
+	got, err := client.EnsureRegistry(context.Background(), "ghcr.io")
+	if err != nil {
+		t.Fatalf("EnsureRegistry() error = %v", err)
+	}
+	if got.URL != "https://ghcr.io" || got.Type != "github-ghcr" {
+		t.Errorf("reconciled registry = %+v", got)
+	}
+	fake.mu.Lock()
+	defer fake.mu.Unlock()
+	if fake.posts["registry_update"] != 1 || fake.posts["registry"] != 0 {
+		t.Errorf("registry POST/PUT = %d/%d, want 0/1", fake.posts["registry"], fake.posts["registry_update"])
+	}
+	if fake.lastRegistryBody["url"] != "https://ghcr.io" {
+		t.Errorf("update url = %v", fake.lastRegistryBody["url"])
+	}
+	if fake.lastRegistryBody["access_key"] != "test-user" || fake.lastRegistryBody["access_secret"] != "test-secret" {
+		t.Errorf("update did not include configured credentials: %v", fake.lastRegistryBody)
+	}
+}
+
+func TestEnsureRegistryRecreatesWhenUpdateFails(t *testing.T) {
+	fake := &fakeHarbor{
+		registries:         []HarborRegistry{{ID: 5, Name: "quay.io", Type: "quay", URL: "https://quay.io"}},
+		registryUpdateFail: true,
+	}
+	server := httptest.NewServer(fake.handler())
+	defer server.Close()
+
+	got, err := (&HarborClient{BaseURL: server.URL}).EnsureRegistry(context.Background(), "quay.io")
+	if err != nil {
+		t.Fatalf("EnsureRegistry() error = %v", err)
+	}
+	if got.Type != "docker-registry" || got.URL != "https://quay.io" {
+		t.Errorf("recreated registry = %+v", got)
+	}
+	fake.mu.Lock()
+	defer fake.mu.Unlock()
+	if fake.posts["registry_update"] != 1 || fake.posts["registry_delete"] != 1 || fake.posts["registry"] != 1 {
+		t.Errorf("registry POST/PUT/DELETE = %d/%d/%d, want 1/1/1",
+			fake.posts["registry"], fake.posts["registry_update"], fake.posts["registry_delete"])
+	}
+	if len(fake.registries) != 1 || fake.registries[0].Type != "docker-registry" {
+		t.Errorf("stale endpoint survived the recreate: %+v", fake.registries)
+	}
+}
+
+func TestEnsureRegistryLeavesMatchingEndpointsUntouched(t *testing.T) {
+	fake := &fakeHarbor{registries: []HarborRegistry{
+		{ID: 1, Name: "docker.io", Type: "docker-hub", URL: "https://hub.docker.com"},
+		{ID: 2, Name: "ghcr.io", Type: "github-ghcr", URL: "https://ghcr.io"},
+	}}
+	server := httptest.NewServer(fake.handler())
+	defer server.Close()
+	client := &HarborClient{BaseURL: server.URL}
+
+	for _, host := range []string{"docker.io", "ghcr.io"} {
+		if _, err := client.EnsureRegistry(context.Background(), host); err != nil {
+			t.Fatalf("EnsureRegistry(%s) error = %v", host, err)
+		}
+	}
+	fake.mu.Lock()
+	defer fake.mu.Unlock()
+	if fake.posts["registry"] != 0 || fake.posts["registry_update"] != 0 || fake.posts["registry_delete"] != 0 {
+		t.Errorf("matching endpoints were mutated: %v", fake.posts)
 	}
 }
 

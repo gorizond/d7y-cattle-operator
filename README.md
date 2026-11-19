@@ -465,8 +465,16 @@ projects for a `*` allowlist, and the `PUSH_ARTIFACT` webhook policy. No manual
 Harbor project is needed. The source proxy project is never mutated. The proxy
 copies source manifests/blobs into `mirror/<registry>/<repo>`, runs `nydusify
 convert --merge-platform --oci --fs-version 6` to `:<tag>-merged` (RAFS v6 is
-required by fscache), verifies the OCI-first/nydus-second index, and moves that
-index to `<tag>`. `/api/convert` is a Harbor-reachable shared-secret endpoint
+required by fscache), verifies the nydus artifact by its `artifactType` and
+bootstrap layer rather than descriptor position, and moves that index to
+`<tag>`. A multiarch tag is converted through its target-platform child digest;
+the published index keeps only that child plus the nydus artifact, because
+nydusify copies only the converted child and Harbor rejects an index whose
+descriptors are absent from the target repository. The proxy also reconciles
+Harbor registry endpoints: an existing endpoint with a stale type or URL is
+updated in place (deleted and recreated if Harbor refuses), so a legacy
+`quay`-type endpoint is replaced by the generic `docker-registry` adapter that
+Harbor actually supports. `/api/convert` is a Harbor-reachable shared-secret endpoint
 and returns 202 before the asynchronous copy/conversion.
 
 The proxy Manager is intentionally in-memory. After a proxy restart, in-flight
