@@ -11,6 +11,7 @@ import (
 	"testing"
 
 	corev1 "k8s.io/api/core/v1"
+	apierrors "k8s.io/apimachinery/pkg/api/errors"
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
 
 	"github.com/gorizond/d7y-cattle-operator/pkg/managerapi"
@@ -35,6 +36,53 @@ func (f *fakePreheatEnsurer) EnsurePreheatInstance(_ context.Context, name, endp
 	defer f.mu.Unlock()
 	f.calls = append(f.calls, preheatCall{Name: name, Endpoint: endpoint, Token: token, Insecure: insecure})
 	return f.err
+}
+
+// zeroOnNotFoundSecretStore mimics Wrangler's Get: NotFound is returned
+// together with a non-nil zero-value Secret.
+type zeroOnNotFoundSecretStore struct {
+	*fakeSecretStore
+	name string
+}
+
+func (s *zeroOnNotFoundSecretStore) Get(namespace, name string, opts metav1.GetOptions) (*corev1.Secret, error) {
+	if name == s.name {
+		return &corev1.Secret{}, apierrors.NewNotFound(corev1.Resource("secrets"), name)
+	}
+	return s.fakeSecretStore.Get(namespace, name, opts)
+}
+
+func TestEnsureHarborPreheatPATNotFoundZeroSecret(t *testing.T) {
+	controller, _, _ := newTestController(t)
+	manager, managerServer := newPreheatManager(t, "fresh-pat")
+	controller.opts.ManagerAPIURL = managerServer.URL
+	controller.managerHTTPClient = managerServer.Client()
+	controller.opts.ManagerAPICredentialsSecret = "manager-api-credentials"
+	base := controller.secrets.(*fakeSecretStore)
+	delete(base.secrets, "dragonfly-system/"+harborPreheatPATSecretName)
+	base.put(&corev1.Secret{
+		ObjectMeta: metav1.ObjectMeta{Name: "manager-api-credentials", Namespace: "dragonfly-system"},
+		Data:       map[string][]byte{"username": []byte("root"), "password": []byte("password")},
+	})
+	controller.secrets = &zeroOnNotFoundSecretStore{fakeSecretStore: base, name: harborPreheatPATSecretName}
+
+	token, err := controller.ensureHarborPreheatPAT()
+	if err != nil {
+		t.Fatalf("ensureHarborPreheatPAT() error = %v", err)
+	}
+	if token != "fresh-pat" {
+		t.Errorf("token = %q, want fresh-pat", token)
+	}
+	secret, err := base.Get("dragonfly-system", harborPreheatPATSecretName, metav1.GetOptions{})
+	if err != nil {
+		t.Fatalf("PAT Secret was not created: %v", err)
+	}
+	if got := string(secret.Data[harborPreheatPATSecretKey]); got != "fresh-pat" {
+		t.Errorf("PAT Secret token = %q, want fresh-pat", got)
+	}
+	if manager.pats != 1 || manager.signins != 1 {
+		t.Errorf("manager signin/PAT = %d/%d, want 1/1", manager.signins, manager.pats)
+	}
 }
 
 type preheatHarborState struct {
