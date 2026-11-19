@@ -44,6 +44,17 @@ func SharedHarbor(c Cluster) *fleetv1alpha1.HelmOp {
 	// immutable fields during the one-time adoption; PVCs use resourcePolicy
 	// keep and are preserved.
 	op.Spec.Helm.Force = true
+	// A replace sends the whole object, so the server-assigned volumeName of a
+	// bound PVC would be cleared and the API server rejects it:
+	//   spec: Forbidden: spec is immutable after creation except
+	//   resources.requests and volumeAttributesClassName for bound claims
+	// Keep the live volumeName from the adopted claim; Fleet's documented
+	// preserveOnReplace rule covers exactly this case.
+	op.Spec.Helm.PreserveOnReplace = []fleetv1alpha1.PreserveOnReplaceRule{{
+		APIVersion: "v1",
+		Kind:       "PersistentVolumeClaim",
+		Paths:      []fleetv1alpha1.PreservedPath{{Path: "/spec/volumeName"}},
+	}}
 	op.Spec.DownstreamResources = harborDownstreamResources(
 		SharedHarborAdminSecretName(), SharedHarborSecretKeyName())
 	return op
