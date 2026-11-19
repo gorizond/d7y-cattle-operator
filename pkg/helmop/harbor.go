@@ -25,7 +25,10 @@ func Harbor(c Cluster) *fleetv1alpha1.HelmOp {
 // SharedHarbor returns the shared Harbor HelmOp. The chart fullname is the
 // Fleet template ${ .ClusterName }-harbor, so the per-target workloads and the
 // existing PVCs (registry, jobservice, database) keep their names. The admin,
-// database-password and secret-key Secrets are fleet-wide fixed names.
+// database-password and secret-key Secrets are fleet-wide fixed names. The
+// ingress TLS Secret defaults to <cluster>-harbor-tls (cert-manager's naming
+// convention) and can be pinned per Cluster with the
+// p2p.dragonfly.io/harbor-tls-secret annotation.
 func SharedHarbor(c Cluster) *fleetv1alpha1.HelmOp {
 	c = sharedCluster(c)
 	values := harborValues(c, harborOptions{

@@ -467,26 +467,13 @@ func TestSharedRegistryProxyHostAliasesTemplate(t *testing.T) {
 // with ${ } delimiters and the result is parsed as YAML.
 func renderFleetValue(t *testing.T, text string, annotations map[string]string) []map[string]any {
 	t.Helper()
-	funcs := template.FuncMap{
-		"splitList": func(sep, s string) []string { return strings.Split(s, sep) },
-		"splitn": func(sep string, n int, s string) map[string]string {
-			parts := strings.SplitN(s, sep, n)
-			result := make(map[string]string, len(parts))
-			for i, part := range parts {
-				result[fmt.Sprintf("_%d", i)] = part
-			}
-			return result
-		},
-		"trim":  strings.TrimSpace,
-		"quote": func(s string) string { return strconv.Quote(s) },
-	}
 	// Mirror Fleet: marshal the values map to YAML, render the whole document,
 	// then parse it back.
 	raw, err := kyaml.Marshal(map[string]any{"proxy": map[string]any{"hostAliases": text}})
 	if err != nil {
 		t.Fatalf("marshal values: %v", err)
 	}
-	tmpl, err := template.New("values").Funcs(funcs).Option("missingkey=error").Delims("${", "}").Parse(string(raw))
+	tmpl, err := template.New("values").Funcs(fleetTemplateFuncs()).Option("missingkey=error").Delims("${", "}").Parse(string(raw))
 	if err != nil {
 		t.Fatalf("parse template: %v", err)
 	}
@@ -510,4 +497,58 @@ func renderFleetValue(t *testing.T, text string, annotations map[string]string) 
 		}
 	}
 	return value
+}
+
+func TestSharedHarborTLSSecretTemplate(t *testing.T) {
+	base := map[string]any{
+		"ClusterName":        "poligon",
+		"ClusterAnnotations": map[string]string{},
+		"ClusterLabels":      map[string]string{},
+	}
+	if got := renderFleetString(t, SharedHarborTLSSecretTemplate, base); got != "poligon-harbor-tls" {
+		t.Errorf("default Harbor TLS Secret = %q, want poligon-harbor-tls", got)
+	}
+	base["ClusterAnnotations"] = map[string]string{
+		"p2p.dragonfly.io/harbor-tls-secret": "custom-harbor-tls",
+	}
+	if got := renderFleetString(t, SharedHarborTLSSecretTemplate, base); got != "custom-harbor-tls" {
+		t.Errorf("annotated Harbor TLS Secret = %q, want custom-harbor-tls", got)
+	}
+}
+
+func renderFleetString(t *testing.T, text string, data map[string]any) string {
+	t.Helper()
+	tmpl, err := template.New("values").Funcs(fleetTemplateFuncs()).Option("missingkey=error").Delims("${", "}").Parse(text)
+	if err != nil {
+		t.Fatalf("parse template: %v", err)
+	}
+	var b bytes.Buffer
+	if err := tmpl.Execute(&b, data); err != nil {
+		t.Fatalf("render template: %v", err)
+	}
+	return b.String()
+}
+
+// fleetTemplateFuncs covers the sprig functions used by the operator's values
+// templates.
+func fleetTemplateFuncs() template.FuncMap {
+	return template.FuncMap{
+		"default": func(def string, given ...string) string {
+			if len(given) > 0 && given[0] != "" {
+				return given[0]
+			}
+			return def
+		},
+		"splitList": func(sep, s string) []string { return strings.Split(s, sep) },
+		"splitn": func(sep string, n int, s string) map[string]string {
+			parts := strings.SplitN(s, sep, n)
+			result := make(map[string]string, len(parts))
+			for i, part := range parts {
+				result[fmt.Sprintf("_%d", i)] = part
+			}
+			return result
+		},
+		"trim":  strings.TrimSpace,
+		"quote": func(s string) string { return strconv.Quote(s) },
+	}
 }
