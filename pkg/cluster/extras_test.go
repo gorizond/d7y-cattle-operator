@@ -7,7 +7,7 @@ import (
 	"github.com/gorizond/d7y-cattle-operator/pkg/helmop"
 )
 
-func TestReconcileManagerExtrasIngress(t *testing.T) {
+func TestSharedExtrasTemplatedManagerBackends(t *testing.T) {
 	controller, store, _ := newTestController(t)
 	cluster := testSeedCluster("")
 	delete(cluster.Annotations, AnnotationSeed)
@@ -17,35 +17,37 @@ func TestReconcileManagerExtrasIngress(t *testing.T) {
 		t.Fatalf("reconcile() error = %v", err)
 	}
 
-	extras := store.object("fleet-default/c1-extras")
+	extras := store.object("fleet-default/" + helmop.SharedExtrasName())
 	if extras == nil {
-		t.Fatal("extras HelmOp was not created")
+		t.Fatal("shared extras HelmOp was not created")
 	}
-	if got := dependsOn(extras); len(got) != 1 || got[0] != "c1-manager" {
-		t.Errorf("extras dependsOn = %v, want [c1-manager]", got)
+	if got := dependsOn(extras); len(got) != 0 {
+		t.Errorf("shared extras dependsOn = %v, want none", got)
+	}
+	if got := selectorLabels(extras); got[helmop.LabelGate] != "true" || got[helmop.LabelRoleSeed] != "true" {
+		t.Errorf("extras selector = %v, want gate+seed", got)
 	}
 
 	values := helmValues(t, extras)
 	if got := valueAtPath(t, values, "ingress", "enabled"); got != true {
 		t.Errorf("ingress.enabled = %v", got)
 	}
-	if got := valueAtPath(t, values, "scheduler", "enabled"); got != false {
-		t.Errorf("manager-only scheduler front enabled = %v, want false", got)
-	}
 	if got := valueAtPath(t, values, "ingress", "grpc", "host"); got != "grpc.example.com" {
 		t.Errorf("ingress.grpc.host = %v", got)
 	}
-	if got := valueAtPath(t, values, "ingress", "grpc", "service"); got != "c1-manager" {
-		t.Errorf("ingress.grpc.service = %v", got)
+	for _, path := range [][]string{
+		{"ingress", "grpc", "service"},
+		{"ingress", "rest", "service"},
+	} {
+		if got := valueAtPath(t, values, path...); got != helmop.SharedClusterNameTemplate+"-manager" {
+			t.Errorf("%v = %v, want templated manager name", path, got)
+		}
 	}
 	if got := valueAtPath(t, values, "ingress", "grpc", "port"); got != int64(65003) {
 		t.Errorf("ingress.grpc.port = %v", got)
 	}
 	if got := valueAtPath(t, values, "ingress", "rest", "host"); got != "api.example.com" {
 		t.Errorf("ingress.rest.host = %v", got)
-	}
-	if got := valueAtPath(t, values, "ingress", "rest", "service"); got != "c1-manager" {
-		t.Errorf("ingress.rest.service = %v", got)
 	}
 	if got := valueAtPath(t, values, "ingress", "rest", "port"); got != int64(8080) {
 		t.Errorf("ingress.rest.port = %v", got)
@@ -56,18 +58,9 @@ func TestReconcileManagerExtrasIngress(t *testing.T) {
 	if got := valueAtPath(t, values, "ingress", "controller"); got != "nginx" {
 		t.Errorf("ingress.controller = %v", got)
 	}
-	if got := valueAtPath(t, values, "ingress", "grpc", "enabled"); got != true {
-		t.Errorf("ingress.grpc.enabled = %v", got)
-	}
-	if got := valueAtPath(t, values, "ingress", "rest", "enabled"); got != true {
-		t.Errorf("ingress.rest.enabled = %v", got)
-	}
-	if got := valueAtPath(t, values, "vpa", "enabled"); got != true {
-		t.Errorf("vpa.enabled = %v", got)
-	}
 }
 
-func TestReconcileSeedOnlyExtrasVPA(t *testing.T) {
+func TestSharedExtrasSchedulerFront(t *testing.T) {
 	controller, store, _ := newTestController(t)
 	cluster := testSeedCluster("42")
 
@@ -75,73 +68,35 @@ func TestReconcileSeedOnlyExtrasVPA(t *testing.T) {
 		t.Fatalf("reconcile() error = %v", err)
 	}
 
-	extras := store.object("fleet-default/c1-extras")
-	if extras == nil {
-		t.Fatal("extras HelmOp was not created")
-	}
-	if got := dependsOn(extras); len(got) != 0 {
-		t.Errorf("seed-only extras dependsOn = %v, want none", got)
-	}
-
-	values := helmValues(t, extras)
-	if got := valueAtPath(t, values, "ingress", "enabled"); got != false {
-		t.Errorf("seed-only ingress.enabled = %v", got)
-	}
-	if got := valueAtPath(t, values, "scheduler", "enabled"); got != true {
-		t.Errorf("seed-only scheduler front enabled = %v", got)
-	}
-	if got := valueAtPath(t, values, "scheduler", "publicIP"); got != "203.0.113.10" {
-		t.Errorf("seed-only scheduler publicIP = %v", got)
-	}
-	if got := valueAtPath(t, values, "scheduler", "domain"); got != "example.com" {
-		t.Errorf("seed-only scheduler domain = %v", got)
-	}
-	if got := valueAtPath(t, values, "scheduler", "clusterID"); got != "c-m-test" {
-		t.Errorf("seed-only scheduler clusterID = %v", got)
-	}
-	if got := valueAtPath(t, values, "scheduler", "service"); got != "c1-control-scheduler" {
-		t.Errorf("seed-only scheduler service = %v", got)
-	}
-	if got := valueAtPath(t, values, "scheduler", "port"); got != int64(helmop.SchedulerPort) {
-		t.Errorf("seed-only scheduler port = %v", got)
-	}
-	for component, want := range map[string]bool{
-		"keydb": true, "manager": false, "control": true, "data": true,
+	values := helmValues(t, store.object("fleet-default/"+helmop.SharedExtrasName()))
+	for path, want := range map[string]any{
+		"scheduler.enabled":   true,
+		"scheduler.publicIP":  helmop.SharedSchedulerPublicIPTemplate,
+		"scheduler.domain":    "example.com",
+		"scheduler.clusterID": helmop.SharedSchedulerClusterIDTemplate,
+		"scheduler.service":   helmop.SharedClusterNameTemplate + "-control-scheduler",
+		"scheduler.port":      int64(helmop.SchedulerPort),
+		"vpa.enabled":         true,
 	} {
-		if got := valueAtPath(t, values, "vpa", "targets", component, "enabled"); got != want {
-			t.Errorf("%s VPA enabled = %v, want %v", component, got, want)
+		keys := strings.Split(path, ".")
+		if got := valueAtPath(t, values, keys...); got != want {
+			t.Errorf("%s = %v, want %v", path, got, want)
 		}
+	}
+	for _, component := range []string{"keydb", "manager", "control", "data"} {
+		if got := valueAtPath(t, values, "vpa", "targets", component, "enabled"); got != true {
+			t.Errorf("%s VPA enabled = %v, want true", component, got)
+		}
+	}
+	if got := valueAtPath(t, values, "vpa", "targets", "control", "name"); got != helmop.SharedClusterNameTemplate+"-control-scheduler" {
+		t.Errorf("control VPA target = %v", got)
+	}
+	if got := valueAtPath(t, values, "vpa", "targets", "data", "name"); got != helmop.SharedClusterNameTemplate+"-data-seed-client" {
+		t.Errorf("data VPA target = %v", got)
 	}
 }
 
-func TestReconcileLabelOnlyExtrasVPA(t *testing.T) {
-	controller, store, _ := newTestController(t)
-	cluster := testSeedCluster("")
-	cluster.Annotations = nil
-
-	if _, err := controller.reconcile("", cluster); err != nil {
-		t.Fatalf("reconcile() error = %v", err)
-	}
-
-	extras := store.object("fleet-default/c1-extras")
-	if extras == nil {
-		t.Fatal("extras HelmOp was not created")
-	}
-	values := helmValues(t, extras)
-	if got := valueAtPath(t, values, "ingress", "enabled"); got != false {
-		t.Errorf("label-only ingress.enabled = %v", got)
-	}
-	if got := valueAtPath(t, values, "vpa", "targets", "keydb", "enabled"); got != true {
-		t.Errorf("keydb VPA enabled = %v", got)
-	}
-	for _, component := range []string{"manager", "control", "data"} {
-		if got := valueAtPath(t, values, "vpa", "targets", component, "enabled"); got != false {
-			t.Errorf("%s VPA enabled = %v, want false", component, got)
-		}
-	}
-}
-
-func TestReconcileExtrasVPADisabled(t *testing.T) {
+func TestSharedExtrasVPADisabled(t *testing.T) {
 	controller, store, _ := newTestController(t)
 	controller.opts.VPAEnabled = false
 	cluster := testSeedCluster("42")
@@ -150,16 +105,16 @@ func TestReconcileExtrasVPADisabled(t *testing.T) {
 		t.Fatalf("reconcile() error = %v", err)
 	}
 
-	extras := store.object("fleet-default/c1-extras")
+	extras := store.object("fleet-default/" + helmop.SharedExtrasName())
 	if extras == nil {
-		t.Fatal("extras HelmOp was not created")
+		t.Fatal("shared extras HelmOp was not created")
 	}
 	if got := valueAtPath(t, helmValues(t, extras), "vpa", "enabled"); got != false {
 		t.Errorf("vpa.enabled = %v, want false", got)
 	}
 }
 
-func TestReconcileManagerOnlyTraefikExtras(t *testing.T) {
+func TestSharedExtrasTraefikOptions(t *testing.T) {
 	controller, store, _ := newTestController(t)
 	controller.opts.ExtrasIngressController = "traefik"
 	controller.opts.ExtrasIngressClassName = "traefik"
@@ -167,15 +122,13 @@ func TestReconcileManagerOnlyTraefikExtras(t *testing.T) {
 	controller.opts.ExtrasIngressRESTEnabled = true
 	controller.opts.ExtrasIngressTLSSecret = "dragonfly-p2p-mtls"
 	controller.opts.ExtrasTraefikTransport = true
-	cluster := testSeedCluster("")
-	delete(cluster.Annotations, AnnotationSeed)
-	cluster.Annotations[AnnotationManager] = "true"
+	cluster := testSeedCluster("42")
 
 	if _, err := controller.reconcile("", cluster); err != nil {
 		t.Fatalf("reconcile() error = %v", err)
 	}
 
-	values := helmValues(t, store.object("fleet-default/c1-extras"))
+	values := helmValues(t, store.object("fleet-default/"+helmop.SharedExtrasName()))
 	for path, want := range map[string]any{
 		"controller":                       "traefik",
 		"className":                        "traefik",

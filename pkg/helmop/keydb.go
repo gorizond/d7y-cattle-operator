@@ -12,8 +12,25 @@ import fleetv1alpha1 "github.com/rancher/fleet/pkg/apis/fleet.cattle.io/v1alpha1
 // Raise this only when the chart supports Parallel pod management or an
 // explicit peer list.
 func KeyDB(c Cluster) *fleetv1alpha1.HelmOp {
-	values := map[string]any{
-		"fullnameOverride": KeyDBName(c.Name),
+	names := ClusterNames(c.Name)
+	return newHelmOp(KeyDBName(c.Name), c, keyDBChart(), "keydb", keyDBValues(names), nil)
+}
+
+// SharedKeyDB returns the shared KeyDB HelmOp. The chart fullname is a Fleet
+// template so each target cluster keeps its <cluster>-keydb Service.
+func SharedKeyDB(c Cluster) *fleetv1alpha1.HelmOp {
+	c = sharedCluster(c)
+	return newSharedHelmOp(SharedKeyDBName(), TargetNamespace, c, keyDBChart(), "keydb",
+		keyDBValues(SharedNames()), nil, GateSelector())
+}
+
+func keyDBChart() Chart {
+	return Chart{Repo: KeyDBChartRepo, Name: KeyDBChartName, Version: KeyDBChartVersion}
+}
+
+func keyDBValues(names Names) map[string]any {
+	return map[string]any{
+		"fullnameOverride": names.KeyDB,
 		"nodes":            2,
 		"multiMaster":      "yes",
 		"activeReplicas":   "yes",
@@ -24,6 +41,4 @@ func KeyDB(c Cluster) *fleetv1alpha1.HelmOp {
 		"imageRepository":  "eqalpha/keydb",
 		"imageTag":         "x86_64_v6.3.2",
 	}
-	chart := Chart{Repo: KeyDBChartRepo, Name: KeyDBChartName, Version: KeyDBChartVersion}
-	return newHelmOp(KeyDBName(c.Name), c, chart, "keydb", values, nil)
 }

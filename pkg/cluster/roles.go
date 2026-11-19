@@ -9,18 +9,21 @@ import (
 	provv1 "github.com/rancher/rancher/pkg/apis/provisioning.cattle.io/v1"
 	"k8s.io/apimachinery/pkg/labels"
 	"k8s.io/apimachinery/pkg/util/validation"
+
+	"github.com/gorizond/d7y-cattle-operator/pkg/helmop"
 )
 
 const (
-	// LabelEnabled is the single gate for deploying the Dragonfly stack.
-	LabelEnabled = "p2p-dragonfly-io"
+	// LabelEnabled is the single gate for deploying the Dragonfly stack. It is
+	// also the Fleet clusterSelector gate on every shared HelmOp.
+	LabelEnabled = helmop.LabelGate
 
 	AnnotationManager                = "p2p.dragonfly.io/manager"
 	AnnotationSeed                   = "p2p.dragonfly.io/seed"
-	AnnotationSchedulerClusterID     = "p2p.dragonfly.io/scheduler-cluster-id"
+	AnnotationSchedulerClusterID     = helmop.AnnotationSchedulerClusterID
 	AnnotationSchedulerClusterIDAuto = "p2p.dragonfly.io/scheduler-cluster-id-auto"
-	AnnotationSchedulerReplicas      = "p2p.dragonfly.io/scheduler-replicas"
-	AnnotationSeedClientReplicas     = "p2p.dragonfly.io/seedclient-replicas"
+	AnnotationSchedulerReplicas      = helmop.AnnotationSchedulerReplicas
+	AnnotationSeedClientReplicas     = helmop.AnnotationSeedClientReplicas
 	AnnotationMonitoring             = "p2p.dragonfly.io/monitoring"
 	// AnnotationP2PDataTLS keeps TLS on the P2P data path (dfdaemon upload
 	// server/client and scheduler seedPeer). It is disabled by default; only

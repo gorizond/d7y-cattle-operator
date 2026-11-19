@@ -16,7 +16,7 @@ import (
 	"github.com/gorizond/d7y-cattle-operator/pkg/registryproxy"
 )
 
-func TestReconcileSeedCreatesHelmOps(t *testing.T) {
+func TestReconcileSeedCreatesSharedHelmOps(t *testing.T) {
 	controller, store, events := newTestController(t)
 	cluster := testSeedCluster("42")
 
@@ -27,33 +27,85 @@ func TestReconcileSeedCreatesHelmOps(t *testing.T) {
 		t.Errorf("events = %+v, want none", events.events)
 	}
 
-	for _, name := range []string{"c1-keydb", "c1-control", "c1-data", "c1-containerd-mirror"} {
+	for _, name := range []string{
+		helmop.SharedKeyDBName(),
+		helmop.SharedControlName(),
+		helmop.SharedDataName(),
+		helmop.SharedExtrasName(),
+		helmop.SharedMirrorName(),
+		helmop.SharedAdmissionName(),
+	} {
 		if !store.has("fleet-default/" + name) {
-			t.Errorf("%s HelmOp was not created", name)
+			t.Errorf("%s shared HelmOp was not created", name)
+		}
+	}
+	for _, legacy := range []string{
+		"c1-keydb", "c1-control", "c1-data", "c1-extras",
+		"c1-containerd-mirror", "c1-admission-webhook",
+	} {
+		if store.has("fleet-default/" + legacy) {
+			t.Errorf("legacy per-cluster HelmOp %s still exists", legacy)
 		}
 	}
 
-	control := store.object("fleet-default/c1-control")
-	if got := dependsOn(control); len(got) != 1 || got[0] != "c1-keydb" {
-		t.Errorf("control dependsOn = %v", got)
+	control := store.object("fleet-default/" + helmop.SharedControlName())
+	if got := selectorLabels(control); got[helmop.LabelGate] != "true" || got[helmop.LabelRoleSeed] != "true" {
+		t.Errorf("control selector = %v, want gate+seed", got)
 	}
-	data := store.object("fleet-default/c1-data")
-	if got := dependsOn(data); len(got) != 3 || got[0] != "c1-control" || got[1] != "c1-keydb" || got[2] != "c1-extras" {
+	if got := dependsOn(control); len(got) != 1 || got[0] != helmop.SharedKeyDBName() {
+		t.Errorf("control dependsOn = %v, want shared keydb", got)
+	}
+	data := store.object("fleet-default/" + helmop.SharedDataName())
+	if got := dependsOn(data); len(got) != 3 ||
+		got[0] != helmop.SharedControlName() ||
+		got[1] != helmop.SharedKeyDBName() ||
+		got[2] != helmop.SharedExtrasName() {
 		t.Errorf("data dependsOn = %v", got)
 	}
-	mirror := store.object("fleet-default/c1-containerd-mirror")
-	if got := dependsOn(mirror); len(got) != 1 || got[0] != "c1-data" {
+	mirror := store.object("fleet-default/" + helmop.SharedMirrorName())
+	if got := dependsOn(mirror); len(got) != 1 || got[0] != helmop.SharedDataName() {
 		t.Errorf("mirror dependsOn = %v", got)
 	}
 
+	keydb := helmValues(t, store.object("fleet-default/"+helmop.SharedKeyDBName()))
+	if got := valueAtPath(t, keydb, "fullnameOverride"); got != helmop.SharedClusterNameTemplate+"-keydb" {
+		t.Errorf("keydb fullnameOverride = %v", got)
+	}
 	values := helmValues(t, data)
+	if got := valueAtPath(t, values, "fullnameOverride"); got != helmop.SharedClusterNameTemplate+"-data" {
+		t.Errorf("data fullnameOverride = %v", got)
+	}
 	if got := valueAtPath(t, values, "externalManager", "host"); got != "" {
 		t.Errorf("data externalManager.host = %v, want empty", got)
 	}
 	for _, component := range []string{"seedClient", "client"} {
-		if got := valueAtPath(t, values, component, "config", "host", "schedulerClusterID"); got != int64(42) {
-			t.Errorf("%s config.host.schedulerClusterID = %v", component, got)
+		if got := valueAtPath(t, values, component, "config", "host", "schedulerClusterID"); got != helmop.SharedSchedulerClusterIDTemplate {
+			t.Errorf("%s schedulerClusterID = %v, want Fleet template", component, got)
 		}
+	}
+	wantAddr := helmop.SchedulerHostTemplate("example.com") + ":443"
+	if got := valueAtPath(t, values, "seedClient", "dynconfig", "scheduler", "addr"); got != wantAddr {
+		t.Errorf("seedClient dynconfig addr = %v, want %v", got, wantAddr)
+	}
+}
+
+func TestReconcileStampsClusterIDAndPublicIP(t *testing.T) {
+	controller, _, _ := newTestController(t)
+	cluster := testSeedCluster("42")
+	clusterStore := controller.clusters.(*fakeClusterStore)
+	clusterStore.set(cluster)
+
+	if _, err := controller.reconcile("", cluster); err != nil {
+		t.Fatalf("reconcile() error = %v", err)
+	}
+	if got := clusterStore.label(helmop.LabelClusterID); got != "c-m-test" {
+		t.Errorf("cluster-id label = %q, want c-m-test", got)
+	}
+	if got := clusterStore.annotation(helmop.AnnotationSchedulerPublicIP); got != "203.0.113.10" {
+		t.Errorf("scheduler public IP annotation = %q, want the resolved IP", got)
+	}
+	if got := clusterStore.label(helmop.LabelRoleSeed); got != "" {
+		t.Errorf("role label %s = %q, want untouched", helmop.LabelRoleSeed, got)
 	}
 }
 
@@ -66,12 +118,12 @@ func TestReconcileSeedMirrorIsDefaultOnly(t *testing.T) {
 	if _, err := controller.reconcile("", cluster); err != nil {
 		t.Fatalf("reconcile() error = %v", err)
 	}
-	mirror := store.object("fleet-default/c1-containerd-mirror")
+	mirror := store.object("fleet-default/" + helmop.SharedMirrorName())
 	if mirror == nil {
-		t.Fatal("mirror HelmOp was not created")
+		t.Fatal("shared mirror HelmOp was not created")
 	}
-	if got := dependsOn(mirror); len(got) != 1 || got[0] != "c1-data" {
-		t.Errorf("mirror dependsOn = %v, want data only", got)
+	if got := dependsOn(mirror); len(got) != 1 || got[0] != helmop.SharedDataName() {
+		t.Errorf("mirror dependsOn = %v, want shared data only", got)
 	}
 	values := helmValues(t, mirror)
 	if _, ok := values["proxy"]; ok {
@@ -81,7 +133,7 @@ func TestReconcileSeedMirrorIsDefaultOnly(t *testing.T) {
 		t.Errorf("mirror port = %v, want 4001", got)
 	}
 	if !store.has("fleet-default/c1-registry-proxy") {
-		t.Error("proxy HelmOp was not created independently of the mirror")
+		t.Error("per-cluster proxy HelmOp was not created independently of the mirror")
 	}
 }
 
@@ -104,9 +156,9 @@ func TestReconcileSeedDeletesLegacyNydusHelmOp(t *testing.T) {
 	if store.has("fleet-default/" + legacy) {
 		t.Error("legacy in-cluster nydus HelmOp was not deleted")
 	}
-	for _, name := range []string{"c1-control", "c1-data", "c1-containerd-mirror"} {
+	for _, name := range []string{helmop.SharedControlName(), helmop.SharedDataName(), helmop.SharedMirrorName()} {
 		if !store.has("fleet-default/" + name) {
-			t.Errorf("%s HelmOp was not created", name)
+			t.Errorf("%s shared HelmOp was not created", name)
 		}
 	}
 }
@@ -125,21 +177,37 @@ func TestReconcileSeedRemovalAndLabelRemoval(t *testing.T) {
 	if got := cluster.Annotations[AnnotationSchedulerClusterID]; got != "42" {
 		t.Errorf("scheduler cluster ID annotation = %q after seed removal, want 42", got)
 	}
-	for _, name := range []string{"c1-control", "c1-data", "c1-containerd-mirror"} {
-		if store.has("fleet-default/" + name) {
-			t.Errorf("%s was not deleted when the seed role was removed", name)
+	// The shared objects are global: removing the seed role must not delete
+	// them for every other cluster. Only legacy per-cluster names are removed.
+	for _, name := range []string{helmop.SharedControlName(), helmop.SharedDataName(), helmop.SharedMirrorName()} {
+		if !store.has("fleet-default/" + name) {
+			t.Errorf("%s shared HelmOp was deleted with the seed role", name)
 		}
 	}
-	if !store.has("fleet-default/c1-keydb") {
-		t.Error("KeyDB was deleted with the seed role")
+	for _, name := range []string{"c1-control", "c1-data", "c1-containerd-mirror"} {
+		if store.has("fleet-default/" + name) {
+			t.Errorf("legacy %s was not deleted", name)
+		}
+	}
+	if !store.has("fleet-default/" + helmop.SharedKeyDBName()) {
+		t.Error("shared KeyDB was deleted with the seed role")
 	}
 
 	cluster.Labels = nil
 	if _, err := controller.reconcile("", cluster); err != nil {
 		t.Fatalf("reconcile(label removed) error = %v", err)
 	}
-	if len(store.objects) != 0 {
-		t.Errorf("objects left after label removal: %v", store.names())
+	// cleanupAll removes the per-cluster objects; shared objects stay because
+	// Fleet stops targeting the unlabeled cluster.
+	for _, name := range []string{"c1-manager", "c1-harbor", "c1-registry-proxy", "c1-keydb", "c1-control", "c1-data", "c1-extras", "c1-containerd-mirror", "c1-admission-webhook"} {
+		if store.has("fleet-default/" + name) {
+			t.Errorf("per-cluster HelmOp %s left after label removal", name)
+		}
+	}
+	for _, name := range []string{helmop.SharedKeyDBName(), helmop.SharedControlName(), helmop.SharedDataName(), helmop.SharedExtrasName(), helmop.SharedMirrorName()} {
+		if !store.has("fleet-default/" + name) {
+			t.Errorf("%s shared HelmOp was deleted with the gate label", name)
+		}
 	}
 }
 
@@ -220,6 +288,21 @@ func testSeedCluster(schedulerID string) *provv1.Cluster {
 	}
 }
 
+func selectorLabels(op *unstructured.Unstructured) map[string]string {
+	spec := op.Object["spec"].(map[string]any)
+	targets, _ := spec["targets"].([]any)
+	if len(targets) == 0 {
+		return nil
+	}
+	selector, _ := targets[0].(map[string]any)["clusterSelector"].(map[string]any)
+	matchLabels, _ := selector["matchLabels"].(map[string]any)
+	labels := make(map[string]string, len(matchLabels))
+	for key, value := range matchLabels {
+		labels[key], _ = value.(string)
+	}
+	return labels
+}
+
 func dependsOn(op *unstructured.Unstructured) []string {
 	spec := op.Object["spec"].(map[string]any)
 	raw, _ := spec["dependsOn"].([]any)
@@ -277,6 +360,15 @@ func (f *fakeHelmOpStore) has(key string) bool {
 
 func (f *fakeHelmOpStore) object(key string) *unstructured.Unstructured {
 	return f.objects[key]
+}
+
+func (f *fakeClusterStore) label(key string) string {
+	f.mu.Lock()
+	defer f.mu.Unlock()
+	if f.cluster == nil {
+		return ""
+	}
+	return f.cluster.Labels[key]
 }
 
 func (f *fakeHelmOpStore) names() []string {

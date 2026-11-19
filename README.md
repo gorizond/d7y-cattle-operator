@@ -23,7 +23,7 @@ pilot verification; remaining items are listed under Follow-ups.
   and delivered downstream through Fleet `downstreamResources`; Traefik
   forwards manager gRPC TLS without terminating it.
 - Reconciles `provisioning.cattle.io/v1` Clusters selected by the
-  `p2p-dragonfly-io: "true"` label.
+  `d7y-operator-cattle: "true"` label.
 - Deploys KeyDB and the Dragonfly manager through Fleet HelmOps, without
   PersistentVolumeClaims. Dragonfly releases use the gorizond fork chart
   `dragonfly 1.10.1-patch.2`, which renders `server.grpc.tls` under `grpc`,
@@ -35,14 +35,15 @@ pilot verification; remaining items are listed under Follow-ups.
   operator creates no nydus DaemonSet or HelmOp.
 - Deploys Harbor on `p2p.dragonfly.io/harbor: "true"` and the external
   stateless registry proxy on `p2p.dragonfly.io/proxy: "true"`. Harbor uses the
-  existing `<cluster>-keydb`; the proxy has no PVC.
+  `<cluster>-keydb` Service rendered by the shared `d7y-keydb` release; the
+  proxy has no PVC.
 - Runs the stateless registry proxy with source-OCI first-pull passthrough: a
   tag manifest is served from the source immediately while nydusify conversion
   is queued in the background; digest refs stay source OCI. The operator passes
   its own image repository/tag to the proxy HelmOp, so the proxy image follows
   the operator release.
 - Deploys the opt-in Pod image-rewriting webhook on
-  `p2p.dragonfly.io/admission: "true"` (`<cluster>-admission-webhook`). It
+  `p2p.dragonfly.io/admission: "true"` (shared `d7y-admission`). It
   rewrites any explicit registry (and Docker Hub shorthand) to
   `<proxy.domain>/<registry>/<repo>:<tag>`,
   preserves `@sha256`, and is independent of Harbor/proxy/seed. The
@@ -53,8 +54,8 @@ pilot verification; remaining items are listed under Follow-ups.
   admission HelmOp; the chart `appVersion` is only a fallback when the operator
   image is unknown.
 - Manages the manager Ingresses, the public scheduler TCP front, and optional
-  VPAs through the separate `<cluster>-extras` HelmOp and the
-  `dragonfly-extras` chart. The operator has no Ingress, IngressRouteTCP, or
+  VPAs through the shared `d7y-extras` HelmOp and the `dragonfly-extras`
+  chart. The operator has no Ingress, IngressRouteTCP, or
   VPA RBAC and creates neither kind directly.
 - Uses a JWT-authenticated manager REST client (`pkg/managerapi`) and a
   thread-safe scheduler ID allocator (`pkg/registry`) for seed registration:
@@ -155,24 +156,106 @@ reconcile time; there is no scheduler IP value. `scheduler.domain` has no
 default and is required. `scheduler.clusterID` is only a fallback for an
 unpopulated `status.clusterName`.
 
-## Roles and HelmOps
+## Roles and Fleet targeting
 
-A Cluster labeled `p2p-dragonfly-io: "true"` gets one KeyDB release. The role
-annotations add the Dragonfly releases:
+Fleet matches `spec.targets[].clusterSelector` against provisioning Cluster
+**labels**, so the gate and role labels are the only targeting contract. The
+operator still resolves roles from annotations for its own decisions; the
+matching role label must also be present for Fleet to render the shared release.
+
+| Label | Value | Meaning |
+|---|---|---|
+| `d7y-operator-cattle` | `"true"` | Gate: opts the Cluster into the Dragonfly stack |
+| `d7y-operator-manager` | `"true"` | Manager role (per-cluster `<cluster>-manager`) |
+| `d7y-operator-seed` | `"true"` | Seed role (shared control/data/extras/mirror) |
+| `d7y-operator-proxy` | `"true"` | Registry proxy role (per-cluster) |
+| `d7y-operator-harbor` | `"true"` | Harbor role (per-cluster) |
+| `d7y-operator-admission` | `"true"` | Admission webhook role (shared) |
+
+Role labels are user-managed: the operator only stamps
+`p2p.dragonfly.io/cluster-id` (from `status.clusterName`, read by the scheduler
+host template) and `p2p.dragonfly.io/scheduler-public-ip` (the resolved public
+advertiseIP). Removing a role annotation is not enough to uninstall a shared
+release; remove the role label too.
+
+A Cluster labeled `d7y-operator-cattle: "true"` gets the shared KeyDB release.
+The role annotations and matching labels add:
 
 | Roles | HelmOps |
 |---|---|
-| label only | `<cluster>-keydb`, `<cluster>-extras` (KeyDB VPA only) |
-| `manager: "true"` | KeyDB, `<cluster>-manager`, `<cluster>-extras` (Ingress + VPAs) |
-| `seed: "true"` + scheduler ID | KeyDB, `<cluster>-control`, `<cluster>-data`, `<cluster>-extras` (VPAs) |
-| manager + seed | manager, control, data, extras |
-| `seed: "true"` without scheduler ID | KeyDB + extras (KeyDB VPA); `SchedulerClusterIDMissing` event, no seed releases |
+| gate only | `d7y-keydb` |
+| `manager: "true"` | `d7y-keydb`, `<cluster>-manager` |
+| `seed: "true"` + scheduler ID | `d7y-keydb`, `d7y-control`, `d7y-data`, `d7y-extras`, `d7y-containerd-mirror` |
+| manager + seed | shared seed set + `<cluster>-manager` |
 | `proxy: "true"` | `<cluster>-registry-proxy` only (external `harbor-url` allowed) |
-| `admission: "true"` | `<cluster>-admission-webhook` only (uses operator `proxy.domain`) |
+| `harbor: "true"` | `<cluster>-harbor` |
+| `admission: "true"` | `d7y-admission` |
 
 The `harbor`, `proxy`, `admission`, and `seed` annotations are independent:
-any combination is valid, nothing is auto-installed, and removing one toggle
-deletes only its own HelmOp.
+any combination is valid and nothing is auto-installed. Removing a per-cluster
+toggle deletes its HelmOp; the shared releases stop targeting the Cluster only
+when the matching role label is removed.
+
+### Shared HelmOps
+
+A small fixed set of HelmOps fans out to Clusters by label selector. The HelmOp
+name and Helm release name are fixed (`spec.helm.releaseName` is not
+templatable); per-cluster resource names are rendered from Fleet values
+templates.
+
+| HelmOp / release | Component | Selector |
+|---|---|---|
+| `d7y-keydb` | KeyDB | `d7y-operator-cattle=true` |
+| `d7y-control` | scheduler | `d7y-operator-cattle=true`, `d7y-operator-seed=true` |
+| `d7y-data` | seedClient + client | same as control |
+| `d7y-extras` | extras (public scheduler front, VPA, Ingress) | same as control |
+| `d7y-containerd-mirror` | node containerd mirror | same as control |
+| `d7y-admission` | admission webhook | `d7y-operator-cattle=true`, `d7y-operator-admission=true` |
+
+The rendered values keep the per-cluster downstream names:
+
+- `fullnameOverride`: `${ .ClusterName }-keydb`, `${ .ClusterName }-control`,
+  `${ .ClusterName }-data`
+- Ingress/VPA backends: `${ .ClusterName }-manager`,
+  `${ .ClusterName }-control-scheduler`, `${ .ClusterName }-data-seed-client`
+- Scheduler public host:
+  `d7y-scheduler.${ index .ClusterLabels "p2p.dragonfly.io/cluster-id" }.<domain>`
+- Scheduler cluster ID and advertiseIP:
+  `${ index .ClusterAnnotations "p2p.dragonfly.io/scheduler-cluster-id" }` and
+  `${ index .ClusterAnnotations "p2p.dragonfly.io/scheduler-public-ip" }`
+
+The manager, Harbor, and registry-proxy HelmOps stay per cluster: Harbor and
+the proxy need per-cluster Secret names, and Harbor needs ClusterIP host
+aliases that Fleet cannot template. When a Cluster stops matching a selector,
+Fleet deletes its BundleDeployment and uninstalls the release.
+
+Legacy per-cluster objects (`<cluster>-keydb`, `<cluster>-control`,
+`<cluster>-data`, `<cluster>-extras`, `<cluster>-containerd-mirror`,
+`<cluster>-admission-webhook`) are deleted, HelmOp and Bundle, once the
+corresponding shared HelmOp has been applied.
+
+Existing annotation-driven Clusters must add the matching role label (for
+example `d7y-operator-seed: "true"` next to `p2p.dragonfly.io/seed: "true"`):
+Fleet selectors cannot read annotations. The operator never sets or removes
+role labels. If `proxy.domain` is empty, the shared admission release is not
+created and the legacy per-cluster admission HelmOp is left in place.
+
+### Known shared-HelmOp limitations
+
+Fleet values templates cannot render booleans or YAML lists, so the shared
+releases keep fixed defaults:
+
+- `p2p.dragonfly.io/monitoring`: the per-Cluster selector is still resolved per
+  cluster, but the shared releases keep chart metrics defaults (no forced
+  ServiceMonitor).
+- `p2p.dragonfly.io/p2p-data-tls`: the shared data release uses the default
+  plaintext P2P data path.
+- `p2p.dragonfly.io/mutate-exclure`: the shared admission release keeps only the
+  chart's system-namespace exclusions; the extra list is ignored.
+- The shared extras release enables the manager Ingress unconditionally. A seed
+  Cluster without a local manager renders an Ingress with no local backend.
+- A seed-labeled Cluster without `p2p.dragonfly.io/scheduler-cluster-id`
+  renders an empty scheduler ID; the seed label is the deployment contract.
 
 ### Pilot data resource sizing
 
@@ -198,7 +281,7 @@ runtime.
 The operator requires Rancher 2.15+ with Fleet 0.16+ (the `HelmOp` CRD).
 The KeyDB chart (`enapter/keydb` `0.48.0`) is pinned in the operator; KeyDB is
 external and is not published from this module. Nydus binaries are installed by
-`p2p-install.sh`, not by an in-cluster chart. The KeyDB HelmOp runs two active masters (`nodes: 2`,
+`p2p-install.sh`, not by an in-cluster chart. The shared KeyDB HelmOp runs two active masters (`nodes: 2`,
 `multiMaster: "yes"`, `activeReplicas: "yes"`) with `persistentVolume.enabled:
 false`, so it uses emptyDir and creates no PVC. The chart exposes the service as
 `<cluster>-keydb:6379`.
@@ -210,13 +293,13 @@ only when the value, reason, or message changes:
 
 | Condition | True when |
 |---|---|
-| `d7y.io/RolesResolved` | The Cluster has the `p2p-dragonfly-io: "true"` label; the role annotations are parsed. |
-| `d7y.io/KeyDBReady` | The `<cluster>-keydb` HelmOp was applied. |
-| `d7y.io/ControlReady` | The seed scheduler HelmOp was applied (`seed: "true"`). |
-| `d7y.io/DataReady` | The seedClient/client HelmOp was applied (`seed: "true"`). |
+| `d7y.io/RolesResolved` | The Cluster has the `d7y-operator-cattle: "true"` label; the role annotations are parsed. |
+| `d7y.io/KeyDBReady` | The shared `d7y-keydb` HelmOp was applied. |
+| `d7y.io/ControlReady` | The shared `d7y-control` HelmOp was applied and registration succeeded (`seed: "true"`). |
+| `d7y.io/DataReady` | The shared `d7y-data` and `d7y-containerd-mirror` HelmOps were applied (`seed: "true"`). |
 | `d7y.io/HarborReady` | The Harbor HelmOp was applied or an external `harbor-url` is configured. |
 | `d7y.io/RegistryProxyReady` | The independent registry proxy HelmOp was applied. |
-| `d7y.io/AdmissionWebhookReady` | The independent admission webhook HelmOp was applied and Ready. |
+| `d7y.io/AdmissionWebhookReady` | The shared `d7y-admission` HelmOp was applied and Ready. |
 | `d7y.io/HarborDomainMissing` | `harbor: "true"` is set but `harbor-domain` is missing or invalid. |
 | `d7y.io/Registered` | Scheduler and seed-peer records were ensured and linked in the manager. |
 | `d7y.io/RegistrationFailed` | Registration failed permanently; `d7y.io/Retrying` marks transient failures. |
@@ -359,9 +442,11 @@ DaemonSets may run on the same node, seedClient ports are shifted to
 `4100–4106` so they do not collide with client `4000–4006`.
 
 All releases target `dragonfly-system` and depend on each other through
-`spec.dependsOn`: control depends on KeyDB, data depends on control, KeyDB, and
-extras (which owns the public scheduler TCP front), manager depends on KeyDB,
-and extras depends on manager when Ingress is enabled. The mTLS Secret and the
+`spec.dependsOn`: the shared control depends on shared KeyDB, shared data
+depends on shared control, KeyDB, and extras (which owns the public scheduler
+TCP front), the shared mirror depends on shared data, and the per-cluster
+manager depends on shared KeyDB. Shared extras has no dependency because the
+per-cluster manager name is not templatable. The mTLS Secret and the
 manager credentials Secret (names via `mtlsSecretName` and
 `managerApiCredentialsSecret`) are copied into the Cluster namespace and
 delivered downstream through Fleet `spec.downstreamResources`.
@@ -369,10 +454,11 @@ delivered downstream through Fleet `spec.downstreamResources`.
 ### Extras chart
 
 The `dragonfly-extras` chart owns the manager gRPC/REST Ingresses and the
-recommendation-only VPAs. The operator only creates the `<cluster>-extras`
-HelmOp:
+recommendation-only VPAs. The operator creates the shared `d7y-extras` HelmOp:
 
-- `ingress.enabled` is true only for the manager role. The per-Ingress toggles
+- `ingress.enabled` is always true for the shared release; Fleet cannot
+  template the boolean manager role. The Ingress backend Service names are
+  templated as `${ .ClusterName }-manager`. The per-Ingress toggles
   are `ingress.grpc.enabled` and `ingress.rest.enabled`; both default to `true`.
 - `ingress.controller=nginx` (default) terminates client mTLS at the edge,
   serves the P2P certificate for the gRPC host, and reaches the manager with
@@ -435,15 +521,16 @@ HelmOp:
 - `vpa.enabled` is set from API discovery for `autoscaling.k8s.io/v1`; the
   chart additionally checks `Capabilities.APIVersions.Has`. Target names are
   `<cluster>-keydb`, `<cluster>-manager`, `<cluster>-control-scheduler`,
-  and `<cluster>-data-seed-client`; each target is enabled only for its active
-  role. Nydus is host-only and has no VPA target.
+  and `<cluster>-data-seed-client`; the shared release enables the keydb,
+  manager, control, and data targets. Nydus is host-only and has no VPA
+  target.
 - The chart creates no PVC. The operator creates and replicates the mTLS
   Secret; the chart no longer renders a CA-only Secret. The operator RBAC
   remains limited to Clusters, HelmOps, Secrets, and Events.
 
 ## Harbor and registry proxy
 
-Harbor is deployed only when the Cluster has the `p2p-dragonfly-io: "true"`
+Harbor is deployed only when the Cluster has the `d7y-operator-cattle: "true"`
 label and `p2p.dragonfly.io/harbor: "true"`. `p2p.dragonfly.io/harbor-domain`
 is required and must be a DNS name (no scheme/port/path); it becomes the Harbor
 `externalURL` and Ingress host. Set the optional
@@ -462,9 +549,9 @@ Harbor secret key, and delivers them with `existingSecret`/`existingSecretSecret
 The ingress TLS Secret `<cluster>-harbor-tls` must also exist
 (cert-manager or manual) before Harbor starts.
 
-Harbor values use the existing KeyDB HelmOp
-`<cluster>-keydb.dragonfly-system.svc:6379` (`redis.type=external`) and create
-no Redis PVC. Registry, jobservice, and database PVCs are 50Gi/5Gi/10Gi on the
+Harbor values use the `<cluster>-keydb` Service rendered by the shared
+`d7y-keydb` release, as `<cluster>-keydb.dragonfly-system.svc:6379`
+(`redis.type=external`), and create no Redis PVC. Registry, jobservice, and database PVCs are 50Gi/5Gi/10Gi on the
 `longhorn` storage class with `resourcePolicy: keep`. Internal database,
 `trivy.enabled=false`, and ingress TLS Secret `<cluster>-harbor-tls` are the v1
 defaults. The generated `<cluster>-harbor-secret` `secretKey` is 16 random
@@ -657,7 +744,7 @@ per-registry files written by older chart versions; non-seed clusters get no
 
 ## Cluster annotations
 
-The operator only acts on Clusters labeled `p2p-dragonfly-io: "true"`.
+The operator only acts on Clusters labeled `d7y-operator-cattle: "true"`.
 
 | Annotation | Value | Effect |
 |---|---|---|
@@ -794,7 +881,7 @@ A new machine config is patched only when its target Cluster (resolved by the
 `<cluster>-<pool>` name prefix, or by the `p2p.dragonfly.io/cluster`
 (`namespace/name` or name), `p2p.dragonfly.io/cluster-name`, and
 `p2p.dragonfly.io/cluster-namespace` annotations) has the
-`p2p-dragonfly-io: "true"` label and `p2p.dragonfly.io/seed: "true"` annotation,
+`d7y-operator-cattle: "true"` label and `p2p.dragonfly.io/seed: "true"` annotation,
 or the config itself carries them. The payload is the base64url env-file from
 `contracts/bootstrap-payload.md`; the node-config field is patched in plain YAML,
 plain shell, or base64-encoded cloud-config form with the marker
@@ -816,7 +903,7 @@ metadata:
   name: c1
   namespace: fleet-default
   labels:
-    p2p-dragonfly-io: "true"
+    d7y-operator-cattle: "true"
   annotations:
     p2p.dragonfly.io/seed: "true"
     p2p.dragonfly.io/node-config-key: postBootScript
