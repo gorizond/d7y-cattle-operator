@@ -38,7 +38,6 @@ var envKeys = []string{
 	"PROXY_REGISTRIES",
 	"PROXY_BASE_PATH",
 	"PROXY_TLS_SECRET",
-	"PROXY_HOST_ALIASES",
 	"EXTRAS_INGRESS_CONTROLLER",
 	"EXTRAS_INGRESS_CLASS_NAME",
 	"EXTRAS_INGRESS_GRPC_ENABLED",
@@ -249,9 +248,6 @@ func TestLoadInvalidValues(t *testing.T) {
 		"empty proxy registry":              "--proxy-registries=docker.io,",
 		"invalid proxy base path":           "--proxy-base-path=proxy",
 		"invalid proxy TLS secret":          "--proxy-tls-secret=Bad_Secret",
-		"invalid proxy host alias IP":       `--proxy-host-aliases=[{"ip":"not-an-ip","hostnames":["harbor.example.com"]}]`,
-		"invalid proxy host alias hosts":    `--proxy-host-aliases=[{"ip":"10.0.0.1","hostnames":[]}]`,
-		"malformed proxy host aliases":      `--proxy-host-aliases=not-json`,
 		"invalid extras ingress controller": "--extras-ingress-controller=haproxy",
 		"invalid extras ingress class":      "--extras-ingress-class-name=Bad_Name",
 		"invalid extras ingress TLS Secret": "--extras-ingress-tls-secret=Bad_Name",
@@ -458,22 +454,6 @@ func TestLoadHarborProxyConfig(t *testing.T) {
 	}
 	if cfg.ProxyBasePath != "/proxy" || cfg.ProxyTLSSecret != "poligon-harbor-tls" {
 		t.Errorf("proxy path/TLS = %q/%q", cfg.ProxyBasePath, cfg.ProxyTLSSecret)
-	}
-}
-
-func TestLoadProxyHostAliases(t *testing.T) {
-	clearEnv(t)
-	t.Setenv("PROXY_HOST_ALIASES", `[{"ip":"10.43.0.10","hostnames":["harbor.example.test"]}]`)
-	cfg, err := Load(requiredArgs())
-	if err != nil {
-		t.Fatalf("Load() error = %v", err)
-	}
-	if len(cfg.ProxyHostAliases) != 1 {
-		t.Fatalf("ProxyHostAliases = %+v", cfg.ProxyHostAliases)
-	}
-	alias := cfg.ProxyHostAliases[0]
-	if alias.IP != "10.43.0.10" || len(alias.Hostnames) != 1 || alias.Hostnames[0] != "harbor.example.test" {
-		t.Errorf("ProxyHostAliases[0] = %+v", alias)
 	}
 }
 

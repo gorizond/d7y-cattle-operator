@@ -24,10 +24,6 @@ func RegistryProxy(c Cluster) *fleetv1alpha1.HelmOp {
 	if ingressPath == "" {
 		ingressPath = "/"
 	}
-	hostAliases := make([]any, 0, len(c.ProxyHostAliases))
-	for _, alias := range c.ProxyHostAliases {
-		hostAliases = append(hostAliases, map[string]any{"ip": alias.IP, "hostnames": alias.Hostnames})
-	}
 	// Same-cluster Harbor reaches the proxy over the Service; an external
 	// Harbor keeps the chart default (proxy.publicURL + /api/convert).
 	webhookAddress := ""
@@ -54,9 +50,8 @@ func RegistryProxy(c Cluster) *fleetv1alpha1.HelmOp {
 			"allowlist": c.ProxyRegistries,
 		},
 		"proxy": map[string]any{
-			"publicURL":   c.ProxyPublicURL,
-			"basePath":    c.ProxyBasePath,
-			"hostAliases": hostAliases,
+			"publicURL": c.ProxyPublicURL,
+			"basePath":  c.ProxyBasePath,
 		},
 		"webhook": map[string]any{
 			"secretName": c.ProxyWebhookSecretName,

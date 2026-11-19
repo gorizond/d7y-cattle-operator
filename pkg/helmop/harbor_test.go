@@ -84,7 +84,6 @@ func TestRegistryProxyHelmOp(t *testing.T) {
 	c.ProxyRobotSecretName = "c1-registry-proxy-robot"
 	c.ProxyRobotSecretRevision = "rev-1"
 	c.ProxyRegistries = []string{"docker.io"}
-	c.ProxyHostAliases = []HostAlias{{IP: "10.0.0.10", Hostnames: []string{"harbor.example.com"}}}
 	op := RegistryProxy(c)
 
 	if op.Name != "c1-registry-proxy" || op.Spec.TargetNamespace != TargetNamespace {
@@ -136,14 +135,6 @@ func TestRegistryProxyHelmOp(t *testing.T) {
 	}
 	if got := valueAt(t, values, "webhook", "address"); got != "http://c1-registry-proxy.dragonfly-system.svc:8080/api/convert" {
 		t.Errorf("webhook.address = %v", got)
-	}
-	aliases, ok := valueAt(t, values, "proxy", "hostAliases").([]any)
-	if !ok || len(aliases) != 1 {
-		t.Fatalf("proxy.hostAliases = %v", valueAt(t, values, "proxy", "hostAliases"))
-	}
-	alias, _ := aliases[0].(map[string]any)
-	if alias["ip"] != "10.0.0.10" {
-		t.Errorf("proxy.hostAliases[0].ip = %v", alias["ip"])
 	}
 	if got := valueAt(t, values, "conversion", "nydusImage"); got != "/usr/local/bin/nydus-image" {
 		t.Errorf("conversion.nydusImage = %v", got)
