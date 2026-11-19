@@ -2,9 +2,10 @@ package managerapi
 
 // API paths from the manager REST contract.
 const (
-	SignInPath            = "/api/v1/users/signin"
-	SchedulerClustersPath = "/api/v1/scheduler-clusters"
-	SeedPeerClustersPath  = "/api/v1/seed-peer-clusters"
+	SignInPath               = "/api/v1/users/signin"
+	SchedulerClustersPath    = "/api/v1/scheduler-clusters"
+	SeedPeerClustersPath     = "/api/v1/seed-peer-clusters"
+	PersonalAccessTokensPath = "/api/v1/personal-access-tokens"
 
 	// ManagedByBio is attached to every record created by the operator.
 	ManagedByBio = "managed by d7y-cattle-operator"
@@ -21,6 +22,21 @@ type SignInRequest struct {
 type SignInResponse struct {
 	Token  string `json:"token"`
 	Expire string `json:"expire"`
+}
+
+// CreatePersonalAccessTokenRequest is the documented Dragonfly v2.5.4 personal
+// access token create body.
+type CreatePersonalAccessTokenRequest struct {
+	Name      string   `json:"name"`
+	ExpiredAt string   `json:"expired_at"`
+	UserID    int64    `json:"user_id"`
+	Scopes    []string `json:"scopes"`
+}
+
+// CreatePersonalAccessTokenResponse carries the token. The manager returns it
+// only on creation; it is never logged.
+type CreatePersonalAccessTokenResponse struct {
+	Token string `json:"token"`
 }
 
 // SchedulerCluster is the subset of a manager record the operator uses.

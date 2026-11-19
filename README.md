@@ -458,6 +458,34 @@ no Redis PVC. Registry, jobservice, and database PVCs are 50Gi/5Gi/10Gi on the
 `trivy.enabled=false`, and ingress TLS Secret `<cluster>-harbor-tls` are the v1
 defaults.
 
+### Harbor Dragonfly distribution
+
+Harbor's Administration → Distributions page manages P2P preheat provider
+instances. This is not a registry adapter: Harbor has no `dragonfly` registry
+type, so the operator never sends it to `/api/v2.0/registries`. Instead, when a
+Harbor-enabled Cluster has a resolved Harbor URL and `manager.apiURL` is set,
+the operator ensures one preheat instance named `dragonfly`:
+
+- vendor `dragonfly`, auth mode `OAUTH`, insecure `false`
+- endpoint = `--manager-api-url` (the public HTTPS manager REST URL)
+- token = a manager personal access token (PAT) generated for the `root` user
+
+The PAT is created through the manager API (`harbor-preheat`, user ID `1`,
+scope `job`, expiry now + 10 years) only when the operator-namespace Secret
+`dragonfly-harbor-preheat` (key `token`) is absent or empty. The token is
+returned once by the manager, stored in that Secret, reused on later
+reconciles, and never written to logs, events, or HelmOp values. The operator
+reads the Harbor admin credentials from the per-cluster Harbor admin Secret
+(`username`, defaulting to `admin`, and `HARBOR_ADMIN_PASSWORD`) and updates an
+existing instance in place. Harbor answers `409` when the name already exists;
+the operator re-lists and updates. After a successful create/update it pings
+the instance; a ping failure is reported as a `HarborPreheatFailed` Cluster
+event while the instance is kept for the next retry.
+
+The instance is created only when the Harbor role is enabled, a Harbor URL is
+resolved, and `manager.apiURL` is set. It requires the manager to be reachable
+from Harbor and the Harbor admin Secret to exist in the Cluster namespace.
+
 The registry proxy is independent of Harbor and the seed role:
 `p2p.dragonfly.io/proxy: "true"` creates `<cluster>-registry-proxy` in
 `dragonfly-system`, with the public URL built from the operator value

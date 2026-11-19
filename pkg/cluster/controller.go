@@ -88,6 +88,7 @@ type Controller struct {
 	clusters clusterStore
 
 	robotEnsurer      robotEnsurer
+	preheatEnsurer    preheatEnsurer
 	managerMu         sync.Mutex
 	managerHTTPClient *http.Client
 	registrar         managerRegistrar
@@ -150,12 +151,7 @@ func (c *Controller) reconcile(key string, cluster *provv1.Cluster) (result *pro
 		status.set(conditionKeyDBReady, true, "Ready", "KeyDB HelmOp applied")
 	}
 
-	if hc.HarborURL == "" {
-		hc.HarborURL = c.opts.ProxyHarborURL
-	}
-	if hc.HarborURL == "" && hc.HarborManaged && roles.HarborDomain != "" {
-		hc.HarborURL = "https://" + roles.HarborDomain
-	}
+	hc = c.resolveHarborURL(hc)
 	harborErr := c.ensureHarbor(cluster, hc, roles)
 	setHarborCondition(status, roles, harborErr)
 	if harborErr != nil {
@@ -222,6 +218,15 @@ func (c *Controller) reconcile(key string, cluster *provv1.Cluster) (result *pro
 		}
 	} else if err := c.deleteManager(cluster); err != nil {
 		errs = append(errs, err)
+	}
+
+	// Harbor's Dragonfly "Distribution" is a P2P preheat provider backed by the
+	// manager REST API; it needs both a reachable Harbor and the manager API.
+	hc = c.resolveHarborURL(hc)
+	if roles.Harbor && hc.HarborURL != "" && c.opts.ManagerAPIURL != "" {
+		if err := c.ensureHarborPreheat(cluster, hc); err != nil {
+			errs = append(errs, err)
+		}
 	}
 
 	seedReady := false
@@ -498,6 +503,18 @@ func (c *Controller) helmopCluster(cluster *provv1.Cluster) helmop.Cluster {
 		if mtls, err := c.secrets.Get(c.opts.OperatorNamespace, c.opts.MTLSSecretName, metav1.GetOptions{}); err == nil {
 			hc.MTLSCertRevision = pki.CertRevision(mtls.Data[corev1.TLSCertKey])
 		}
+	}
+	return hc
+}
+
+// resolveHarborURL fills the effective Harbor API URL used by Harbor clients.
+// The configured external URL wins over the managed-Harbor ingress domain.
+func (c *Controller) resolveHarborURL(hc helmop.Cluster) helmop.Cluster {
+	if hc.HarborURL == "" {
+		hc.HarborURL = c.opts.ProxyHarborURL
+	}
+	if hc.HarborURL == "" && hc.HarborManaged && hc.HarborDomain != "" {
+		hc.HarborURL = "https://" + hc.HarborDomain
 	}
 	return hc
 }

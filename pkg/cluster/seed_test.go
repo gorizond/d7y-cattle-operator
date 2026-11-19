@@ -155,19 +155,24 @@ func newTestController(t *testing.T) (*Controller, *fakeHelmOpStore, *fakeEventS
 		ObjectMeta: metav1.ObjectMeta{Name: "harbor-admin", Namespace: "dragonfly-system"},
 		Data:       map[string][]byte{"HARBOR_ADMIN_PASSWORD": []byte("admin-password")},
 	})
+	secrets.put(&corev1.Secret{
+		ObjectMeta: metav1.ObjectMeta{Name: "dragonfly-harbor-preheat", Namespace: "dragonfly-system"},
+		Data:       map[string][]byte{"token": []byte("fixture-preheat-pat")},
+	})
 	store := newFakeHelmOpStore()
 	bundles := newFakeHelmOpStore()
 	events := &fakeEventStore{}
 	controller := &Controller{
-		ctx:          context.Background(),
-		secrets:      secrets,
-		events:       events,
-		helmops:      store,
-		bundles:      bundles,
-		clusters:     newFakeClusterStore(),
-		robotEnsurer: &fakeRobotEnsurer{},
-		registrar:    newFakeRegistrar(),
-		allocator:    newFakeAllocator(),
+		ctx:            context.Background(),
+		secrets:        secrets,
+		events:         events,
+		helmops:        store,
+		bundles:        bundles,
+		clusters:       newFakeClusterStore(),
+		robotEnsurer:   &fakeRobotEnsurer{},
+		preheatEnsurer: &fakePreheatEnsurer{},
+		registrar:      newFakeRegistrar(),
+		allocator:      newFakeAllocator(),
 		opts: Options{
 			OperatorNamespace:           "dragonfly-system",
 			MTLSSecretName:              "dragonfly-p2p-mtls",

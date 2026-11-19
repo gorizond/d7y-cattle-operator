@@ -53,6 +53,29 @@ type HarborRobot struct {
 	Secret string `json:"secret"`
 }
 
+// HarborPreheatInstance is a Harbor P2P preheat provider instance, exposed in
+// Administration -> Distributions. Harbor has no Dragonfly registry adapter;
+// Dragonfly is a preheat vendor only.
+type HarborPreheatInstance struct {
+	ID          int               `json:"id"`
+	Name        string            `json:"name"`
+	Description string            `json:"description,omitempty"`
+	Vendor      string            `json:"vendor"`
+	Endpoint    string            `json:"endpoint"`
+	AuthMode    string            `json:"auth_mode"`
+	AuthInfo    map[string]string `json:"auth_info,omitempty"`
+	Enabled     bool              `json:"enabled"`
+	Default     bool              `json:"default"`
+	Insecure    bool              `json:"insecure"`
+}
+
+const (
+	harborPreheatInstancesPath = "/api/v2.0/p2p/preheat/instances"
+	harborPreheatPingPath      = "/api/v2.0/p2p/preheat/instances/ping"
+	harborPreheatVendor        = "dragonfly"
+	harborPreheatAuthMode      = "OAUTH"
+)
+
 func (h *HarborClient) client() *http.Client {
 	if h.Client != nil {
 		return h.Client
@@ -484,6 +507,135 @@ func (h *HarborClient) EnsureWebhook(ctx context.Context, project, address, secr
 	status, err := h.do(ctx, http.MethodPost, path, body, nil)
 	if err != nil && status != http.StatusConflict {
 		return err
+	}
+	return nil
+}
+
+// EnsurePreheatInstance creates or updates the Dragonfly P2P preheat provider
+// instance ("Distribution") and then pings it. Harbor answers 409 when the name
+// already exists; that path re-lists and updates. A ping failure is returned
+// after the instance was written, so the caller retries without losing it. The
+// token is only sent to Harbor and never appears in errors.
+func (h *HarborClient) EnsurePreheatInstance(ctx context.Context, name, endpoint, token string, insecure bool) error {
+	if strings.TrimSpace(name) == "" {
+		return fmt.Errorf("harbor preheat instance: name is required")
+	}
+	if err := validatePreheatEndpoint(endpoint); err != nil {
+		return fmt.Errorf("harbor preheat instance %q: %w", name, err)
+	}
+	if token == "" {
+		return fmt.Errorf("harbor preheat instance %q: token is required", name)
+	}
+
+	body := HarborPreheatInstance{
+		Name:        name,
+		Description: "Dragonfly P2P preheat",
+		Vendor:      harborPreheatVendor,
+		Endpoint:    endpoint,
+		AuthMode:    harborPreheatAuthMode,
+		AuthInfo:    map[string]string{"token": token},
+		Enabled:     true,
+		Default:     false,
+		Insecure:    insecure,
+	}
+
+	existing, err := h.findPreheatInstance(ctx, name)
+	if err != nil {
+		return err
+	}
+	if existing != nil && existing.Vendor != harborPreheatVendor {
+		return fmt.Errorf("harbor preheat instance %q exists with vendor %q; remove or rename it manually", name, existing.Vendor)
+	}
+
+	payload := preheatInstanceBody(body)
+	if existing != nil {
+		payload["id"] = existing.ID
+		if err := h.putPreheatInstance(ctx, name, existing.ID, payload); err != nil {
+			return err
+		}
+	} else {
+		status, err := h.do(ctx, http.MethodPost, harborPreheatInstancesPath, payload, nil)
+		switch {
+		case err == nil && status < http.StatusMultipleChoices:
+			// created
+		case status == http.StatusConflict:
+			existing, findErr := h.findPreheatInstance(ctx, name)
+			if findErr != nil {
+				return findErr
+			}
+			if existing == nil {
+				return fmt.Errorf("harbor preheat instance %q: conflict after create", name)
+			}
+			payload["id"] = existing.ID
+			if err := h.putPreheatInstance(ctx, name, existing.ID, payload); err != nil {
+				return err
+			}
+		case err != nil:
+			return fmt.Errorf("harbor create preheat instance %q: %w", name, err)
+		default:
+			return fmt.Errorf("harbor create preheat instance %q: status %d", name, status)
+		}
+	}
+
+	return h.pingPreheatInstance(ctx, name, body)
+}
+
+func (h *HarborClient) findPreheatInstance(ctx context.Context, name string) (*HarborPreheatInstance, error) {
+	var list []HarborPreheatInstance
+	path := harborPreheatInstancesPath + "?q=" + url.QueryEscape("name="+name)
+	if _, err := h.do(ctx, http.MethodGet, path, nil, &list); err != nil {
+		return nil, fmt.Errorf("harbor list preheat instances for %q: %w", name, err)
+	}
+	for i := range list {
+		if list[i].Name == name {
+			return &list[i], nil
+		}
+	}
+	return nil, nil
+}
+
+func (h *HarborClient) putPreheatInstance(ctx context.Context, name string, id int, payload map[string]any) error {
+	status, err := h.do(ctx, http.MethodPut, harborPreheatInstancesPath+"/"+strconv.Itoa(id), payload, nil)
+	if err != nil {
+		return fmt.Errorf("harbor update preheat instance %q: %w", name, err)
+	}
+	if status < http.StatusOK || status >= http.StatusMultipleChoices {
+		return fmt.Errorf("harbor update preheat instance %q: status %d", name, status)
+	}
+	return nil
+}
+
+func (h *HarborClient) pingPreheatInstance(ctx context.Context, name string, instance HarborPreheatInstance) error {
+	status, err := h.do(ctx, http.MethodPost, harborPreheatPingPath, preheatInstanceBody(instance), nil)
+	if err != nil {
+		return fmt.Errorf("harbor ping preheat instance %q: %w", name, err)
+	}
+	if status < http.StatusOK || status >= http.StatusMultipleChoices {
+		return fmt.Errorf("harbor ping preheat instance %q: status %d", name, status)
+	}
+	return nil
+}
+
+// preheatInstanceBody renders the create/update payload. The update body must
+// carry the existing id; Harbor refuses vendor changes.
+func preheatInstanceBody(instance HarborPreheatInstance) map[string]any {
+	return map[string]any{
+		"name":        instance.Name,
+		"description": instance.Description,
+		"vendor":      instance.Vendor,
+		"endpoint":    instance.Endpoint,
+		"auth_mode":   instance.AuthMode,
+		"auth_info":   instance.AuthInfo,
+		"enabled":     instance.Enabled,
+		"default":     instance.Default,
+		"insecure":    instance.Insecure,
+	}
+}
+
+func validatePreheatEndpoint(endpoint string) error {
+	parsed, err := url.Parse(strings.TrimSpace(endpoint))
+	if err != nil || parsed.Host == "" || (parsed.Scheme != "http" && parsed.Scheme != "https") {
+		return fmt.Errorf("endpoint must be an absolute http(s) URL")
 	}
 	return nil
 }
