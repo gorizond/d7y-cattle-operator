@@ -43,12 +43,15 @@ func TestEnsureMTLSSecretReplicatesToClusterNamespace(t *testing.T) {
 		t.Error("cluster namespace copy has last-applied annotation")
 	}
 
-	// Fleet's DownstreamResources entry remains the supported downstream sync.
+	// Fleet's DownstreamResources entries remain the supported downstream sync.
 	op := helmop.Manager(controller.helmopCluster(cluster))
-	if len(op.Spec.DownstreamResources) != 1 ||
+	if len(op.Spec.DownstreamResources) != 2 ||
 		op.Spec.DownstreamResources[0].Kind != "Secret" ||
-		op.Spec.DownstreamResources[0].Name != source.Name {
-		t.Errorf("manager downstreamResources = %+v, want Secret %s", op.Spec.DownstreamResources, source.Name)
+		op.Spec.DownstreamResources[0].Name != source.Name ||
+		op.Spec.DownstreamResources[1].Kind != "Secret" ||
+		op.Spec.DownstreamResources[1].Name != controller.opts.ManagerAPICredentialsSecret {
+		t.Errorf("manager downstreamResources = %+v, want Secrets %s and %s",
+			op.Spec.DownstreamResources, source.Name, controller.opts.ManagerAPICredentialsSecret)
 	}
 
 	rotated := source.DeepCopy()
