@@ -25,7 +25,10 @@ func Harbor(c Cluster) *fleetv1alpha1.HelmOp {
 // SharedHarbor returns the shared Harbor HelmOp. The chart fullname is the
 // Fleet template ${ .ClusterName }-harbor, so the per-target workloads and the
 // existing PVCs (registry, jobservice, database) keep their names. The admin,
-// database-password and secret-key Secrets are fleet-wide fixed names.
+// database-password and secret-key Secrets are fleet-wide fixed names. The
+// ingress TLS Secret defaults to <cluster>-harbor-tls (cert-manager's naming
+// convention) and can be pinned per Cluster with the
+// p2p.dragonfly.io/harbor-tls-secret annotation.
 func SharedHarbor(c Cluster) *fleetv1alpha1.HelmOp {
 	c = sharedCluster(c)
 	values := harborValues(c, harborOptions{
@@ -39,29 +42,24 @@ func SharedHarbor(c Cluster) *fleetv1alpha1.HelmOp {
 	})
 	op := newSharedHelmOp(SharedHarborName(), HarborTargetNamespace, c, c.HarborChart, "harbor",
 		values, []string{SharedKeyDBName()}, HarborSelector())
-	// Harbor's immutable workload selectors include .Release.Name, which
-	// changes from <cluster>-harbor to d7y-harbor. Force lets Helm replace those
-	// immutable fields during the one-time adoption; PVCs use resourcePolicy
-	// keep and are preserved.
-	op.Spec.Helm.Force = true
-	// A force replace sends the whole object, so the server-assigned
-	// volumeName of a bound PVC would be rendered empty and the API server
-	// rejects the update:
+	// Do not set helm.force or helm.preserveOnReplace here.
+	//
+	// The in-cluster Fleet CRD (Rancher 2.15.3 ships Fleet 0.16.x) prunes
+	// spec.helm.preserveOnReplace; it only exists in Fleet master:
+	//   Warning: unknown field "spec.helm.preserveOnReplace"
+	// Without that field a force replace sends each PVC without its
+	// server-assigned volumeName and the API server rejects it:
 	//   PersistentVolumeClaim "poligon-harbor-jobservice" is invalid:
 	//   spec: Forbidden: spec is immutable after creation except
 	//   resources.requests and volumeAttributesClassName for bound claims
 	//   -  "VolumeName": "pvc-39b93102-2294-47b3-82dd-272b343e98a8",
 	//   +  "VolumeName": "",
-	// Fleet's documented preserveOnReplace rule copies the live volumeName
-	// back into the replaced object ("the volumeName of a bound
-	// PersistentVolumeClaim ... would otherwise be cleared, which the API
-	// server may reject"), so the claim stays bound and the release can
-	// reach deployed.
-	op.Spec.Helm.PreserveOnReplace = []fleetv1alpha1.PreserveOnReplaceRule{{
-		APIVersion: "v1",
-		Kind:       "PersistentVolumeClaim",
-		Paths:      []fleetv1alpha1.PreservedPath{{Path: "/spec/volumeName"}},
-	}}
+	//
+	// Force was only needed for the one-time adoption of Harbor workloads
+	// whose immutable selectors embed .Release.Name; the running pods already
+	// carry app.kubernetes.io/instance: d7y-harbor, so a plain Helm upgrade is
+	// sufficient and leaves server-set PVC fields alone. PVCs keep
+	// resourcePolicy: keep and are not replaced.
 	op.Spec.DownstreamResources = harborDownstreamResources(
 		SharedHarborAdminSecretName(), SharedHarborSecretKeyName())
 	return op

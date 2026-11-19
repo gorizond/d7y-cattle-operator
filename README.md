@@ -561,17 +561,17 @@ logs, or events. The operator also generates the fixed `d7y-harbor-db` and
 secret key, and delivers the latter with `existingSecretSecretKey` (the DB
 password is passed in the chart values).
 
-The Harbor ingress TLS Secret is the fixed `d7y-harbor-tls` unless the Cluster
-pins a per-cluster name with `p2p.dragonfly.io/harbor-tls-secret`. The Secret
-must exist in the `harbor` namespace (cert-manager or manual) before Harbor
-starts; set the annotation to keep `poligon-harbor-tls`.
+The Harbor ingress TLS Secret defaults to `<cluster>-harbor-tls`, matching the
+cert-manager naming convention (for example `poligon-harbor-tls`). Pin a
+different name with `p2p.dragonfly.io/harbor-tls-secret`. The Secret must exist
+in the `harbor` namespace (cert-manager or manual) before Harbor starts.
 
 Harbor values use the `<cluster>-keydb` Service rendered by the shared
 `d7y-keydb` release, as `<cluster>-keydb.dragonfly-system.svc:6379`
 (`redis.type=external`), and create no Redis PVC. Registry, jobservice, and
 database PVCs are 50Gi/5Gi/10Gi on the `longhorn` storage class with
 `resourcePolicy: keep`. Internal database, `trivy.enabled=false`, and ingress
-TLS Secret `d7y-harbor-tls` are the v1 defaults. The generated
+TLS Secret `<cluster>-harbor-tls` are the v1 defaults. The generated
 `d7y-harbor-secret` `secretKey` is 16 random bytes encoded as 32 hex characters
 (AES-256); the DB password remains 32 bytes encoded as 64 hex characters.
 
@@ -802,7 +802,7 @@ The operator only acts on Clusters labeled `d7y-operator-cattle: "true"`.
 | `p2p.dragonfly.io/harbor` | `"true"` | Deploy Harbor (requires `harbor-domain`) |
 | `p2p.dragonfly.io/harbor-domain` | DNS name | Harbor Ingress host / `externalURL` |
 | `p2p.dragonfly.io/harbor-url` | HTTPS URL | Use an existing/external Harbor; no managed Harbor release |
-| `p2p.dragonfly.io/harbor-tls-secret` | Secret name | Per-cluster Harbor ingress TLS Secret; empty keeps the fixed `d7y-harbor-tls` |
+| `p2p.dragonfly.io/harbor-tls-secret` | Secret name | Per-cluster Harbor ingress TLS Secret; empty derives `<cluster>-harbor-tls` |
 | `p2p.dragonfly.io/proxy` | `"true"` | Deploy the shared registry proxy HelmOp |
 | `p2p.dragonfly.io/proxy-tls-secret` | Secret name | Per-cluster proxy ingress TLS Secret; stamped from `proxy.tlsSecret` only when absent and never overwritten |
 | `p2p.dragonfly.io/proxy-host-aliases` | comma-separated `ip=hostname` pairs | Per-cluster registry-proxy `/etc/hosts` pins; falls back to the operator-wide `proxy.hostAliases` when absent or blank |

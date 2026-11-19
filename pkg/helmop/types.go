@@ -99,7 +99,7 @@ const (
 	// entries as comma-separated ip=hostname pairs.
 	AnnotationProxyHostAliases = "p2p.dragonfly.io/proxy-host-aliases"
 	// AnnotationHarborTLSSecret optionally pins a per-cluster Harbor ingress
-	// TLS Secret; empty falls back to the fleet-wide d7y-harbor-tls.
+	// TLS Secret; empty falls back to <cluster>-harbor-tls.
 	AnnotationHarborTLSSecret    = "p2p.dragonfly.io/harbor-tls-secret"
 	AnnotationSchedulerReplicas  = "p2p.dragonfly.io/scheduler-replicas"
 	AnnotationSeedClientReplicas = "p2p.dragonfly.io/seedclient-replicas"
@@ -126,8 +126,12 @@ const (
 	// SharedHarborDomainTemplate resolves the per-target Harbor ingress host.
 	SharedHarborDomainTemplate = `${ index .ClusterAnnotations "p2p.dragonfly.io/harbor-domain" }`
 	// SharedHarborTLSSecretTemplate resolves the per-target Harbor ingress TLS
-	// Secret; absent annotation keeps the fleet-wide d7y-harbor-tls.
-	SharedHarborTLSSecretTemplate = `${ index .ClusterAnnotations "p2p.dragonfly.io/harbor-tls-secret" | default "d7y-harbor-tls" }`
+	// Secret. The default follows the cert-manager convention
+	// <cluster>-harbor-tls (e.g. poligon-harbor-tls); the annotation overrides
+	// it. Build the default with printf: a nested ${ .ClusterName } inside the
+	// default string argument would stay literal because Fleet renders the
+	// template only once.
+	SharedHarborTLSSecretTemplate = `${ index .ClusterAnnotations "p2p.dragonfly.io/harbor-tls-secret" | default (printf "%s-harbor-tls" .ClusterName) }`
 	// SharedHarborFullnameTemplate keeps the legacy <cluster>-harbor fullname,
 	// so Harbor workloads and the existing PVCs keep their names.
 	SharedHarborFullnameTemplate = SharedClusterNameTemplate + "-harbor"
