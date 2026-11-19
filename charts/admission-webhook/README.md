@@ -3,7 +3,9 @@
 Opt-in Pod image rewriter for the Dragonfly smart registry proxy. The operator
 installs this chart as `<cluster>-admission-webhook` only when the Cluster has
 `p2p.dragonfly.io/admission: "true"`; it is never installed with Harbor, the
-proxy, or the seed role.
+proxy, or the seed role. The operator passes its own image
+(`image.repository`/`image.tag`) so the webhook runs the same binary and
+release as the operator; the chart `appVersion` default is only a fallback.
 
 ## Rewrite
 
@@ -63,6 +65,8 @@ alias Service is created. With an external `tls.secretName`, set
 
 | Key | Default | Purpose |
 |---|---|---|
+| `image.repository` | `ghcr.io/gorizond/d7y-cattle-operator` | image containing `/admission-webhook` |
+| `image.tag` | `""` | image tag; the operator sets its own tag so the webhook matches the operator. Empty falls back to `v<chart appVersion>` |
 | `proxy.domain` | `""` | public proxy host from operator values; no internal host is hardcoded |
 | `networkOnly` | `true` | disable credential injection |
 | `inject.imagePullSecret` | `""` | Secret name injected into proxy-pulling pods |

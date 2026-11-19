@@ -135,6 +135,10 @@ type Cluster struct {
 	AdmissionNetworkOnly     bool
 	// AdmissionExcludeNamespaces are extra namespaces the webhook must skip.
 	AdmissionExcludeNamespaces []string
+	// OperatorImageRepository/OperatorImageTag make the admission webhook run
+	// the same image as the operator. Empty means the chart default is used.
+	OperatorImageRepository string
+	OperatorImageTag        string
 
 	ManagerGRPCDomain  string
 	ManagerGRPCPort    int

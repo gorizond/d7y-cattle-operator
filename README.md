@@ -43,7 +43,11 @@ Live envtest/pilot verification remains deferred.
   `<proxy.domain>/<registry>/<repo>:<tag>`,
   preserves `@sha256`, and is independent of Harbor/proxy/seed. The
   `p2p.dragonfly.io/mutate-exclure` annotation adds per-cluster namespace
-  exclusions to the webhook's `namespaceSelector`.
+  exclusions to the webhook's `namespaceSelector`. The webhook Deployment runs
+  the operator image: the operator passes `image.repository`/`image.tag` from
+  its `OPERATOR_IMAGE_REPOSITORY`/`OPERATOR_IMAGE_TAG` environment to the
+  admission HelmOp; the chart `appVersion` is only a fallback when the operator
+  image is unknown.
 - Manages the manager Ingresses, the public scheduler TCP front, and optional
   VPAs through the separate `<cluster>-extras` HelmOp and the
   `dragonfly-extras` chart. The operator has no Ingress, IngressRouteTCP, or
@@ -114,6 +118,8 @@ not used until the p2p-static and registration MRs.
 | `scheduler.clusterID` | `P2P_CLUSTER_ID` | Optional fallback when provisioning Cluster `status.clusterName` is empty |
 | `nginx.staticURL` | `NGINX_STATIC_URL` | Base URL of the static asset server (`http` or `https`) |
 | `nydus.mirrorURL` | `NYDUS_MIRROR_URL` | Optional HTTPS mirror path for nydus blobs, including the registry segment (for example `https://proxy.example.test/docker.io`); empty keeps the dfdaemon proxy fallback |
+| `image.repository` | `OPERATOR_IMAGE_REPOSITORY` | Operator image repository passed to the admission webhook |
+| `image.tag` | `OPERATOR_IMAGE_TAG` | Operator image tag passed to the admission webhook; defaults to `v<chart version>` |
 | `managerApiCredentialsSecret` | `MANAGER_API_CREDENTIALS_SECRET` | Secret with `username` and `password` keys for the manager API |
 | `dragonfly.chart.repo` | `DRAGONFLY_CHART_REPO` | Helm repository URL of the Dragonfly chart; defaults to the gorizond fork |
 | `extras.chart.repo` | `EXTRAS_CHART_REPO` | Helm repository URL of the dragonfly-extras chart |

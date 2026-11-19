@@ -65,6 +65,8 @@ type Options struct {
 	AdmissionImagePullSecret    string
 	AdmissionServiceAccount     string
 	AdmissionNetworkOnly        bool
+	OperatorImageRepository     string
+	OperatorImageTag            string
 	ExtrasIngressController     string
 	ExtrasIngressClassName      string
 	ExtrasIngressGRPCEnabled    bool
@@ -470,6 +472,8 @@ func (c *Controller) helmopCluster(cluster *provv1.Cluster) helmop.Cluster {
 		AdmissionServiceAccount:    c.opts.AdmissionServiceAccount,
 		AdmissionNetworkOnly:       c.opts.AdmissionNetworkOnly,
 		AdmissionExcludeNamespaces: roles.AdmissionExclude,
+		OperatorImageRepository:    c.opts.OperatorImageRepository,
+		OperatorImageTag:           c.opts.OperatorImageTag,
 		ManagerGRPCDomain:          c.opts.ManagerGRPCDomain,
 		ManagerGRPCPort:            c.opts.ManagerGRPCPort,
 		ManagerAPIHost:             c.opts.ManagerAPIHost,

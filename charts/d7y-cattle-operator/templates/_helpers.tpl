@@ -42,3 +42,7 @@ app.kubernetes.io/instance: {{ .Release.Name }}
 {{- define "d7y-cattle-operator.webhookName" -}}
 {{- printf "%s-webhook" (include "d7y-cattle-operator.fullname" .) | trunc 63 | trimSuffix "-" -}}
 {{- end -}}
+
+{{- define "d7y-cattle-operator.imageTag" -}}
+{{- .Values.image.tag | default (printf "v%s" .Chart.Version) -}}
+{{- end -}}

@@ -64,12 +64,37 @@ func TestAdmissionHelmOpDefaultExcludedNamespaces(t *testing.T) {
 	c.AdmissionEnabled = true
 
 	values := Admission(c).Spec.Helm.Values.Data
+	if _, ok := values["image"]; ok {
+		t.Error("image values present without a known operator image")
+	}
 	excluded, ok := valueAt(t, values, "namespaceSelector", "excludedNamespaces").([]string)
 	if !ok {
 		t.Fatalf("namespaceSelector.excludedNamespaces = %T, want []string", valueAt(t, values, "namespaceSelector", "excludedNamespaces"))
 	}
 	if len(excluded) != 0 {
 		t.Errorf("namespaceSelector.excludedNamespaces = %v, want empty", excluded)
+	}
+}
+
+func TestAdmissionHelmOpImage(t *testing.T) {
+	c := testCluster()
+	c.AdmissionChart = Chart{Repo: "https://charts.example.com", Name: "admission-webhook", Version: "0.1.2"}
+	c.ProxyDomain = "proxy.example.com"
+	c.OperatorImageRepository = "ghcr.io/gorizond/d7y-cattle-operator"
+	c.OperatorImageTag = "v0.1.43"
+
+	values := Admission(c).Spec.Helm.Values.Data
+	if got := valueAt(t, values, "image", "repository"); got != "ghcr.io/gorizond/d7y-cattle-operator" {
+		t.Errorf("image.repository = %v", got)
+	}
+	if got := valueAt(t, values, "image", "tag"); got != "v0.1.43" {
+		t.Errorf("image.tag = %v", got)
+	}
+
+	// A partial image must fall back to the chart default, never an empty tag.
+	c.OperatorImageTag = ""
+	if _, ok := Admission(c).Spec.Helm.Values.Data["image"]; ok {
+		t.Error("image values present without a known image tag")
 	}
 }
 
