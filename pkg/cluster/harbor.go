@@ -18,23 +18,16 @@ import (
 	"github.com/gorizond/d7y-cattle-operator/pkg/registryproxy"
 )
 
-// ensureHarbor reconciles the owned Harbor HelmOp. An external Harbor
-// (harbor-url) deletes any previously managed release and is left to the user.
-func (c *Controller) ensureHarbor(cluster *provv1.Cluster, hc helmop.Cluster, roles Roles) error {
+// ensureSharedHarbor reconciles the shared Harbor HelmOp. An external Harbor
+// (harbor-url) has no managed release; the legacy per-cluster release is
+// removed by cleanupLegacyHarbor.
+func (c *Controller) ensureSharedHarbor(cluster *provv1.Cluster, hc helmop.Cluster, roles Roles) error {
 	if !roles.Harbor {
-		if err := c.deleteHelmOp(cluster, helmop.HarborName(cluster.Name)); err != nil {
-			c.event(cluster, corev1.EventTypeWarning, "HarborCleanupFailed", err.Error())
-			return err
-		}
 		return nil
 	}
 	if roles.HarborURL != "" {
 		if err := validateHarborURL(roles.HarborURL); err != nil {
 			c.event(cluster, corev1.EventTypeWarning, "HarborURLInvalid", err.Error())
-			return err
-		}
-		if err := c.deleteHelmOp(cluster, helmop.HarborName(cluster.Name)); err != nil {
-			c.event(cluster, corev1.EventTypeWarning, "HarborCleanupFailed", err.Error())
 			return err
 		}
 		return nil
@@ -46,7 +39,7 @@ func (c *Controller) ensureHarbor(cluster *provv1.Cluster, hc helmop.Cluster, ro
 	if err := c.ensureHarborAdminSecret(cluster, hc); err != nil {
 		return err
 	}
-	dbSecretName := helmop.HarborDBSecretName(cluster.Name)
+	dbSecretName := helmop.SharedHarborDBSecretName()
 	if err := c.ensureGeneratedSecret(cluster, dbSecretName, "password", 32); err != nil {
 		return err
 	}
@@ -61,7 +54,7 @@ func (c *Controller) ensureHarbor(cluster *provv1.Cluster, hc helmop.Cluster, ro
 	if err := c.ensureGeneratedSecret(cluster, hc.HarborSecretKey, "secretKey", 16); err != nil {
 		return err
 	}
-	return c.applyHelmOp(cluster, helmop.Harbor(hc))
+	return c.applyHelmOp(cluster, helmop.SharedHarbor(hc))
 }
 
 // ensureSharedRegistryProxy reconciles the shared registry-proxy HelmOp. It
