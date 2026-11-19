@@ -47,6 +47,12 @@ grep -q 'nydusd-config.fscache.json' "$tmp/p2p-static.yaml" || fail "p2p-static 
 grep -q 'fs_driver = "fscache"' "$tmp/p2p-static.yaml" || fail "p2p-static script is missing the fscache fs_driver"
 grep -q 'threads_number = 8' "$tmp/p2p-static.yaml" || fail "p2p-static script is missing fscache threads_number"
 grep -q 'enable_kubeconfig_keychain = true' "$tmp/p2p-static.yaml" || fail "p2p-static script is missing the kubeconfig keychain"
+grep -q 'CONFIG_EROFS_FS_ONDEMAND' "$tmp/p2p-static.yaml" || fail "p2p-static script is missing the EROFS on-demand config check"
+grep -q 'CONFIG_CACHEFILES_ONDEMAND' "$tmp/p2p-static.yaml" || fail "p2p-static script is missing the cachefiles on-demand config check"
+grep -q 'modules-load.d/nydus.conf' "$tmp/p2p-static.yaml" || fail "p2p-static script is missing modules-load.d"
+grep -q 'CACHEFILES_DEVICE="${CACHEFILES_DEVICE:-/dev/cachefiles}"' "$tmp/p2p-static.yaml" || fail "p2p-static script is missing the /dev/cachefiles check"
+grep -q 'cachefilesd.service' "$tmp/p2p-static.yaml" || fail "p2p-static script is missing the cachefilesd mask"
+grep -q 'rafs_version: 6' "$tmp/p2p-static.yaml" || fail "p2p-static script is missing the RAFS v6 prerequisite note"
 grep -q 'NYDUS_FS_DRIVER="${NYDUS_FS_DRIVER:-fscache}"' "$tmp/p2p-static.yaml" || fail "p2p-static chart value nydus.fsDriver did not render"
 if grep -q '__NYDUS_FS_DRIVER__' "$tmp/p2p-static.yaml" || grep -q '__NYDUS_CLUSTER_ID__' "$tmp/p2p-static.yaml"; then
   fail "p2p-static script still contains unrendered nydus placeholders"

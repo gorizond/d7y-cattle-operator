@@ -123,15 +123,29 @@ deployed, and workloads do not need `runtimeClass: nydus`.
   nydusd schema does not document those keys, and unknown fields can prevent
   nydusd from starting.
 
-### fscache kernel requirements
+### fscache kernel requirements (Ubuntu 24.04 HWE 6.8+)
 
-The default `fscache` driver needs the `erofs`, `fscache`, and `cachefiles`
-kernel modules. `p2p-install.sh` runs `modprobe` for all three; if any module
-is unavailable (or `modprobe` is missing) it logs an error and falls back to
-`fusedev` with the legacy nydusd config, rather than starting a snapshotter
-that cannot mount images. Set `nydus.fsDriver=fusedev` to skip the fscache
-probe entirely. The installer does not manage `cachefilesd`; the node image
-must provide any fscache userspace setup the kernel requires.
+The default `fscache` driver requires:
+
+- `CONFIG_EROFS_FS_ONDEMAND=y` and `CONFIG_CACHEFILES_ONDEMAND=y` in the
+  running kernel config (`/boot/config-$(uname -r)`, or `/proc/config.gz`).
+  `p2p-install.sh` verifies both and falls back to `fusedev` with a clear
+  error when either is missing (Ubuntu 24.04 HWE 6.8/6.12 kernels).
+- The `erofs`, `fscache`, and `cachefiles` modules. The installer loads them
+  with `modprobe`, writes `/etc/modules-load.d/nydus.conf` with `erofs` and
+  `cachefiles` for the next boot, and verifies `/dev/cachefiles` appears.
+- Exclusive ownership of `/dev/cachefiles`. The installer never starts
+  `cachefilesd`; if the unit exists it runs `systemctl disable --now` and
+  `systemctl mask cachefilesd.service`, because cachefilesd monopolizes the
+  device that nydusd fscache must own.
+
+Any missing prerequisite logs an error and falls back to `fusedev` with the
+legacy nydusd config, rather than starting a snapshotter that cannot mount
+images. Set `nydus.fsDriver=fusedev` to skip the fscache probe entirely.
+
+Images must be converted to RAFS v6 for EROFS/fscache. Harbor conversions set
+`rafs_version: 6` in the registry-proxy path; this chart only validates and
+reports the prerequisite and does not perform conversions.
 
 ### Nydus mirror config
 
@@ -320,10 +334,11 @@ available, the self-test, and a `helm template` render check.
 
 ## Pilot gaps
 
-- The fscache path is unit- and render-tested only. `erofs`/`fscache`/
-  `cachefiles` availability, any `cachefilesd` setup, and the pinned
-  snapshotter's support for `threads_number`/`enable_kubeconfig_keychain` need
-  a live poligon run before rollout.
+- The fscache path is unit- and render-tested only. A live poligon VM must
+  confirm `CONFIG_EROFS_FS_ONDEMAND=y`/`CONFIG_CACHEFILES_ONDEMAND=y` on the
+  running kernel, `/dev/cachefiles` creation, cachefilesd disable/mask, and
+  the pinned snapshotter's support for `threads_number`/
+  `enable_kubeconfig_keychain` before rollout.
 - Base-template merge and drop-in import behaviour need a live pilot, including
   `containerd config dump` after a manual `rke2-agent`/`rke2-server` restart.
 - The static `/bin` (or `/nydus/<version>`) volume must be populated externally

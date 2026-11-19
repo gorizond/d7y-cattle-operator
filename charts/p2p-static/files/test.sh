@@ -469,39 +469,117 @@ assert_contains "${ROOT_FUSEDEV}/etc/systemd/system/nydus-snapshotter-bootstrap.
 MODPROBE_OK="${WORK}/modprobe-ok"
 MODPROBE_CALLS="${WORK}/modprobe-calls"
 MODPROBE_FAIL="${WORK}/modprobe-fail"
+SYSTEMCTL_FAKE="${WORK}/systemctl"
+SYSTEMCTL_LOG="${WORK}/systemctl.log"
+KERNEL_CONFIG="${WORK}/kernel-config"
+CACHEFILES_DEVICE="${WORK}/dev-cachefiles"
 : > "$MODPROBE_CALLS"
+: > "$SYSTEMCTL_LOG"
+cat > "$KERNEL_CONFIG" <<'KERNELCONFIG'
+CONFIG_EROFS_FS_ONDEMAND=y
+CONFIG_CACHEFILES_ONDEMAND=y
+KERNELCONFIG
 cat > "$MODPROBE_OK" <<'FAKEMODPROBE'
 #!/usr/bin/env bash
 printf '%s\n' "$1" >> "${MODPROBE_CALLS:?}"
+if [ "$1" = "cachefiles" ] && [ "${FAKE_CACHEFILES_CREATE:-0}" = "1" ]; then
+  : > "${CACHEFILES_DEVICE:?}"
+fi
 FAKEMODPROBE
 cat > "$MODPROBE_FAIL" <<'FAKEMODPROBE'
 #!/usr/bin/env bash
 [ "$1" = "cachefiles" ] && exit 1
 exit 0
 FAKEMODPROBE
-chmod 0755 "$MODPROBE_OK" "$MODPROBE_FAIL"
+cat > "$SYSTEMCTL_FAKE" <<'FAKESYSTEMCTL'
+#!/usr/bin/env bash
+printf '%s\n' "$*" >> "${SYSTEMCTL_LOG:?}"
+exit 0
+FAKESYSTEMCTL
+chmod 0755 "$MODPROBE_OK" "$MODPROBE_FAIL" "$SYSTEMCTL_FAKE"
 
 ROOT_MOD_OK="${WORK}/root-mod-ok"
-MODPROBE="$MODPROBE_OK" MODPROBE_CALLS="$MODPROBE_CALLS" P2P_ROOT="$ROOT_MOD_OK" NYDUS_CLUSTER_ID=node-a \
-  SKIP_DOWNLOAD=1 SKIP_SYSTEMD=1 SKIP_PREFLIGHT=1 CONTAINERD_MAJOR=1 \
+mkdir -p "${ROOT_MOD_OK}/lib/systemd/system"
+printf '[Unit]\nDescription=test cachefilesd unit\n' > "${ROOT_MOD_OK}/lib/systemd/system/cachefilesd.service"
+MODPROBE="$MODPROBE_OK" MODPROBE_CALLS="$MODPROBE_CALLS" FAKE_CACHEFILES_CREATE=1 \
+  KERNEL_CONFIG_FILE="$KERNEL_CONFIG" CACHEFILES_DEVICE="$CACHEFILES_DEVICE" \
+  SYSTEMCTL="$SYSTEMCTL_FAKE" SYSTEMCTL_LOG="$SYSTEMCTL_LOG" \
+  P2P_ROOT="$ROOT_MOD_OK" NYDUS_CLUSTER_ID=node-a \
+  SKIP_DOWNLOAD=1 SKIP_PREFLIGHT=1 CONTAINERD_MAJOR=1 \
   bash "$INSTALL" "$CFG" > "${WORK}/mod-ok.log" 2>&1
 assert_contains "$MODPROBE_CALLS" 'erofs'
 assert_contains "$MODPROBE_CALLS" 'fscache'
 assert_contains "$MODPROBE_CALLS" 'cachefiles'
+assert_file "$CACHEFILES_DEVICE"
+assert_file "${ROOT_MOD_OK}/etc/modules-load.d/nydus.conf"
+assert_contains "${ROOT_MOD_OK}/etc/modules-load.d/nydus.conf" 'erofs'
+assert_contains "${ROOT_MOD_OK}/etc/modules-load.d/nydus.conf" 'cachefiles'
+assert_count "${ROOT_MOD_OK}/etc/modules-load.d/nydus.conf" 'erofs' 1
+assert_not_contains "${ROOT_MOD_OK}/etc/modules-load.d/nydus.conf" 'fscache'
+assert_contains "$SYSTEMCTL_LOG" 'disable --now cachefilesd.service'
+assert_contains "$SYSTEMCTL_LOG" 'mask cachefilesd.service'
+assert_not_contains "$SYSTEMCTL_LOG" 'start cachefilesd.service'
+assert_not_contains "$SYSTEMCTL_LOG" 'enable --now cachefilesd.service'
+assert_contains "${WORK}/mod-ok.log" 'fscache ready: kernel on-demand config verified'
+assert_contains "${WORK}/mod-ok.log" 'cachefilesd disabled and masked'
+assert_contains "${WORK}/mod-ok.log" 'rafs_version: 6'
 assert_contains "${ROOT_MOD_OK}/etc/nydus/config.toml" 'fs_driver = "fscache"'
 assert_contains "${ROOT_MOD_OK}/etc/nydus/nydusd-config.fscache.json" '"id": "node-a"'
 assert_contains "${ROOT_MOD_OK}/etc/nydus/nydusd-config.fscache.json" '"domain_id": "node-a"'
 assert_not_contains "${ROOT_MOD_OK}/etc/nydus/nydusd-config.fscache.json" 'k3s-gpu-erofs'
 
 ROOT_MOD_FAIL="${WORK}/root-mod-fail"
-MODPROBE="$MODPROBE_FAIL" P2P_ROOT="$ROOT_MOD_FAIL" SKIP_DOWNLOAD=1 SKIP_SYSTEMD=1 SKIP_PREFLIGHT=1 CONTAINERD_MAJOR=1 \
+MODPROBE="$MODPROBE_FAIL" KERNEL_CONFIG_FILE="$KERNEL_CONFIG" CACHEFILES_DEVICE="$CACHEFILES_DEVICE" \
+  P2P_ROOT="$ROOT_MOD_FAIL" SKIP_DOWNLOAD=1 SKIP_SYSTEMD=1 SKIP_PREFLIGHT=1 CONTAINERD_MAJOR=1 \
   bash "$INSTALL" "$CFG" > "${WORK}/mod-fail.log" 2>&1
 assert_contains "${WORK}/mod-fail.log" 'ERROR: could not load kernel module cachefiles required by fscache'
-assert_contains "${WORK}/mod-fail.log" 'falling back to fusedev'
+assert_contains "${WORK}/mod-fail.log" 'fscache prerequisites are not met; falling back to fusedev'
 assert_contains "${ROOT_MOD_FAIL}/etc/nydus/config.toml" 'fs_driver = "fusedev"'
 assert_contains "${ROOT_MOD_FAIL}/etc/nydus/config.toml" 'nydusd_config = "/etc/nydus/nydusd-config.json"'
 assert_contains "${ROOT_MOD_FAIL}/etc/systemd/system/nydus-snapshotter-bootstrap.service" \
   '--nydusd-config /etc/nydus/nydusd-config.json'
+if [ -f "${ROOT_MOD_FAIL}/etc/modules-load.d/nydus.conf" ]; then
+  echo "p2p-static self-test: module fallback left modules-load.d behind" >&2
+  exit 1
+fi
+
+ROOT_MOD_BADCFG="${WORK}/root-mod-badcfg"
+BAD_KERNEL_CONFIG="${WORK}/kernel-config-bad"
+printf 'CONFIG_EROFS_FS_ONDEMAND=y\n' > "$BAD_KERNEL_CONFIG"
+MODPROBE="$MODPROBE_OK" MODPROBE_CALLS="${WORK}/modprobe-calls-badcfg" FAKE_CACHEFILES_CREATE=1 \
+  KERNEL_CONFIG_FILE="$BAD_KERNEL_CONFIG" CACHEFILES_DEVICE="$CACHEFILES_DEVICE" \
+  P2P_ROOT="$ROOT_MOD_BADCFG" SKIP_DOWNLOAD=1 SKIP_SYSTEMD=1 SKIP_PREFLIGHT=1 CONTAINERD_MAJOR=1 \
+  bash "$INSTALL" "$CFG" > "${WORK}/mod-badcfg.log" 2>&1
+assert_contains "${WORK}/mod-badcfg.log" 'CONFIG_CACHEFILES_ONDEMAND=y'
+assert_contains "${WORK}/mod-badcfg.log" 'fscache prerequisites are not met; falling back to fusedev'
+assert_contains "${ROOT_MOD_BADCFG}/etc/nydus/config.toml" 'fs_driver = "fusedev"'
+if [ -f "${ROOT_MOD_BADCFG}/etc/modules-load.d/nydus.conf" ]; then
+  echo "p2p-static self-test: kernel-config fallback left modules-load.d behind" >&2
+  exit 1
+fi
+
+ROOT_MOD_NODEV="${WORK}/root-mod-nodev"
+MISSING_DEVICE="${WORK}/missing-device"
+rm -f "$MISSING_DEVICE"
+MODPROBE="$MODPROBE_OK" MODPROBE_CALLS="${WORK}/modprobe-calls-nodev" FAKE_CACHEFILES_CREATE=0 \
+  KERNEL_CONFIG_FILE="$KERNEL_CONFIG" CACHEFILES_DEVICE="$MISSING_DEVICE" \
+  P2P_ROOT="$ROOT_MOD_NODEV" SKIP_DOWNLOAD=1 SKIP_SYSTEMD=1 SKIP_PREFLIGHT=1 CONTAINERD_MAJOR=1 \
+  bash "$INSTALL" "$CFG" > "${WORK}/mod-nodev.log" 2>&1
+assert_contains "${WORK}/mod-nodev.log" 'did not appear after loading cachefiles'
+assert_contains "${WORK}/mod-nodev.log" 'fscache prerequisites are not met; falling back to fusedev'
+assert_contains "${ROOT_MOD_NODEV}/etc/nydus/config.toml" 'fs_driver = "fusedev"'
+if [ -f "${ROOT_MOD_NODEV}/etc/modules-load.d/nydus.conf" ]; then
+  echo "p2p-static self-test: device fallback left modules-load.d behind" >&2
+  exit 1
+fi
+
+README="${HERE}/../README.md"
+assert_file "$README"
+assert_contains "$README" 'CONFIG_EROFS_FS_ONDEMAND=y'
+assert_contains "$README" 'CONFIG_CACHEFILES_ONDEMAND=y'
+assert_contains "$README" 'modules-load.d/nydus.conf'
+assert_contains "$README" 'rafs_version: 6'
+assert_not_contains "$README" 'k3s-gpu-erofs'
 
 if command -v shellcheck >/dev/null 2>&1; then
   shellcheck "$INSTALL" "$0" || {

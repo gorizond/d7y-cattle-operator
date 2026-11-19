@@ -373,34 +373,124 @@ preflight() {
 
 preflight
 
-# fscache (EROFS over the kernel fscache/cachefiles stack) needs all three
-# modules. When they are unavailable, fall back to fusedev explicitly instead
-# of starting a snapshotter that cannot mount images.
+# fscache (EROFS over the kernel fscache/cachefiles stack) needs kernel
+# on-demand support, the erofs/fscache/cachefiles modules, and a free
+# /dev/cachefiles. Any missing prerequisite falls back to fusedev explicitly
+# instead of starting a snapshotter that cannot mount images.
 MODPROBE_BIN="${MODPROBE:-modprobe}"
-load_kernel_modules() {
-  local module
-  case "$NYDUS_FS_DRIVER" in
-    fscache)
-      for module in erofs fscache cachefiles; do
-        if ! "$MODPROBE_BIN" "$module" >/dev/null 2>&1; then
-          log "ERROR: could not load kernel module ${module} required by fscache"
-          return 1
-        fi
-      done
-      ;;
-    *)
-      for module in fuse erofs; do
-        "$MODPROBE_BIN" "$module" >/dev/null 2>&1 || log "warning: could not load module ${module}"
-      done
-      ;;
-  esac
+SYSTEMCTL_BIN="${SYSTEMCTL:-systemctl}"
+CACHEFILES_DEVICE="${CACHEFILES_DEVICE:-/dev/cachefiles}"
+KERNEL_CONFIG_FILE="${KERNEL_CONFIG_FILE:-}"
+
+# Ubuntu 24.04 HWE 6.8/6.12 exposes the config at /boot/config-$(uname -r);
+# /proc/config.gz is the fallback. EROFS on-demand read is what lets the
+# fscache driver serve RAFS v6 blobs.
+kernel_config_file() {
+  local candidate
+  if [ -n "$KERNEL_CONFIG_FILE" ]; then
+    printf '%s' "$KERNEL_CONFIG_FILE"
+    return 0
+  fi
+  candidate="${ROOT}/boot/config-$(uname -r)"
+  if [ -r "$candidate" ]; then
+    printf '%s' "$candidate"
+    return 0
+  fi
+  if [ "$REAL_ROOT" = "1" ] && [ -r /proc/config.gz ] && command -v zcat >/dev/null 2>&1; then
+    if zcat /proc/config.gz > "$TMP/kernel-config" 2>/dev/null; then
+      printf '%s' "$TMP/kernel-config"
+      return 0
+    fi
+  fi
+  return 1
 }
+
+check_fscache_kernel_config() {
+  local cfg key found
+  if ! cfg="$(kernel_config_file)"; then
+    log "ERROR: no readable kernel config (${ROOT}/boot/config-$(uname -r) or /proc/config.gz); cannot verify CONFIG_EROFS_FS_ONDEMAND=y and CONFIG_CACHEFILES_ONDEMAND=y"
+    return 1
+  fi
+  if [ ! -r "$cfg" ]; then
+    log "ERROR: kernel config ${cfg} is not readable; cannot verify CONFIG_EROFS_FS_ONDEMAND=y and CONFIG_CACHEFILES_ONDEMAND=y"
+    return 1
+  fi
+  for key in CONFIG_EROFS_FS_ONDEMAND CONFIG_CACHEFILES_ONDEMAND; do
+    found="$(grep -m1 "^${key}=" "$cfg" 2>/dev/null || true)"
+    if [ "$found" != "${key}=y" ]; then
+      log "ERROR: ${key}=y is required for EROFS over fscache (${cfg} has '${found:-unset}')"
+      return 1
+    fi
+  done
+}
+
+# nydusd's fscache driver must own /dev/cachefiles. If the distro cachefilesd
+# package is installed, stop/disable/mask it so it cannot claim the device or
+# serve a competing cache. Never start it.
+disable_system_cachefilesd() {
+  local unit
+  for unit in \
+    "${ROOT}/etc/systemd/system/cachefilesd.service" \
+    "${ROOT}/usr/lib/systemd/system/cachefilesd.service" \
+    "${ROOT}/lib/systemd/system/cachefilesd.service"; do
+    if [ -e "$unit" ]; then
+      "$SYSTEMCTL_BIN" stop cachefilesd.service >/dev/null 2>&1 || true
+      "$SYSTEMCTL_BIN" disable cachefilesd.service >/dev/null 2>&1 || true
+      if "$SYSTEMCTL_BIN" mask cachefilesd.service >/dev/null 2>&1; then
+        log "cachefilesd stopped, disabled, and masked; nydusd fscache owns ${CACHEFILES_DEVICE}"
+      else
+        log "warning: could not mask cachefilesd.service; verify ${CACHEFILES_DEVICE} is not held by cachefilesd"
+      fi
+      return 0
+    fi
+  done
+  log "cachefilesd is not installed; nydusd fscache owns ${CACHEFILES_DEVICE}"
+}
+
+prepare_fscache() {
+  local module
+  for module in erofs fscache cachefiles; do
+    if ! "$MODPROBE_BIN" "$module" >/dev/null 2>&1; then
+      log "ERROR: could not load kernel module ${module} required by fscache"
+      return 1
+    fi
+  done
+  if [ ! -e "$CACHEFILES_DEVICE" ]; then
+    log "ERROR: ${CACHEFILES_DEVICE} is missing after loading cachefiles; nydusd fscache needs it"
+    return 1
+  fi
+  if [ "${SKIP_SYSTEMD:-0}" != "1" ] && { [ "$REAL_ROOT" = "1" ] || [ -n "${SYSTEMCTL:-}" ]; }; then
+    disable_system_cachefilesd
+  fi
+  log "fscache ready: erofs/fscache/cachefiles loaded, ${CACHEFILES_DEVICE} present"
+}
+
+load_fusedev_modules() {
+  local module
+  for module in fuse erofs; do
+    "$MODPROBE_BIN" "$module" >/dev/null 2>&1 || log "warning: could not load module ${module}"
+  done
+}
+
+# On-demand support is a kernel build option, not a loadable module: verify it
+# before touching modules so a 24.04 GA/HWE kernel mismatch fails clearly.
+if [ "$NYDUS_FS_DRIVER" = "fscache" ] && [ "${SKIP_KERNEL_CHECK:-0}" != "1" ] &&
+  { [ "$REAL_ROOT" = "1" ] || [ -n "$KERNEL_CONFIG_FILE" ]; }; then
+  if ! check_fscache_kernel_config; then
+    log "ERROR: fscache selected but the kernel lacks the required on-demand options; falling back to fusedev"
+    NYDUS_FS_DRIVER="fusedev"
+  fi
+fi
 
 if [ "${SKIP_MODULES:-0}" != "1" ] && { [ "$REAL_ROOT" = "1" ] || [ -n "${MODPROBE:-}" ]; }; then
   if command -v "$MODPROBE_BIN" >/dev/null 2>&1; then
-    if ! load_kernel_modules; then
-      log "ERROR: fscache selected but erofs/fscache/cachefiles are unavailable; falling back to fusedev"
-      NYDUS_FS_DRIVER="fusedev"
+    if [ "$NYDUS_FS_DRIVER" = "fscache" ]; then
+      if ! prepare_fscache; then
+        log "ERROR: fscache selected but erofs/fscache/cachefiles are unavailable; falling back to fusedev"
+        NYDUS_FS_DRIVER="fusedev"
+      fi
+    else
+      load_fusedev_modules
     fi
   elif [ "$NYDUS_FS_DRIVER" = "fscache" ]; then
     log "ERROR: fscache selected but ${MODPROBE_BIN} is unavailable; falling back to fusedev"
@@ -408,6 +498,16 @@ if [ "${SKIP_MODULES:-0}" != "1" ] && { [ "$REAL_ROOT" = "1" ] || [ -n "${MODPRO
   else
     log "warning: ${MODPROBE_BIN} is not available"
   fi
+fi
+
+# Declarative boot-time module loading for the fscache stack. cachefiles pulls
+# fscache as a dependency; the modules-load.d file only lists the two modules
+# the snapshotter mounts need.
+if [ "$NYDUS_FS_DRIVER" = "fscache" ]; then
+  write_file "${ROOT}/etc/modules-load.d/nydus.conf" 0644 <<'MODULES'
+erofs
+cachefiles
+MODULES
 fi
 
 case "$NYDUS_FS_DRIVER" in
@@ -510,6 +610,7 @@ TOML
   if [ -n "${NYDUS_MIRROR_URL:-}" ]; then
     log "warning: NYDUS_MIRROR_URL is only applied with fs_driver=fusedev; the fscache nydusd config keeps the dfdaemon proxy"
   fi
+  log "fscache requires RAFS v6 images; Harbor conversions must set rafs_version: 6 (owned by the registry proxy, not this chart)"
 else
   {
     cat <<'TOML'
