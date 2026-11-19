@@ -13,6 +13,22 @@ import (
 	"github.com/gorizond/d7y-cattle-operator/pkg/helmop"
 )
 
+func TestEnsureGeneratedSecretHonorsKeyLength(t *testing.T) {
+	controller, _, _ := newTestController(t)
+	cluster := &provv1.Cluster{ObjectMeta: metav1.ObjectMeta{Name: "c1", Namespace: "fleet-default"}}
+
+	if err := controller.ensureGeneratedSecret(cluster, "c1-harbor-secret", "secretKey", 16); err != nil {
+		t.Fatalf("ensureGeneratedSecret() error = %v", err)
+	}
+	secret, err := controller.secrets.(*fakeSecretStore).Get("fleet-default", "c1-harbor-secret", metav1.GetOptions{})
+	if err != nil {
+		t.Fatalf("generated Secret was not created: %v", err)
+	}
+	if got := len(secret.Data["secretKey"]); got != 32 {
+		t.Fatalf("secretKey length = %d, want 32 hex chars (16 raw bytes)", got)
+	}
+}
+
 func TestReconcileHarborAndProxy(t *testing.T) {
 	controller, store, events := newTestController(t)
 	clusterStore := controller.clusters.(*fakeClusterStore)

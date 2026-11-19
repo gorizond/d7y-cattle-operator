@@ -47,7 +47,7 @@ func (c *Controller) ensureHarbor(cluster *provv1.Cluster, hc helmop.Cluster, ro
 		return err
 	}
 	dbSecretName := helmop.HarborDBSecretName(cluster.Name)
-	if err := c.ensureGeneratedSecret(cluster, dbSecretName, "password"); err != nil {
+	if err := c.ensureGeneratedSecret(cluster, dbSecretName, "password", 32); err != nil {
 		return err
 	}
 	dbSecret, err := c.secrets.Get(cluster.Namespace, dbSecretName, metav1.GetOptions{})
@@ -58,7 +58,7 @@ func (c *Controller) ensureHarbor(cluster *provv1.Cluster, hc helmop.Cluster, ro
 		return fmt.Errorf("generated Harbor DB Secret %s/%s has no password", cluster.Namespace, dbSecretName)
 	}
 	hc.HarborDBPassword = string(dbSecret.Data["password"])
-	if err := c.ensureGeneratedSecret(cluster, hc.HarborSecretKey, "secretKey"); err != nil {
+	if err := c.ensureGeneratedSecret(cluster, hc.HarborSecretKey, "secretKey", 16); err != nil {
 		return err
 	}
 	return c.applyHelmOp(cluster, helmop.Harbor(hc))
@@ -101,7 +101,7 @@ func (c *Controller) ensureRegistryProxy(cluster *provv1.Cluster, hc helmop.Clus
 	if err := c.ensureHarborAdminSecret(cluster, hc); err != nil {
 		return err
 	}
-	if err := c.ensureGeneratedSecret(cluster, hc.ProxyWebhookSecretName, "secret"); err != nil {
+	if err := c.ensureGeneratedSecret(cluster, hc.ProxyWebhookSecretName, "secret", 32); err != nil {
 		return err
 	}
 	if err := c.ensureRegistryProxyRobotSecret(cluster, hc); err != nil {
@@ -277,13 +277,13 @@ func cloneSecretData(data map[string][]byte) map[string][]byte {
 
 // ensureGeneratedSecret creates a per-cluster random Secret once and preserves
 // it on later reconciles. Values are never logged or placed in HelmOp values.
-func (c *Controller) ensureGeneratedSecret(cluster *provv1.Cluster, name, key string) error {
+func (c *Controller) ensureGeneratedSecret(cluster *provv1.Cluster, name, key string, rawBytes int) error {
 	if _, err := c.secrets.Get(cluster.Namespace, name, metav1.GetOptions{}); err == nil {
 		return nil
 	} else if !apierrors.IsNotFound(err) {
 		return fmt.Errorf("get generated Secret %s/%s: %w", cluster.Namespace, name, err)
 	}
-	raw := make([]byte, 32)
+	raw := make([]byte, rawBytes)
 	if _, err := rand.Read(raw); err != nil {
 		return fmt.Errorf("generate Secret %s/%s: %w", cluster.Namespace, name, err)
 	}

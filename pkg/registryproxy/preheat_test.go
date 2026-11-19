@@ -5,7 +5,6 @@ import (
 	"encoding/json"
 	"net/http"
 	"net/http/httptest"
-	"strconv"
 	"strings"
 	"sync"
 	"testing"
@@ -50,14 +49,13 @@ func (f *fakePreheatHarbor) handler(t *testing.T) http.Handler {
 				Endpoint: stringValue(body["endpoint"]),
 			})
 			w.WriteHeader(http.StatusCreated)
-		case r.Method == http.MethodPut && strings.HasPrefix(r.URL.Path, harborPreheatInstancesPath+"/"):
+		case r.Method == http.MethodPut && r.URL.Path == harborPreheatInstancesPath+"/dragonfly":
 			f.puts++
 			var body map[string]any
 			_ = json.NewDecoder(r.Body).Decode(&body)
 			f.lastBody = body
-			id, _ := strconv.Atoi(strings.TrimPrefix(r.URL.Path, harborPreheatInstancesPath+"/"))
-			if id != 7 {
-				t.Errorf("PUT id = %d, want 7", id)
+			if body["id"] != float64(7) {
+				t.Errorf("PUT body id = %v, want 7", body["id"])
 			}
 			w.WriteHeader(http.StatusOK)
 		case r.Method == http.MethodPost && r.URL.Path == harborPreheatPingPath:

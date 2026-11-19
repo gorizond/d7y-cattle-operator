@@ -595,7 +595,9 @@ func (h *HarborClient) findPreheatInstance(ctx context.Context, name string) (*H
 }
 
 func (h *HarborClient) putPreheatInstance(ctx context.Context, name string, id int, payload map[string]any) error {
-	status, err := h.do(ctx, http.MethodPut, harborPreheatInstancesPath+"/"+strconv.Itoa(id), payload, nil)
+	// Harbor addresses preheat instances by name; the numeric id belongs in the
+	// body because the controller updates the instance named there.
+	status, err := h.do(ctx, http.MethodPut, harborPreheatInstancesPath+"/"+url.PathEscape(name), payload, nil)
 	if err != nil {
 		return fmt.Errorf("harbor update preheat instance %q: %w", name, err)
 	}
