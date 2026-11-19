@@ -470,7 +470,14 @@ func newSharedHelmOp(name, targetNamespace string, c Cluster, chart Chart, compo
 		Chart:       chart.Name,
 		Version:     chart.Version,
 		ReleaseName: name,
-		Values:      &fleetv1alpha1.GenericMap{Data: values},
+		// Shared HelmOps replace the per-cluster <cluster>-<component>
+		// releases during migration, so downstream resources still carry the
+		// old release-name/release-namespace Helm annotations. Without
+		// takeOwnership Helm refuses to adopt them, e.g.
+		// PodDisruptionBudget "poligon-keydb" ... "meta.helm.sh/release-name"
+		// must equal "d7y-keydb": current value is "poligon-keydb".
+		TakeOwnership: true,
+		Values:        &fleetv1alpha1.GenericMap{Data: values},
 	}
 	op.Spec.Targets = []fleetv1alpha1.BundleTarget{{
 		ClusterSelector: &metav1.LabelSelector{MatchLabels: selector},
