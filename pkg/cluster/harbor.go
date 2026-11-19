@@ -98,6 +98,14 @@ func (c *Controller) ensureSharedRegistryProxy(cluster *provv1.Cluster, hc helmo
 	if err := c.ensureRegistryProxyRobotSecret(cluster, hc); err != nil {
 		return err
 	}
+	if c.opts.ProxyBasicAuthEnabled {
+		username, err := c.ensureRegistryProxyBasicAuthSecret(cluster, c.opts.ProxyBasicAuthUsername)
+		if err != nil {
+			return err
+		}
+		hc.ProxyBasicAuthUsername = username
+	}
+	hc.ProxyBasicAuthEnabled = c.opts.ProxyBasicAuthEnabled
 	// A rotated robot Secret must roll the proxy pods, which read the mounted
 	// credentials only at bootstrap.
 	hc.ProxyRobotSecretRevision = c.robotSecretRevision(cluster, hc.ProxyRobotSecretName)
@@ -264,6 +272,50 @@ func cloneSecretData(data map[string][]byte) map[string][]byte {
 		copied[key] = append([]byte(nil), value...)
 	}
 	return copied
+}
+
+// ensureRegistryProxyBasicAuthSecret creates the operator-namespace client
+// Basic auth Secret once, then replicates it to the Cluster (HelmOp) namespace
+// for Fleet to deliver downstream. Existing credentials are never overwritten.
+func (c *Controller) ensureRegistryProxyBasicAuthSecret(cluster *provv1.Cluster, username string) (string, error) {
+	name := helmop.SharedRegistryProxyBasicAuthSecretName()
+	username = strings.TrimSpace(username)
+	if username == "" {
+		return "", fmt.Errorf("registry proxy Basic auth username is empty")
+	}
+	source, err := c.secrets.Get(c.opts.OperatorNamespace, name, metav1.GetOptions{})
+	if apierrors.IsNotFound(err) {
+		raw := make([]byte, 32)
+		if _, err := rand.Read(raw); err != nil {
+			return "", fmt.Errorf("generate registry proxy Basic auth Secret %s/%s: %w", c.opts.OperatorNamespace, name, err)
+		}
+		source = &corev1.Secret{
+			ObjectMeta: metav1.ObjectMeta{Name: name, Namespace: c.opts.OperatorNamespace},
+			Type:       corev1.SecretTypeOpaque,
+			Data: map[string][]byte{
+				"username": []byte(username),
+				"password": []byte(hex.EncodeToString(raw)),
+			},
+		}
+		source, err = c.secrets.Create(source)
+		if apierrors.IsAlreadyExists(err) {
+			source, err = c.secrets.Get(c.opts.OperatorNamespace, name, metav1.GetOptions{})
+		}
+	}
+	if err != nil {
+		return "", fmt.Errorf("get registry proxy Basic auth Secret %s/%s: %w", c.opts.OperatorNamespace, name, err)
+	}
+	if _, err := apply.ReplicateSecret(source, cluster.Namespace, c.secrets); err != nil {
+		return "", fmt.Errorf("replicate registry proxy Basic auth Secret to %s/%s: %w", cluster.Namespace, name, err)
+	}
+	username = strings.TrimSpace(string(source.Data["username"]))
+	if username == "" {
+		return "", fmt.Errorf("registry proxy Basic auth Secret %s/%s has no username", c.opts.OperatorNamespace, name)
+	}
+	if len(source.Data["password"]) == 0 {
+		return "", fmt.Errorf("registry proxy Basic auth Secret %s/%s has no password", c.opts.OperatorNamespace, name)
+	}
+	return username, nil
 }
 
 // ensureGeneratedSecret creates a per-cluster random Secret once and preserves

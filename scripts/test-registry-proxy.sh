@@ -121,6 +121,35 @@ if grep -q 'robot_secret:' "$tmp/named.yaml"; then
   fail "proxy config must not carry the robot Secret name"
 fi
 
+# Optional client Basic auth: render config plus the mounted Secret only when
+# enabled; the default remains network-only with no extra volume.
+auth_ref="proxy-auth-$(date +%s%N)"
+helm template registry-proxy "$chart" --namespace dragonfly-system \
+  --set auth.mode=basic --set auth.username=d7y-proxy \
+  --set "auth.passwordSecret=$auth_ref" \
+  --show-only templates/configmap.yaml >"$tmp/auth-config.yaml"
+grep -q 'mode: "basic"' "$tmp/auth-config.yaml" || fail "basic auth mode is missing"
+grep -q 'username: "d7y-proxy"' "$tmp/auth-config.yaml" || fail "basic auth username is missing"
+grep -q 'password_file: /etc/registry-proxy/secrets/auth/password' "$tmp/auth-config.yaml" || \
+  fail "basic auth password_file is missing"
+
+helm template registry-proxy "$chart" --namespace dragonfly-system \
+  --set auth.mode=basic --set auth.username=d7y-proxy \
+  --set "auth.passwordSecret=$auth_ref" \
+  --show-only templates/deployment.yaml >"$tmp/auth-deployment.yaml"
+grep -q 'name: basic-auth' "$tmp/auth-deployment.yaml" || fail "basic auth volume is missing"
+grep -q "secretName: \"$auth_ref\"" "$tmp/auth-deployment.yaml" || fail "basic auth Secret mount is missing"
+grep -q 'mountPath: /etc/registry-proxy/secrets/auth' "$tmp/auth-deployment.yaml" || \
+  fail "basic auth mount path is missing"
+grep -q 'key: password' "$tmp/auth-deployment.yaml" || fail "basic auth Secret key is missing"
+grep -q 'mode: "network-only"' "$tmp/proxy.yaml" || fail "default auth mode is not network-only"
+if grep -q 'password_file:' "$tmp/proxy.yaml"; then fail "default render carries a password_file"; fi
+if grep -q 'name: basic-auth' "$tmp/proxy.yaml"; then fail "default render mounts basic auth"; fi
+if helm template registry-proxy "$chart" --namespace dragonfly-system \
+  --set auth.mode=basic --set auth.username=d7y-proxy >/dev/null 2>&1; then
+  fail "basic auth without auth.passwordSecret must fail"
+fi
+
 if grep -q 'kind: PersistentVolumeClaim' "$tmp/proxy.yaml"; then
   fail "registry-proxy must not render a PVC"
 fi

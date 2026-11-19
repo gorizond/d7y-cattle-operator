@@ -29,7 +29,7 @@ func RegistryProxy(c Cluster) *fleetv1alpha1.HelmOp {
 	// no dependsOn on it. Use harbor-url/proxy.domain for external endpoints.
 	op := newHelmOp(RegistryProxyName(c.Name), c, c.RegistryProxyChart, "registry-proxy", values, nil)
 	op.Spec.DownstreamResources = registryProxyDownstreamResources(
-		c.HarborAdminSecret, c.ProxyWebhookSecretName, c.ProxyRobotSecretName)
+		c.HarborAdminSecret, c.ProxyWebhookSecretName, c.ProxyRobotSecretName, "")
 	return op
 }
 
@@ -53,20 +53,30 @@ func SharedRegistryProxy(c Cluster) *fleetv1alpha1.HelmOp {
 		harborURL:         harborURL,
 		webhookAddress:    SharedProxyWebhookAddressTemplate,
 		hostAliases:       sharedProxyHostAliasesTemplate(c.ProxyHostAliases),
+		basicAuthEnabled:  c.ProxyBasicAuthEnabled,
+		basicAuthUsername: c.ProxyBasicAuthUsername,
 	})
+	basicAuthSecret := ""
+	if c.ProxyBasicAuthEnabled {
+		basicAuthSecret = SharedRegistryProxyBasicAuthSecretName()
+	}
 	op := newSharedHelmOp(SharedRegistryProxyName(), TargetNamespace, c, c.RegistryProxyChart,
 		"registry-proxy", values, nil, ProxySelector())
 	op.Spec.DownstreamResources = registryProxyDownstreamResources(
-		SharedHarborAdminSecretName(), SharedRegistryProxyWebhookSecretName(), SharedRegistryProxyRobotSecretName())
+		SharedHarborAdminSecretName(), SharedRegistryProxyWebhookSecretName(), SharedRegistryProxyRobotSecretName(), basicAuthSecret)
 	return op
 }
 
-func registryProxyDownstreamResources(harborAdmin, webhook, robot string) []fleetv1alpha1.DownstreamResource {
-	return []fleetv1alpha1.DownstreamResource{
+func registryProxyDownstreamResources(harborAdmin, webhook, robot, basicAuth string) []fleetv1alpha1.DownstreamResource {
+	resources := []fleetv1alpha1.DownstreamResource{
 		{Kind: "Secret", Name: harborAdmin},
 		{Kind: "Secret", Name: webhook},
 		{Kind: "Secret", Name: robot},
 	}
+	if basicAuth != "" {
+		resources = append(resources, fleetv1alpha1.DownstreamResource{Kind: "Secret", Name: basicAuth})
+	}
+	return resources
 }
 
 // registryProxyWebhookAddress is the Harbor PUSH_ARTIFACT target used when the
@@ -147,6 +157,8 @@ type registryProxyOptions struct {
 	harborURL         string
 	webhookAddress    string
 	hostAliases       any
+	basicAuthEnabled  bool
+	basicAuthUsername string
 }
 
 func registryProxyValues(c Cluster, opts registryProxyOptions) map[string]any {
@@ -171,6 +183,9 @@ func registryProxyValues(c Cluster, opts registryProxyOptions) map[string]any {
 			"url":         opts.harborURL,
 			"adminSecret": opts.harborAdminSecret,
 			"robotSecret": opts.robotSecret,
+		},
+		"auth": map[string]any{
+			"mode": "network-only",
 		},
 		"mirror": map[string]any{"project": RegistryProxyMirrorProject},
 		"registry": map[string]any{
@@ -197,6 +212,12 @@ func registryProxyValues(c Cluster, opts registryProxyOptions) map[string]any {
 	}
 	if opts.fullnameOverride != "" {
 		values["fullnameOverride"] = opts.fullnameOverride
+	}
+	if opts.basicAuthEnabled {
+		auth := values["auth"].(map[string]any)
+		auth["mode"] = "basic"
+		auth["username"] = opts.basicAuthUsername
+		auth["passwordSecret"] = SharedRegistryProxyBasicAuthSecretName()
 	}
 	if c.ProxyRobotSecretRevision != "" {
 		values["podAnnotations"] = map[string]any{

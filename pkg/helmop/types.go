@@ -201,6 +201,10 @@ func SharedRegistryProxyRobotSecretName() string { return "d7y-registry-proxy-ro
 // SharedRegistryProxyWebhookSecretName is the fleet-wide Harbor webhook Secret.
 func SharedRegistryProxyWebhookSecretName() string { return "d7y-registry-proxy-webhook" }
 
+// SharedRegistryProxyBasicAuthSecretName is the fleet-wide client Basic auth
+// Secret shared by every registry-proxy target.
+func SharedRegistryProxyBasicAuthSecretName() string { return "d7y-registry-proxy-basic-auth" }
+
 // GateSelector matches every Cluster that opted into the Dragonfly stack. KeyDB
 // must reach manager-only and label-only Clusters too: the manager, Harbor and
 // registry-proxy releases point at the cluster-local <cluster>-keydb Service.
@@ -353,6 +357,9 @@ type Cluster struct {
 	ProxyRegistries        []string
 	ProxyWebhookSecretName string
 	ProxyRobotSecretName   string
+	// ProxyBasicAuthEnabled enables client Basic auth on /v2 reads.
+	ProxyBasicAuthEnabled  bool
+	ProxyBasicAuthUsername string
 	// ProxyRobotSecretRevision rolls proxy pods when robot credentials rotate.
 	ProxyRobotSecretRevision string
 	// AdmissionEnabled is the independent p2p.dragonfly.io/admission role.
