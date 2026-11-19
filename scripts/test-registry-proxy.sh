@@ -93,14 +93,14 @@ grep -q -- '- "*"' "$tmp/proxy.yaml" || fail "proxy allow-any allowlist is missi
 
 # Robot auth data is provisioned by the operator and copied by Fleet; the
 # proxy only reads the mounted Secret and keeps get as its sole API verb.
-helm template poligon-registry-proxy "$chart" --namespace dragonfly-system \
-  --set harbor.robotSecret=poligon-registry-proxy-robot \
-  --set webhook.secretName=poligon-registry-proxy-webhook >"$tmp/named.yaml"
-grep -q 'secretName: poligon-registry-proxy-robot' "$tmp/named.yaml" || \
+helm template c1-registry-proxy "$chart" --namespace dragonfly-system \
+  --set harbor.robotSecret=c1-registry-proxy-robot \
+  --set webhook.secretName=c1-registry-proxy-webhook >"$tmp/named.yaml"
+grep -q 'secretName: c1-registry-proxy-robot' "$tmp/named.yaml" || \
   fail "proxy robot Secret mount does not use the configured name"
-grep -q 'name: poligon-registry-proxy-robot-secret' "$tmp/named.yaml" || \
+grep -q 'name: c1-registry-proxy-robot-secret' "$tmp/named.yaml" || \
   fail "proxy robot Secret Role name is missing"
-grep -q 'resourceNames: \["poligon-registry-proxy-robot"\]' "$tmp/named.yaml" || \
+grep -q 'resourceNames: \["c1-registry-proxy-robot"\]' "$tmp/named.yaml" || \
   fail "RBAC resourceNames does not scope the robot Secret"
 grep -q 'verbs: \["get"\]' "$tmp/named.yaml" || \
   fail "RBAC does not grant get on the robot Secret"
