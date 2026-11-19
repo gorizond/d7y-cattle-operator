@@ -49,7 +49,7 @@ func TestSharedHelmOpNamesAndReleases(t *testing.T) {
 		if len(entry.op.Spec.Targets) != 1 || entry.op.Spec.Targets[0].ClusterName != "" {
 			t.Errorf("%s targets = %+v, want one selector target", component, entry.op.Spec.Targets)
 		}
-		if component != "harbor" && entry.op.Spec.Helm != nil && len(entry.op.Spec.Helm.PreserveOnReplace) != 0 {
+		if entry.op.Spec.Helm != nil && len(entry.op.Spec.Helm.PreserveOnReplace) != 0 {
 			t.Errorf("%s preserveOnReplace = %+v, want none", component, entry.op.Spec.Helm.PreserveOnReplace)
 		}
 	}
@@ -367,15 +367,14 @@ func TestSharedHarborValues(t *testing.T) {
 	c.HarborDBPassword = "db-password"
 	op := SharedHarbor(c)
 
-	if op.Spec.Helm == nil || op.Spec.Helm.Force != true {
-		t.Errorf("shared Harbor force = %+v, want true for the immutable release-name selectors", op.Spec.Helm)
+	if op.Spec.Helm == nil {
+		t.Fatal("shared Harbor spec.helm is nil")
 	}
-	if len(op.Spec.Helm.PreserveOnReplace) != 1 ||
-		op.Spec.Helm.PreserveOnReplace[0].APIVersion != "v1" ||
-		op.Spec.Helm.PreserveOnReplace[0].Kind != "PersistentVolumeClaim" ||
-		len(op.Spec.Helm.PreserveOnReplace[0].Paths) != 1 ||
-		op.Spec.Helm.PreserveOnReplace[0].Paths[0].Path != "/spec/volumeName" {
-		t.Errorf("preserveOnReplace = %+v, want the PVC /spec/volumeName rule", op.Spec.Helm.PreserveOnReplace)
+	if op.Spec.Helm.Force {
+		t.Errorf("shared Harbor force = true, want unset after the one-time adoption")
+	}
+	if len(op.Spec.Helm.PreserveOnReplace) != 0 {
+		t.Errorf("shared Harbor preserveOnReplace = %+v, want none (the supported Fleet CRD prunes it)", op.Spec.Helm.PreserveOnReplace)
 	}
 	values := op.Spec.Helm.Values.Data
 	if got := values["fullnameOverride"]; got != SharedHarborFullnameTemplate {
