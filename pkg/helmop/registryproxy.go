@@ -103,11 +103,15 @@ func registryProxyHostAliases(aliases []HostAlias) []any {
 // a ": " sequence would force quoting and render a string instead of a list.
 // An absent or blank annotation falls back to the static operator-wide list
 // (PROXY_HOST_ALIASES), or [] when that is empty.
-// The if guard is needed because missingkey=error applies to field lookups,
-// but index on a missing map key returns nil.
+//
+// The guard coerces the lookup with default "": Fleet presents annotations as
+// map[string]interface{} (toDict), so index on an absent key returns nil and
+// trim nil fails with "invalid value; expected string" before the if can
+// evaluate. default "" makes trim see a string; an empty result takes the
+// static fallback branch.
 func sharedProxyHostAliasesTemplate(static []HostAlias) string {
 	return fmt.Sprintf(
-		`${ if (trim (index .ClusterAnnotations "p2p.dragonfly.io/proxy-host-aliases")) }`+
+		`${ if (trim (index .ClusterAnnotations "p2p.dragonfly.io/proxy-host-aliases" | default "")) }`+
 			`[${ range $i, $pair := splitList "," (index .ClusterAnnotations "p2p.dragonfly.io/proxy-host-aliases") }${ if $i },${ end }`+
 			`{"ip":${ trim (index (splitn "=" 2 $pair) "_0") | quote },"hostnames":[${ trim (index (splitn "=" 2 $pair) "_1") | quote }]}`+
 			`${ end }]${ else }%s${ end }`,

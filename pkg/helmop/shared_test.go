@@ -413,7 +413,7 @@ func TestSharedHarborValues(t *testing.T) {
 
 func TestSharedRegistryProxyHostAliasesTemplate(t *testing.T) {
 	c := sharedTestCluster()
-	templateString, ok := valueAt(t, SharedRegistryProxy(c).Spec.Helm.Values.Data, "proxy", "hostAliases").(string)
+	noStaticTemplate, ok := valueAt(t, SharedRegistryProxy(c).Spec.Helm.Values.Data, "proxy", "hostAliases").(string)
 	if !ok {
 		t.Fatalf("shared proxy hostAliases = %T, want the Fleet template string",
 			valueAt(t, SharedRegistryProxy(c).Spec.Helm.Values.Data, "proxy", "hostAliases"))
@@ -423,49 +423,59 @@ func TestSharedRegistryProxyHostAliasesTemplate(t *testing.T) {
 		`splitList ","`,
 		`splitn "=" 2 $pair`,
 		`trim (index (splitn "=" 2 $pair) "_0") | quote`,
+		`| default ""`,
 	} {
-		if !strings.Contains(templateString, want) {
-			t.Errorf("shared proxy hostAliases template lacks %q: %s", want, templateString)
+		if !strings.Contains(noStaticTemplate, want) {
+			t.Errorf("shared proxy hostAliases template lacks %q: %s", want, noStaticTemplate)
 		}
 	}
-	if !strings.Contains(templateString, `]${ else }[`) {
-		t.Errorf("shared proxy hostAliases template lacks the empty/static fallback: %s", templateString)
+	if !strings.Contains(noStaticTemplate, `]${ else }[`) {
+		t.Errorf("shared proxy hostAliases template lacks the empty/static fallback: %s", noStaticTemplate)
 	}
 
-	// No annotation and no static list: Fleet renders a real empty list.
-	if rendered := renderFleetValue(t, templateString, map[string]string{}); len(rendered) != 0 {
-		t.Errorf("empty annotation rendered %v, want []", rendered)
-	}
-
-	// Annotation present: a real list of {ip, hostnames:[host]} objects with
-	// trimmed values.
-	rendered := renderFleetValue(t, templateString, map[string]string{
-		AnnotationProxyHostAliases: " 10.43.110.19=harbor.koldun.negash.ru , 10.0.0.2=other.example.com ",
-	})
-	if len(rendered) != 2 {
-		t.Fatalf("annotation rendered %v, want two aliases", rendered)
-	}
-	hosts, _ := rendered[0]["hostnames"].([]any)
-	if rendered[0]["ip"] != "10.43.110.19" || len(hosts) != 1 || hosts[0] != "harbor.koldun.negash.ru" {
-		t.Errorf("rendered alias[0] = %v", rendered[0])
-	}
-
-	// Operator-wide static list is the fallback when the annotation is absent.
 	c.ProxyHostAliases = []HostAlias{{IP: "10.0.0.10", Hostnames: []string{"harbor.example.com"}}}
 	staticTemplate, ok := valueAt(t, SharedRegistryProxy(c).Spec.Helm.Values.Data, "proxy", "hostAliases").(string)
 	if !ok {
 		t.Fatal("shared proxy hostAliases with a static fallback is not a template string")
 	}
-	rendered = renderFleetValue(t, staticTemplate, map[string]string{})
-	hosts, _ = rendered[0]["hostnames"].([]any)
-	if len(rendered) != 1 || rendered[0]["ip"] != "10.0.0.10" || len(hosts) != 1 || hosts[0] != "harbor.example.com" {
-		t.Errorf("static fallback rendered %v", rendered)
+	assertStatic := func(rendered []map[string]any) {
+		t.Helper()
+		if len(rendered) != 1 || rendered[0]["ip"] != "10.0.0.10" {
+			t.Fatalf("static fallback rendered %v, want the 10.0.0.10 alias", rendered)
+		}
+		hosts, _ := rendered[0]["hostnames"].([]any)
+		if len(hosts) != 1 || hosts[0] != "harbor.example.com" {
+			t.Errorf("static fallback hostnames = %v", hosts)
+		}
+	}
+
+	// 1. No annotation at all. Fleet exposes annotations as
+	// map[string]interface{}, so index returns nil for an absent key; the
+	// default "" coercion must keep the template renderable and the static
+	// operator list must be used.
+	assertStatic(renderFleetValue(t, staticTemplate, nil))
+
+	// 2. An empty annotation value also falls back to the static list.
+	assertStatic(renderFleetValue(t, staticTemplate, map[string]any{AnnotationProxyHostAliases: ""}))
+
+	// 3. A real annotation renders a parsed list of {ip, hostnames:[host]}.
+	rendered := renderFleetValue(t, noStaticTemplate, map[string]any{
+		AnnotationProxyHostAliases: "10.43.110.19=harbor.koldun.negash.ru",
+	})
+	hosts, _ := rendered[0]["hostnames"].([]any)
+	if len(rendered) != 1 || rendered[0]["ip"] != "10.43.110.19" || len(hosts) != 1 || hosts[0] != "harbor.koldun.negash.ru" {
+		t.Errorf("annotation rendered %v, want the harbor.koldun.negash.ru alias", rendered)
+	}
+
+	// 4. No static list and no annotation renders a real empty list.
+	if rendered := renderFleetValue(t, noStaticTemplate, nil); len(rendered) != 0 {
+		t.Errorf("empty annotation with no static list rendered %v, want []", rendered)
 	}
 }
 
 // renderFleetValue mirrors Fleet's values templating: the template is rendered
 // with ${ } delimiters and the result is parsed as YAML.
-func renderFleetValue(t *testing.T, text string, annotations map[string]string) []map[string]any {
+func renderFleetValue(t *testing.T, text string, annotations map[string]any) []map[string]any {
 	t.Helper()
 	// Mirror Fleet: marshal the values map to YAML, render the whole document,
 	// then parse it back.
@@ -533,8 +543,8 @@ func renderFleetString(t *testing.T, text string, data map[string]any) string {
 // templates.
 func fleetTemplateFuncs() template.FuncMap {
 	return template.FuncMap{
-		"default": func(def string, given ...string) string {
-			if len(given) > 0 && given[0] != "" {
+		"default": func(def any, given ...any) any {
+			if len(given) > 0 && given[0] != nil && given[0] != "" {
 				return given[0]
 			}
 			return def
