@@ -135,17 +135,19 @@ The default `fscache` driver requires:
   with `modprobe`, writes `/etc/modules-load.d/nydus.conf` with `erofs` and
   `cachefiles` for the next boot, and verifies `/dev/cachefiles` appears.
 - Exclusive ownership of `/dev/cachefiles`. The installer never starts
-  `cachefilesd`; if the unit exists it runs `systemctl disable --now` and
-  `systemctl mask cachefilesd.service`, because cachefilesd monopolizes the
-  device that nydusd fscache must own.
+  `cachefilesd`; if the unit exists it runs `systemctl stop`,
+  `systemctl disable`, and `systemctl mask cachefilesd.service`, because
+  cachefilesd monopolizes the device that nydusd fscache must own.
 
 Any missing prerequisite logs an error and falls back to `fusedev` with the
 legacy nydusd config, rather than starting a snapshotter that cannot mount
 images. Set `nydus.fsDriver=fusedev` to skip the fscache probe entirely.
+`SKIP_KERNEL_CHECK=1` bypasses only the kernel config-file check and is meant
+for non-Ubuntu kernels where the on-demand options are known to be built in.
 
-Images must be converted to RAFS v6 for EROFS/fscache. Harbor conversions set
-`rafs_version: 6` in the registry-proxy path; this chart only validates and
-reports the prerequisite and does not perform conversions.
+Images must be converted to RAFS v6 for EROFS/fscache. The registry-proxy
+nydusify conversion sets `rafs_version: 6` (proxy PR); this chart only
+validates and reports the prerequisite and contains no conversion code.
 
 ### Nydus mirror config
 

@@ -80,6 +80,7 @@ assert_file "${ROOT_ONE}/etc/dragonfly/dynconfig.yaml"
 assert_file "${ROOT_ONE}/etc/nydus/config.toml"
 assert_file "${ROOT_ONE}/etc/nydus/nydusd-config.json"
 assert_file "${ROOT_ONE}/etc/nydus/nydusd-config.fscache.json"
+assert_file "${ROOT_ONE}/etc/modules-load.d/nydus.conf"
 assert_dir "${ROOT_ONE}/var/lib/containerd-nydus/cache"
 assert_file "${ROOT_ONE}/etc/nydus/updater.env"
 assert_file "${ROOT_ONE}/usr/local/bin/nydus-updater"
@@ -114,6 +115,12 @@ assert_contains "${ROOT_ONE}/etc/nydus/config.toml" 'nydusimage_path = "/usr/loc
 assert_contains "${ROOT_ONE}/etc/nydus/config.toml" 'threads_number = 8'
 assert_contains "${ROOT_ONE}/etc/nydus/config.toml" 'skip_ssl_verify = false'
 assert_contains "${ROOT_ONE}/etc/nydus/config.toml" 'enable_kubeconfig_keychain = true'
+# modules-load.d is declarative: it is written even when this staging run
+# skips module loading (SKIP_MODULES=1).
+if ! printf 'erofs\ncachefiles\n' | cmp -s - "${ROOT_ONE}/etc/modules-load.d/nydus.conf"; then
+  echo "p2p-static self-test: modules-load.d/nydus.conf is not the expected erofs/cachefiles list" >&2
+  exit 1
+fi
 assert_not_contains "${ROOT_ONE}/etc/nydus/config.toml" 'enable_referrer_detect'
 assert_not_contains "${ROOT_ONE}/etc/nydus/config.toml" 'enable_index_detect'
 assert_not_contains "${ROOT_ONE}/etc/nydus/config.toml" 'enable_tarfs'
@@ -463,6 +470,10 @@ assert_contains "${ROOT_FUSEDEV}/etc/nydus/config.toml" 'enable_referrer_detect 
 assert_contains "${ROOT_FUSEDEV}/etc/nydus/config.toml" 'enable_index_detect = true'
 assert_contains "${ROOT_FUSEDEV}/etc/nydus/config.toml" 'containerd/certs.d'
 assert_not_contains "${ROOT_FUSEDEV}/etc/nydus/config.toml" 'mirrors_config'
+if [ -f "${ROOT_FUSEDEV}/etc/modules-load.d/nydus.conf" ]; then
+  echo "p2p-static self-test: fusedev install wrote the fscache modules-load.d file" >&2
+  exit 1
+fi
 assert_contains "${ROOT_FUSEDEV}/etc/systemd/system/nydus-snapshotter-bootstrap.service" \
   'ExecStart=/usr/local/bin/containerd-nydus-grpc --config /etc/nydus/config.toml --nydusd /usr/local/bin/nydusd --nydusd-config /etc/nydus/nydusd-config.json'
 
@@ -516,12 +527,13 @@ assert_contains "${ROOT_MOD_OK}/etc/modules-load.d/nydus.conf" 'erofs'
 assert_contains "${ROOT_MOD_OK}/etc/modules-load.d/nydus.conf" 'cachefiles'
 assert_count "${ROOT_MOD_OK}/etc/modules-load.d/nydus.conf" 'erofs' 1
 assert_not_contains "${ROOT_MOD_OK}/etc/modules-load.d/nydus.conf" 'fscache'
-assert_contains "$SYSTEMCTL_LOG" 'disable --now cachefilesd.service'
+assert_contains "$SYSTEMCTL_LOG" 'stop cachefilesd.service'
+assert_contains "$SYSTEMCTL_LOG" 'disable cachefilesd.service'
 assert_contains "$SYSTEMCTL_LOG" 'mask cachefilesd.service'
 assert_not_contains "$SYSTEMCTL_LOG" 'start cachefilesd.service'
 assert_not_contains "$SYSTEMCTL_LOG" 'enable --now cachefilesd.service'
-assert_contains "${WORK}/mod-ok.log" 'fscache ready: kernel on-demand config verified'
-assert_contains "${WORK}/mod-ok.log" 'cachefilesd disabled and masked'
+assert_contains "${WORK}/mod-ok.log" 'fscache ready: erofs/fscache/cachefiles loaded'
+assert_contains "${WORK}/mod-ok.log" 'cachefilesd stopped, disabled, and masked'
 assert_contains "${WORK}/mod-ok.log" 'rafs_version: 6'
 assert_contains "${ROOT_MOD_OK}/etc/nydus/config.toml" 'fs_driver = "fscache"'
 assert_contains "${ROOT_MOD_OK}/etc/nydus/nydusd-config.fscache.json" '"id": "node-a"'
@@ -533,7 +545,7 @@ MODPROBE="$MODPROBE_FAIL" KERNEL_CONFIG_FILE="$KERNEL_CONFIG" CACHEFILES_DEVICE=
   P2P_ROOT="$ROOT_MOD_FAIL" SKIP_DOWNLOAD=1 SKIP_SYSTEMD=1 SKIP_PREFLIGHT=1 CONTAINERD_MAJOR=1 \
   bash "$INSTALL" "$CFG" > "${WORK}/mod-fail.log" 2>&1
 assert_contains "${WORK}/mod-fail.log" 'ERROR: could not load kernel module cachefiles required by fscache'
-assert_contains "${WORK}/mod-fail.log" 'fscache prerequisites are not met; falling back to fusedev'
+assert_contains "${WORK}/mod-fail.log" 'fscache selected but erofs/fscache/cachefiles are unavailable; falling back to fusedev'
 assert_contains "${ROOT_MOD_FAIL}/etc/nydus/config.toml" 'fs_driver = "fusedev"'
 assert_contains "${ROOT_MOD_FAIL}/etc/nydus/config.toml" 'nydusd_config = "/etc/nydus/nydusd-config.json"'
 assert_contains "${ROOT_MOD_FAIL}/etc/systemd/system/nydus-snapshotter-bootstrap.service" \
@@ -551,12 +563,23 @@ MODPROBE="$MODPROBE_OK" MODPROBE_CALLS="${WORK}/modprobe-calls-badcfg" FAKE_CACH
   P2P_ROOT="$ROOT_MOD_BADCFG" SKIP_DOWNLOAD=1 SKIP_SYSTEMD=1 SKIP_PREFLIGHT=1 CONTAINERD_MAJOR=1 \
   bash "$INSTALL" "$CFG" > "${WORK}/mod-badcfg.log" 2>&1
 assert_contains "${WORK}/mod-badcfg.log" 'CONFIG_CACHEFILES_ONDEMAND=y'
-assert_contains "${WORK}/mod-badcfg.log" 'fscache prerequisites are not met; falling back to fusedev'
+assert_contains "${WORK}/mod-badcfg.log" 'fscache selected but the kernel lacks the required on-demand options; falling back to fusedev'
 assert_contains "${ROOT_MOD_BADCFG}/etc/nydus/config.toml" 'fs_driver = "fusedev"'
 if [ -f "${ROOT_MOD_BADCFG}/etc/modules-load.d/nydus.conf" ]; then
   echo "p2p-static self-test: kernel-config fallback left modules-load.d behind" >&2
   exit 1
 fi
+
+ROOT_MOD_MODCFG="${WORK}/root-mod-modcfg"
+MOD_KERNEL_CONFIG="${WORK}/kernel-config-module"
+printf 'CONFIG_EROFS_FS_ONDEMAND=m\nCONFIG_CACHEFILES_ONDEMAND=y\n' > "$MOD_KERNEL_CONFIG"
+MODPROBE="$MODPROBE_OK" MODPROBE_CALLS="${WORK}/modprobe-calls-modcfg" FAKE_CACHEFILES_CREATE=1 \
+  KERNEL_CONFIG_FILE="$MOD_KERNEL_CONFIG" CACHEFILES_DEVICE="$CACHEFILES_DEVICE" \
+  P2P_ROOT="$ROOT_MOD_MODCFG" SKIP_DOWNLOAD=1 SKIP_SYSTEMD=1 SKIP_PREFLIGHT=1 CONTAINERD_MAJOR=1 \
+  bash "$INSTALL" "$CFG" > "${WORK}/mod-modcfg.log" 2>&1
+assert_contains "${WORK}/mod-modcfg.log" 'CONFIG_EROFS_FS_ONDEMAND=y is required'
+assert_contains "${WORK}/mod-modcfg.log" 'falling back to fusedev'
+assert_contains "${ROOT_MOD_MODCFG}/etc/nydus/config.toml" 'fs_driver = "fusedev"'
 
 ROOT_MOD_NODEV="${WORK}/root-mod-nodev"
 MISSING_DEVICE="${WORK}/missing-device"
@@ -565,8 +588,8 @@ MODPROBE="$MODPROBE_OK" MODPROBE_CALLS="${WORK}/modprobe-calls-nodev" FAKE_CACHE
   KERNEL_CONFIG_FILE="$KERNEL_CONFIG" CACHEFILES_DEVICE="$MISSING_DEVICE" \
   P2P_ROOT="$ROOT_MOD_NODEV" SKIP_DOWNLOAD=1 SKIP_SYSTEMD=1 SKIP_PREFLIGHT=1 CONTAINERD_MAJOR=1 \
   bash "$INSTALL" "$CFG" > "${WORK}/mod-nodev.log" 2>&1
-assert_contains "${WORK}/mod-nodev.log" 'did not appear after loading cachefiles'
-assert_contains "${WORK}/mod-nodev.log" 'fscache prerequisites are not met; falling back to fusedev'
+assert_contains "${WORK}/mod-nodev.log" 'is missing after loading cachefiles'
+assert_contains "${WORK}/mod-nodev.log" 'fscache selected but erofs/fscache/cachefiles are unavailable; falling back to fusedev'
 assert_contains "${ROOT_MOD_NODEV}/etc/nydus/config.toml" 'fs_driver = "fusedev"'
 if [ -f "${ROOT_MOD_NODEV}/etc/modules-load.d/nydus.conf" ]; then
   echo "p2p-static self-test: device fallback left modules-load.d behind" >&2

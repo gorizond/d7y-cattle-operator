@@ -52,6 +52,9 @@ grep -q 'CONFIG_CACHEFILES_ONDEMAND' "$tmp/p2p-static.yaml" || fail "p2p-static 
 grep -q 'modules-load.d/nydus.conf' "$tmp/p2p-static.yaml" || fail "p2p-static script is missing modules-load.d"
 grep -q 'CACHEFILES_DEVICE="${CACHEFILES_DEVICE:-/dev/cachefiles}"' "$tmp/p2p-static.yaml" || fail "p2p-static script is missing the /dev/cachefiles check"
 grep -q 'cachefilesd.service' "$tmp/p2p-static.yaml" || fail "p2p-static script is missing the cachefilesd mask"
+grep -q 'stop cachefilesd.service' "$tmp/p2p-static.yaml" || fail "p2p-static script is missing the cachefilesd stop"
+grep -q 'mask cachefilesd.service' "$tmp/p2p-static.yaml" || fail "p2p-static script is missing the cachefilesd mask call"
+grep -q 'falling back to fusedev' "$tmp/p2p-static.yaml" || fail "p2p-static script is missing the fscache fallback"
 grep -q 'rafs_version: 6' "$tmp/p2p-static.yaml" || fail "p2p-static script is missing the RAFS v6 prerequisite note"
 grep -q 'NYDUS_FS_DRIVER="${NYDUS_FS_DRIVER:-fscache}"' "$tmp/p2p-static.yaml" || fail "p2p-static chart value nydus.fsDriver did not render"
 if grep -q '__NYDUS_FS_DRIVER__' "$tmp/p2p-static.yaml" || grep -q '__NYDUS_CLUSTER_ID__' "$tmp/p2p-static.yaml"; then
