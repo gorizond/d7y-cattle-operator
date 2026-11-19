@@ -3,10 +3,7 @@ package pki
 import (
 	"crypto/ecdsa"
 	"crypto/elliptic"
-	"crypto/rand"
 	"crypto/x509"
-	"encoding/pem"
-	"math/big"
 	"net"
 	"slices"
 	"strings"
@@ -23,20 +20,31 @@ import (
 var _ SecretStore = (wranglercorev1.SecretController)(nil)
 
 const (
-	testGRPCDomain = "manager-grpc.example.com"
-	testAPIURL     = "https://manager-api.example.com"
+	testGRPCDomain        = "manager-grpc.example.com"
+	testAPIURL            = "https://manager-api.example.com"
+	testSchedulerPublicIP = "203.0.113.10"
 )
 
 func testBundle(t *testing.T) *Bundle {
 	t.Helper()
 	bundle, err := Generate(Options{
-		ManagerGRPCDomain: testGRPCDomain,
-		ManagerAPIURL:     testAPIURL,
+		ManagerGRPCDomain:  testGRPCDomain,
+		ManagerAPIURL:      testAPIURL,
+		SchedulerPublicIPs: []string{testSchedulerPublicIP},
 	})
 	if err != nil {
 		t.Fatalf("Generate() error = %v", err)
 	}
 	return bundle
+}
+
+func hasIP(ips []net.IP, want string) bool {
+	for _, ip := range ips {
+		if ip.String() == want {
+			return true
+		}
+	}
+	return false
 }
 
 func TestGenerate(t *testing.T) {
@@ -97,8 +105,16 @@ func TestGenerate(t *testing.T) {
 			t.Errorf("leaf SANs %v do not contain %q", leaf.DNSNames, name)
 		}
 	}
-	if len(leaf.IPAddresses) != 0 {
-		t.Errorf("leaf IP SANs = %v, want none", leaf.IPAddresses)
+	for _, want := range []string{testSchedulerPublicIP, "127.0.0.1", "::1"} {
+		if !hasIP(leaf.IPAddresses, want) {
+			t.Errorf("leaf IP SANs %v do not contain %q", leaf.IPAddresses, want)
+		}
+	}
+	// Node IPs and the DNS alias are deliberately not certificate identities.
+	for _, unwanted := range []string{"198.51.100.1", "198.51.100.2", "198.51.100.3"} {
+		if hasIP(leaf.IPAddresses, unwanted) {
+			t.Errorf("leaf IP SANs %v unexpectedly contain node IP %q", leaf.IPAddresses, unwanted)
+		}
 	}
 
 	key, err := ParsePrivateKey(bundle.KeyPEM)
@@ -139,9 +155,6 @@ func TestGenerateSchedulerHosts(t *testing.T) {
 		t.Fatalf("ParseCertificates(leaf) error = %v", err)
 	}
 	leaf := certs[0]
-	if len(leaf.IPAddresses) != 0 {
-		t.Errorf("leaf IP SANs = %v, want none", leaf.IPAddresses)
-	}
 	for _, want := range []string{
 		"d7y-scheduler.c-m-a.example.com",
 		"d7y-scheduler.c-m-b.example.com",
@@ -180,6 +193,11 @@ func TestGenerateRejectsInvalidOptions(t *testing.T) {
 		"missing gRPC domain": {ManagerAPIURL: testAPIURL},
 		"missing API URL":     {ManagerGRPCDomain: testGRPCDomain},
 		"invalid API URL":     {ManagerGRPCDomain: testGRPCDomain, ManagerAPIURL: "not-a-url"},
+		"invalid public IP": {
+			ManagerGRPCDomain:  testGRPCDomain,
+			ManagerAPIURL:      testAPIURL,
+			SchedulerPublicIPs: []string{"not-an-ip"},
+		},
 	}
 	for name, opts := range tests {
 		t.Run(name, func(t *testing.T) {
@@ -296,9 +314,9 @@ func TestEnsureSecretRotatesWhenSANsChange(t *testing.T) {
 	}
 
 	rotated, err := Generate(Options{
-		ManagerGRPCDomain: testGRPCDomain,
-		ManagerAPIURL:     testAPIURL,
-		SchedulerHosts:    []string{"d7y-scheduler.c-m-rotated.example.com"},
+		ManagerGRPCDomain:  testGRPCDomain,
+		ManagerAPIURL:      testAPIURL,
+		SchedulerPublicIPs: []string{"203.0.113.11"},
 	})
 	if err != nil {
 		t.Fatalf("Generate(rotated) error = %v", err)
@@ -323,64 +341,6 @@ func TestEnsureSecretRotatesWhenSANsChange(t *testing.T) {
 	}
 	if string(secret.Data["ca.crt"]) != string(rotated.CACertPEM) {
 		t.Error("CA was not regenerated with the leaf")
-	}
-}
-
-func legacyCertificateWithIP(t *testing.T, dnsNames []string, ip net.IP) []byte {
-	t.Helper()
-	key, err := ecdsa.GenerateKey(elliptic.P256(), rand.Reader)
-	if err != nil {
-		t.Fatalf("generate legacy certificate key: %v", err)
-	}
-	template := &x509.Certificate{
-		SerialNumber: big.NewInt(1),
-		NotBefore:    time.Now().Add(-time.Hour),
-		NotAfter:     time.Now().Add(time.Hour),
-		DNSNames:     dnsNames,
-		IPAddresses:  []net.IP{ip},
-	}
-	der, err := x509.CreateCertificate(rand.Reader, template, template, &key.PublicKey, key)
-	if err != nil {
-		t.Fatalf("create legacy certificate: %v", err)
-	}
-	return pem.EncodeToMemory(&pem.Block{Type: "CERTIFICATE", Bytes: der})
-}
-
-func TestEnsureSecretReplacesLegacyIPSANsWithDNSOnly(t *testing.T) {
-	bundle := testBundle(t)
-	store := newFakeSecretStore()
-	if _, err := store.Create(&corev1.Secret{
-		ObjectMeta: metav1.ObjectMeta{Name: "dragonfly-p2p-mtls", Namespace: "dragonfly-system"},
-		Type:       corev1.SecretTypeTLS,
-		Data: map[string][]byte{
-			corev1.TLSCertKey: legacyCertificateWithIP(t, bundle.DNSNames, net.ParseIP("203.0.113.231")),
-		},
-	}); err != nil {
-		t.Fatalf("seed legacy secret: %v", err)
-	}
-
-	result, err := EnsureSecret(store, "dragonfly-system", "dragonfly-p2p-mtls", bundle)
-	if err != nil {
-		t.Fatalf("EnsureSecret() error = %v", err)
-	}
-	if !result.Updated || result.Created {
-		t.Errorf("EnsureSecret() result = %+v, want update", result)
-	}
-
-	secret, err := store.Get("dragonfly-system", "dragonfly-p2p-mtls", metav1.GetOptions{})
-	if err != nil {
-		t.Fatalf("get secret: %v", err)
-	}
-	certs, err := ParseCertificates(secret.Data[corev1.TLSCertKey])
-	if err != nil {
-		t.Fatalf("parse certificate: %v", err)
-	}
-	leaf := certs[0]
-	if len(leaf.IPAddresses) != 0 {
-		t.Errorf("leaf IP SANs = %v, want none", leaf.IPAddresses)
-	}
-	if !slices.Equal(leaf.DNSNames, bundle.DNSNames) {
-		t.Errorf("leaf DNS SANs = %v, want %v", leaf.DNSNames, bundle.DNSNames)
 	}
 }
 
@@ -467,6 +427,21 @@ func TestIsPublicIP(t *testing.T) {
 		t.Run(name, func(t *testing.T) {
 			if got := IsPublicIP(tc.ip); got != tc.want {
 				t.Errorf("IsPublicIP(%v) = %v, want %v", tc.ip, got, tc.want)
+			}
+		})
+	}
+}
+
+func TestGenerateRejectsNonPublicSchedulerIPs(t *testing.T) {
+	for _, raw := range []string{"10.0.0.5", "127.0.0.1", "169.254.1.1", "224.0.0.1", "fc00::1"} {
+		t.Run(raw, func(t *testing.T) {
+			_, err := Generate(Options{
+				ManagerGRPCDomain:  testGRPCDomain,
+				ManagerAPIURL:      testAPIURL,
+				SchedulerPublicIPs: []string{raw},
+			})
+			if err == nil {
+				t.Fatalf("Generate(%s) error = nil, want non-public error", raw)
 			}
 		})
 	}
