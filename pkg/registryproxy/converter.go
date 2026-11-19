@@ -86,8 +86,9 @@ type indexPlatform struct {
 // A multiarch source is converted through its target-platform child digest:
 // nydusify must not receive the multiarch tag because Harbor rejects indexes
 // that reference unreferenced children (unknown/unknown attestations). The
-// published index keeps every real source platform descriptor and appends the
-// nydus artifact descriptor.
+// published index keeps only that target-platform child and appends the nydus
+// artifact; nydusify copies only the child it converted, so publishing other
+// source platforms would make Harbor reject the index as incomplete.
 func (c *Converter) Convert(ctx context.Context, registry, repo, tag, sourceDigest string) (ConversionResult, error) {
 	if c.Registry == nil {
 		return ConversionResult{}, fmt.Errorf("converter registry is nil")
@@ -222,13 +223,18 @@ func (c *Converter) Convert(ctx context.Context, registry, repo, tag, sourceDige
 	}, nil
 }
 
-// publishedSourceDescriptors returns the real-platform descriptors that make
-// up the non-nydus part of the published index. A single-manifest source gets
-// one descriptor for the target platform.
+// publishedSourceDescriptors returns the source descriptors that the published
+// index may reference. Harbor validates every descriptor against the target
+// repository and rejects an index whose manifests are missing; nydusify copies
+// only the target-platform child (or the single source manifest), so that is
+// the only source descriptor we publish alongside the nydus artifact.
 func publishedSourceDescriptors(manifest Manifest, platformOS, platformArch string) ([]indexDescriptor, error) {
 	if isIndexMediaType(manifest.MediaType) {
-		_, descriptors, err := filterImageIndex(manifest.Body)
-		return descriptors, err
+		descriptor, ok := platformDescriptor(manifest.Body, platformOS, platformArch)
+		if !ok {
+			return nil, fmt.Errorf("source index has no %s/%s image manifest", platformOS, platformArch)
+		}
+		return []indexDescriptor{descriptor}, nil
 	}
 	mediaType := manifest.MediaType
 	if mediaType == "" {

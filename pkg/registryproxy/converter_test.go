@@ -409,7 +409,7 @@ func TestConverterRewritesNydusSourceReference(t *testing.T) {
 	}
 }
 
-func TestConverterMultiPlatformPublishesAllRealDescriptors(t *testing.T) {
+func TestConverterMultiPlatformPublishesOnlyPresentTargetChild(t *testing.T) {
 	registry := newFakeRegistry()
 	sourceIndex := indexDocument{
 		SchemaVersion: 2,
@@ -424,8 +424,9 @@ func TestConverterMultiPlatformPublishesAllRealDescriptors(t *testing.T) {
 	registry.manifests["mirror/docker.io/library/nginx:1.27"] = Manifest{
 		Digest: "sha256:source-index", MediaType: ociIndexType, Body: sourceBody,
 	}
-	// nydusify sees only the resolved linux/amd64 child. Its merged index has
-	// the nydus artifact first, proving position-independent verification.
+	// nydusify copies only the linux/amd64 child into the target repo. Its
+	// merged index has the nydus artifact first, proving position-independent
+	// verification.
 	merged := indexDocument{Manifests: []indexDescriptor{
 		{MediaType: ociManifestType, Digest: "sha256:nydus", Size: int64(len(nydusManifestBody(""))), ArtifactType: nydusArtifactType, Platform: &indexPlatform{OS: "linux", Architecture: "amd64"}},
 		{MediaType: ociManifestType, Digest: "sha256:amd64", Size: 100, Platform: &indexPlatform{OS: "linux", Architecture: "amd64"}},
@@ -433,6 +434,12 @@ func TestConverterMultiPlatformPublishesAllRealDescriptors(t *testing.T) {
 	mergedBody, _ := json.Marshal(merged)
 	registry.manifests["mirror/docker.io/library/nginx:1.27-merged"] = Manifest{
 		Digest: "sha256:merged", MediaType: ociIndexType, Body: mergedBody,
+	}
+	// The target child and the nydus artifact are present under the mirror
+	// repository; other source platforms were never copied.
+	registry.manifests["mirror/docker.io/library/nginx:sha256:amd64"] = Manifest{
+		Digest: "sha256:amd64", MediaType: ociManifestType,
+		Body: []byte(`{"schemaVersion":2,"config":{"digest":"sha256:config"},"layers":[]}`),
 	}
 	registry.manifests["mirror/docker.io/library/nginx:sha256:nydus"] = Manifest{
 		Digest: "sha256:nydus", MediaType: ociManifestType, Body: nydusManifestBody(""),
@@ -457,22 +464,56 @@ func TestConverterMultiPlatformPublishesAllRealDescriptors(t *testing.T) {
 	if err := json.Unmarshal(registry.manifests["mirror/docker.io/library/nginx:1.27"].Body, &published); err != nil {
 		t.Fatal(err)
 	}
-	if len(published.Manifests) != 3 {
-		t.Fatalf("published manifests = %+v, want amd64, arm64, nydus", published.Manifests)
-	}
-	gotDigests := []string{published.Manifests[0].Digest, published.Manifests[1].Digest, published.Manifests[2].Digest}
-	wantDigests := []string{"sha256:amd64", "sha256:arm64"}
-	if gotDigests[0] != wantDigests[0] || gotDigests[1] != wantDigests[1] {
-		t.Errorf("real-platform descriptors = %v, want %v", gotDigests, wantDigests)
+	if len(published.Manifests) != 2 {
+		t.Fatalf("published manifests = %+v, want only the target child and nydus", published.Manifests)
 	}
 	nydus := findNydusDescriptor(t, published)
+	var runnable *indexDescriptor
+	for i, descriptor := range published.Manifests {
+		if descriptor.Digest == "sha256:arm64" {
+			t.Errorf("uncopied arm64 descriptor leaked into the published index: %+v", descriptor)
+		}
+		if descriptor.ArtifactType == nydusArtifactType {
+			continue
+		}
+		// Every published non-nydus descriptor must resolve in the target
+		// repository; Harbor rejects the index otherwise.
+		if _, ok := registry.manifests["mirror/docker.io/library/nginx:"+descriptor.Digest]; !ok {
+			t.Errorf("published descriptor %s does not resolve in the target repo", descriptor.Digest)
+		}
+		runnable = &published.Manifests[i]
+	}
+	if runnable == nil || runnable.Platform == nil ||
+		runnable.Platform.OS != "linux" || runnable.Platform.Architecture != "amd64" {
+		t.Errorf("published index has no runnable linux/amd64 source descriptor: %+v", published.Manifests)
+	}
 	if nydus.Platform == nil || nydus.Platform.Architecture != "amd64" {
 		t.Errorf("nydus platform = %+v", nydus.Platform)
 	}
-	for _, descriptor := range published.Manifests {
-		if descriptor.Digest == "sha256:attestation" || descriptor.Platform.OS == "unknown" {
-			t.Errorf("attestation leaked into published index: %+v", descriptor)
-		}
+	if _, ok := registry.manifests["mirror/docker.io/library/nginx:"+nydus.Digest]; !ok {
+		t.Errorf("nydus descriptor %s does not resolve in the target repo", nydus.Digest)
+	}
+}
+
+func TestConverterMultiPlatformRejectsIndexWithoutTargetChild(t *testing.T) {
+	registry := newFakeRegistry()
+	sourceBody, _ := json.Marshal(indexDocument{
+		SchemaVersion: 2,
+		MediaType:     ociIndexType,
+		Manifests: []indexDescriptor{
+			{MediaType: ociManifestType, Digest: "sha256:arm64", Size: 200, Platform: &indexPlatform{OS: "linux", Architecture: "arm64"}},
+		},
+	})
+	registry.manifests["mirror/docker.io/library/nginx:1.27"] = Manifest{
+		Digest: "sha256:source-index", MediaType: ociIndexType, Body: sourceBody,
+	}
+	converter := &Converter{
+		HarborURL: "https://harbor.example.com", MirrorProject: "mirror", ProxyPublicURL: testProxyURL,
+		NydusifyPath: "nydusify", NydusImage: "/usr/local/bin/nydus-image", Registry: registry,
+		Command: func(context.Context, string, ...string) *exec.Cmd { return exec.Command("true") },
+	}
+	if _, err := converter.Convert(context.Background(), "docker.io", "library/nginx", "1.27", "sha256:source-index"); err == nil {
+		t.Fatal("Convert() error = nil for an index without the target platform child")
 	}
 }
 

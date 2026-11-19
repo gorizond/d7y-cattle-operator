@@ -18,6 +18,17 @@ type Copier struct {
 	Source        Registry
 	Mirror        Registry
 	MirrorProject string
+	// SourceProject resolves the Harbor source project for a registry. When
+	// nil, ProjectName is used.
+	SourceProject func(registry string) string
+}
+
+func (c *Copier) sourceRepo(registry, repo string) string {
+	project := ProjectName(registry)
+	if c.SourceProject != nil {
+		project = c.SourceProject(registry)
+	}
+	return project + "/" + strings.TrimPrefix(repo, "/")
 }
 
 // Copy copies registry/repo:ref into <mirror>/<registry>/<repo>:ref and
@@ -29,7 +40,7 @@ func (c *Copier) Copy(ctx context.Context, registry, repo, ref string) (string, 
 	if c.MirrorProject == "" {
 		return "", fmt.Errorf("mirror project is empty")
 	}
-	sourceRepo := ProjectName(registry) + "/" + strings.TrimPrefix(repo, "/")
+	sourceRepo := c.sourceRepo(registry, repo)
 	mirrorRepo := c.MirrorProject + "/" + strings.TrimSuffix(registry, "/") + "/" + strings.TrimPrefix(repo, "/")
 	manifest, err := c.Source.GetManifest(ctx, sourceRepo, ref)
 	if err != nil {

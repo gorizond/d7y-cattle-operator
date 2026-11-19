@@ -34,10 +34,11 @@ type HarborCredential struct {
 }
 
 type HarborRegistry struct {
-	ID   int    `json:"id"`
-	Name string `json:"name"`
-	Type string `json:"type"`
-	URL  string `json:"url"`
+	ID       int    `json:"id"`
+	Name     string `json:"name"`
+	Type     string `json:"type"`
+	URL      string `json:"url"`
+	Insecure bool   `json:"insecure"`
 }
 
 type HarborProject struct {
@@ -91,75 +92,215 @@ func (h *HarborClient) do(ctx context.Context, method, path string, body any, ou
 	return resp.StatusCode, nil
 }
 
+// registrySpec returns the Harbor endpoint for an upstream host. Harbor 2.15.4
+// types github-ghcr, gitlab, and quay embed the same native docker adapter, so
+// the generic docker-registry type is used for every host except Docker Hub.
+// Docker Hub needs the docker-hub adapter (registry-1.docker.io plus library/
+// path handling); a generic endpoint pointed at https://hub.docker.com fails
+// its health check with 404.
 func registrySpec(host string) HarborRegistry {
-	switch host {
-	case "docker.io":
+	if host == "docker.io" {
 		return HarborRegistry{Name: host, Type: "docker-hub", URL: "https://hub.docker.com"}
-	case "ghcr.io":
-		return HarborRegistry{Name: host, Type: "github-ghcr", URL: "https://ghcr.io"}
-	case "quay.io":
-		// Harbor 2.x has no "quay" adapter; the generic docker-registry
-		// adapter works with Quay's OCI API. A "quay" type returns HTTP 400.
-		return HarborRegistry{Name: host, Type: "docker-registry", URL: "https://quay.io"}
-	default:
-		return HarborRegistry{Name: host, Type: "docker-registry", URL: "https://" + host}
 	}
+	// The generic adapter covers ghcr.io, quay.io, GitLab, GCR, public ECR,
+	// MCR, registry.k8s.io, NVCR, Elastic, Red Hat, and SUSE OCI registries.
+	// Private NVCR/Red Hat endpoints additionally need credentials.
+	return HarborRegistry{Name: host, Type: "docker-registry", URL: "https://" + host}
 }
 
-// EnsureRegistry returns the Harbor registry endpoint ID, creating it once.
+// genericRegistryName derives a Harbor-safe deterministic endpoint name for a
+// host whose existing endpoint has a different type.
+func genericRegistryName(host string) string {
+	safe := strings.Map(func(r rune) rune {
+		switch {
+		case r >= 'a' && r <= 'z', r >= 'A' && r <= 'Z', r >= '0' && r <= '9', r == '.', r == '_', r == '-':
+			return r
+		default:
+			return '-'
+		}
+	}, host)
+	return safe + "-generic"
+}
+
+// EnsureRegistry returns a Harbor endpoint usable for host. Harbor 2.15.4
+// ignores `type` on PUT /registries/{id} and refuses to DELETE an endpoint a
+// proxy-cache project still references, so a type mismatch is never patched or
+// recreated in place: a separate deterministic "<host>-generic" endpoint is
+// created and returned while the stale endpoint is left untouched. A same-type
+// URL mismatch is updated in place; that reconcile is best-effort, so a failed
+// PUT logs and keeps the existing endpoint instead of blocking pulls.
 func (h *HarborClient) EnsureRegistry(ctx context.Context, host string) (HarborRegistry, error) {
-	var list []HarborRegistry
-	if _, err := h.do(ctx, http.MethodGet, "/api/v2.0/registries?name="+url.QueryEscape(host), nil, &list); err != nil {
+	spec := registrySpec(host)
+	existing, err := h.findRegistry(ctx, host)
+	if err != nil {
 		return HarborRegistry{}, err
 	}
-	for _, item := range list {
-		if item.Name == host {
-			return item, nil
+	if existing == nil {
+		return h.createRegistry(ctx, spec, host)
+	}
+	if existing.Type == spec.Type {
+		return h.reconcileRegistryURL(ctx, *existing, spec, host)
+	}
+	generic := spec
+	generic.Name = genericRegistryName(host)
+	alternate, err := h.findRegistry(ctx, generic.Name)
+	if err != nil {
+		return HarborRegistry{}, err
+	}
+	if alternate != nil {
+		if alternate.Type != spec.Type {
+			return HarborRegistry{}, fmt.Errorf(
+				"harbor endpoint %q has type %q, want %q; remove or rename it manually",
+				alternate.Name, alternate.Type, spec.Type)
 		}
+		return h.reconcileRegistryURL(ctx, *alternate, generic, host)
 	}
-	spec := registrySpec(host)
+	created, err := h.createRegistry(ctx, generic, host)
+	if err != nil {
+		return HarborRegistry{}, fmt.Errorf(
+			"create generic harbor endpoint %q for stale type %q: %w",
+			generic.Name, existing.Type, err)
+	}
+	return created, nil
+}
+
+// reconcileRegistryURL updates a same-type endpoint whose URL drifted. Failure
+// is non-fatal: Harbor keeps serving the existing endpoint.
+func (h *HarborClient) reconcileRegistryURL(ctx context.Context, existing, spec HarborRegistry, credentialsHost string) (HarborRegistry, error) {
+	if existing.URL == spec.URL {
+		return existing, nil
+	}
+	updated, err := h.updateRegistryURL(ctx, existing, spec, credentialsHost)
+	if err != nil {
+		slog.Warn("harbor registry URL reconcile failed; using the existing endpoint",
+			"registry", existing.Name, "existing_url", existing.URL, "wanted_url", spec.URL, "error", err)
+		return existing, nil
+	}
+	return updated, nil
+}
+
+// registryBody builds the Harbor create/update payload. Without configured
+// credentials access_key/access_secret stay empty; Harbor keeps the stored
+// credential in that case, so an update never drops upstream auth.
+func (h *HarborClient) registryBody(spec HarborRegistry, credentialsHost string, insecure bool) map[string]any {
 	body := map[string]any{
-		"name": spec.Name, "type": spec.Type, "url": spec.URL, "insecure": false,
+		"name": spec.Name, "type": spec.Type, "url": spec.URL, "insecure": insecure,
 	}
-	if credential, ok := h.Credentials[host]; ok && credential.AccessKey != "" {
+	if credential, ok := h.Credentials[credentialsHost]; ok && credential.AccessKey != "" {
 		body["access_key"] = credential.AccessKey
 		body["access_secret"] = credential.AccessSecret
 	}
-	status, err := h.do(ctx, http.MethodPost, "/api/v2.0/registries", body, nil)
+	return body
+}
+
+func (h *HarborClient) updateRegistryURL(ctx context.Context, existing, spec HarborRegistry, credentialsHost string) (HarborRegistry, error) {
+	path := "/api/v2.0/registries/" + strconv.Itoa(existing.ID)
+	body := h.registryBody(HarborRegistry{
+		Name: existing.Name, Type: existing.Type, URL: spec.URL,
+	}, credentialsHost, existing.Insecure)
+	status, err := h.do(ctx, http.MethodPut, path, body, nil)
+	if err != nil {
+		return HarborRegistry{}, err
+	}
+	if status != http.StatusOK && status != http.StatusNoContent {
+		return HarborRegistry{}, fmt.Errorf("harbor PUT %s: status %d", path, status)
+	}
+	return h.getRegistry(ctx, existing.Name)
+}
+
+func (h *HarborClient) createRegistry(ctx context.Context, spec HarborRegistry, credentialsHost string) (HarborRegistry, error) {
+	status, err := h.do(ctx, http.MethodPost, "/api/v2.0/registries", h.registryBody(spec, credentialsHost, false), nil)
 	if err == nil && (status == http.StatusCreated || status == http.StatusOK) {
-		return h.getRegistry(ctx, host)
+		return h.getRegistry(ctx, spec.Name)
 	}
 	if status != http.StatusConflict && err != nil {
 		return HarborRegistry{}, err
 	}
-	return h.getRegistry(ctx, host)
+	return h.getRegistry(ctx, spec.Name)
 }
 
-func (h *HarborClient) getRegistry(ctx context.Context, host string) (HarborRegistry, error) {
+func (h *HarborClient) findRegistry(ctx context.Context, name string) (*HarborRegistry, error) {
 	var list []HarborRegistry
-	if _, err := h.do(ctx, http.MethodGet, "/api/v2.0/registries?name="+url.QueryEscape(host), nil, &list); err != nil {
+	if _, err := h.do(ctx, http.MethodGet, "/api/v2.0/registries?name="+url.QueryEscape(name), nil, &list); err != nil {
+		return nil, err
+	}
+	for i := range list {
+		if list[i].Name == name {
+			return &list[i], nil
+		}
+	}
+	return nil, nil
+}
+
+func (h *HarborClient) getRegistry(ctx context.Context, name string) (HarborRegistry, error) {
+	registry, err := h.findRegistry(ctx, name)
+	if err != nil {
 		return HarborRegistry{}, err
 	}
-	for _, item := range list {
-		if item.Name == host {
-			return item, nil
-		}
+	if registry == nil {
+		return HarborRegistry{}, fmt.Errorf("harbor registry %q not found after create", name)
 	}
-	return HarborRegistry{}, fmt.Errorf("harbor registry %q not found after create", host)
+	return *registry, nil
 }
 
-// EnsureProject creates a Harbor project once. registryID 0 creates a local
-// writable project (mirror); a non-zero ID creates a read-only proxy project.
+// EnsureProject returns the project for registryID, creating it once. A
+// registry_id mismatch on an existing proxy project is re-pointed with a
+// project update; if Harbor refuses, a deterministic "<project>-generic"
+// project is created and returned instead. Callers must use the returned name.
 func (h *HarborClient) EnsureProject(ctx context.Context, name string, registryID int) (HarborProject, error) {
-	var list []HarborProject
-	if _, err := h.do(ctx, http.MethodGet, "/api/v2.0/projects?name="+url.QueryEscape(name), nil, &list); err != nil {
+	project, err := h.findProject(ctx, name)
+	if err != nil {
 		return HarborProject{}, err
 	}
-	for _, item := range list {
-		if item.Name == name {
-			return item, nil
-		}
+	if project == nil {
+		return h.createProject(ctx, name, registryID)
 	}
+	if registryID == 0 || project.RegistryID == registryID {
+		return *project, nil
+	}
+	fallback := name + "-generic"
+	// A previous Ensure may already have selected the fallback because Harbor
+	// refuses to re-point this project; prefer it over repeating the failed
+	// update on every call.
+	if alternate, err := h.findProject(ctx, fallback); err != nil {
+		return HarborProject{}, err
+	} else if alternate != nil && alternate.RegistryID == registryID {
+		return *alternate, nil
+	}
+	updated, err := h.updateProjectRegistry(ctx, name, registryID)
+	if err == nil {
+		return updated, nil
+	}
+	slog.Warn("harbor project registry_id cannot be updated; using a generic project",
+		"project", name, "registry_id", registryID, "error", err)
+	alternate, findErr := h.findProject(ctx, fallback)
+	if findErr != nil {
+		return HarborProject{}, findErr
+	}
+	if alternate != nil {
+		if alternate.RegistryID == registryID {
+			return *alternate, nil
+		}
+		return HarborProject{}, fmt.Errorf(
+			"harbor project %q has registry_id %d, want %d; remove or rename it manually",
+			fallback, alternate.RegistryID, registryID)
+	}
+	return h.createProject(ctx, fallback, registryID)
+}
+
+func (h *HarborClient) updateProjectRegistry(ctx context.Context, name string, registryID int) (HarborProject, error) {
+	path := "/api/v2.0/projects/" + url.PathEscape(name)
+	status, err := h.do(ctx, http.MethodPut, path, map[string]any{"registry_id": registryID}, nil)
+	if err != nil {
+		return HarborProject{}, err
+	}
+	if status != http.StatusOK && status != http.StatusNoContent {
+		return HarborProject{}, fmt.Errorf("harbor PUT %s: status %d", path, status)
+	}
+	return h.getProject(ctx, name)
+}
+
+func (h *HarborClient) createProject(ctx context.Context, name string, registryID int) (HarborProject, error) {
 	body := map[string]any{"project_name": name, "metadata": map[string]string{"public": "false"}}
 	if registryID > 0 {
 		body["registry_id"] = registryID
@@ -168,16 +309,38 @@ func (h *HarborClient) EnsureProject(ctx context.Context, name string, registryI
 	if err != nil && status != http.StatusConflict {
 		return HarborProject{}, err
 	}
-	var projects []HarborProject
-	if _, err := h.do(ctx, http.MethodGet, "/api/v2.0/projects?name="+url.QueryEscape(name), nil, &projects); err != nil {
+	project, err := h.findProject(ctx, name)
+	if err != nil {
 		return HarborProject{}, err
 	}
-	for _, item := range projects {
-		if item.Name == name {
-			return item, nil
+	if project == nil {
+		return HarborProject{}, fmt.Errorf("harbor project %q not found after create", name)
+	}
+	return *project, nil
+}
+
+func (h *HarborClient) getProject(ctx context.Context, name string) (HarborProject, error) {
+	project, err := h.findProject(ctx, name)
+	if err != nil {
+		return HarborProject{}, err
+	}
+	if project == nil {
+		return HarborProject{}, fmt.Errorf("harbor project %q not found", name)
+	}
+	return *project, nil
+}
+
+func (h *HarborClient) findProject(ctx context.Context, name string) (*HarborProject, error) {
+	var list []HarborProject
+	if _, err := h.do(ctx, http.MethodGet, "/api/v2.0/projects?name="+url.QueryEscape(name), nil, &list); err != nil {
+		return nil, err
+	}
+	for i := range list {
+		if list[i].Name == name {
+			return &list[i], nil
 		}
 	}
-	return HarborProject{}, fmt.Errorf("harbor project %q not found after create", name)
+	return nil, nil
 }
 
 // EnsureWebhook creates the nydus-convert PUSH_ARTIFACT policy, updating an
@@ -329,9 +492,10 @@ type Provisioner struct {
 	WebhookAddress string
 	WebhookSecret  string
 
-	mu       sync.Mutex
-	cache    map[string]bool
-	projects map[string]string
+	mu         sync.Mutex
+	cache      map[string]bool
+	projects   map[string]string
+	projectFor map[string]string
 }
 
 func (p *Provisioner) Ensure(ctx context.Context, registry string) error {
@@ -349,9 +513,9 @@ func (p *Provisioner) Ensure(ctx context.Context, registry string) error {
 	if err != nil {
 		return fmt.Errorf("ensure Harbor registry %q: %w", registry, err)
 	}
-	project := ProjectName(registry)
-	if _, err := p.Harbor.EnsureProject(ctx, project, endpoint.ID); err != nil {
-		return fmt.Errorf("ensure Harbor source project %q: %w", project, err)
+	project, err := p.Harbor.EnsureProject(ctx, ProjectName(registry), endpoint.ID)
+	if err != nil {
+		return fmt.Errorf("ensure Harbor source project %q: %w", ProjectName(registry), err)
 	}
 	if _, err := p.Harbor.EnsureProject(ctx, p.MirrorProject, 0); err != nil {
 		return fmt.Errorf("ensure Harbor mirror project %q: %w", p.MirrorProject, err)
@@ -360,9 +524,9 @@ func (p *Provisioner) Ensure(ctx context.Context, registry string) error {
 	// still enqueues jobs, so a broken Harbor webhook policy must not fail the
 	// read path or bootstrap.
 	if p.WebhookAddress != "" {
-		if err := p.Harbor.EnsureWebhook(ctx, project, p.WebhookAddress, p.WebhookSecret); err != nil {
+		if err := p.Harbor.EnsureWebhook(ctx, project.Name, p.WebhookAddress, p.WebhookSecret); err != nil {
 			slog.Warn("harbor webhook policy is unavailable; pull-triggered conversion still works",
-				"registry", registry, "project", project, "error", err)
+				"registry", registry, "project", project.Name, "error", err)
 		}
 	}
 	p.mu.Lock()
@@ -372,10 +536,30 @@ func (p *Provisioner) Ensure(ctx context.Context, registry string) error {
 	if p.projects == nil {
 		p.projects = map[string]string{}
 	}
+	if p.projectFor == nil {
+		p.projectFor = map[string]string{}
+	}
 	p.cache[registry] = true
-	p.projects[project] = registry
+	p.projects[project.Name] = registry
+	p.projectFor[registry] = project.Name
 	p.mu.Unlock()
 	return nil
+}
+
+// ProjectFor returns the Harbor source project used for registry. The
+// "<project>-generic" fallback is selected only when Harbor cannot re-point an
+// existing proxy-cache project, so read paths must use this instead of
+// ProjectName directly.
+func (p *Provisioner) ProjectFor(registry string) string {
+	if p == nil {
+		return ProjectName(registry)
+	}
+	p.mu.Lock()
+	defer p.mu.Unlock()
+	if name := p.projectFor[registry]; name != "" {
+		return name
+	}
+	return ProjectName(registry)
 }
 
 // RegistryForProject maps a Harbor source project back to its upstream

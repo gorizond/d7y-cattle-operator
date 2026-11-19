@@ -64,8 +64,12 @@ func (b *HarborBackend) ensure(ctx context.Context, registry string) error {
 	return nil
 }
 
-func sourceRepo(registry, repo string) string {
-	return ProjectName(registry) + "/" + strings.TrimPrefix(repo, "/")
+func (b *HarborBackend) sourceRepo(registry, repo string) string {
+	project := ProjectName(registry)
+	if b.Provisioner != nil {
+		project = b.Provisioner.ProjectFor(registry)
+	}
+	return project + "/" + strings.TrimPrefix(repo, "/")
 }
 
 func (b *HarborBackend) mirrorRepo(registry, repo string) string {
@@ -90,7 +94,7 @@ func (b *HarborBackend) GetManifest(ctx context.Context, registry, repo, ref str
 	if err := b.ensure(ctx, registry); err != nil {
 		return Manifest{}, fmt.Errorf("provision Harbor for %q: %w", registry, err)
 	}
-	manifest, err := b.Source.GetManifest(ctx, sourceRepo(registry, repo), ref)
+	manifest, err := b.Source.GetManifest(ctx, b.sourceRepo(registry, repo), ref)
 	if err != nil {
 		return Manifest{}, fmt.Errorf("read source manifest %s/%s:%s: %w", registry, repo, ref, err)
 	}
@@ -189,7 +193,7 @@ func (b *HarborBackend) GetBlob(ctx context.Context, registry, repo, digest, ran
 	if err := b.ensure(ctx, registry); err != nil {
 		return nil, 0, "", fmt.Errorf("provision Harbor for %q: %w", registry, err)
 	}
-	body, size, contentRange, err := b.Source.GetBlob(ctx, sourceRepo(registry, repo), digest, rangeHeader)
+	body, size, contentRange, err := b.Source.GetBlob(ctx, b.sourceRepo(registry, repo), digest, rangeHeader)
 	if err != nil {
 		return nil, 0, "", fmt.Errorf("read source blob %s/%s@%s: %w", registry, repo, digest, err)
 	}
@@ -205,7 +209,7 @@ func (b *HarborBackend) Referrers(ctx context.Context, registry, repo, digest st
 	if err := b.ensure(ctx, registry); err != nil {
 		return nil, fmt.Errorf("provision Harbor for %q: %w", registry, err)
 	}
-	refs, err := b.Source.Referrers(ctx, sourceRepo(registry, repo), digest)
+	refs, err := b.Source.Referrers(ctx, b.sourceRepo(registry, repo), digest)
 	if err != nil {
 		return nil, fmt.Errorf("read source referrers %s/%s@%s: %w", registry, repo, digest, err)
 	}
