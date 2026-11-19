@@ -226,8 +226,9 @@ type Server struct {
 	Backend Backend
 	Convert http.Handler
 	Manager *Manager
-	// AuthUsername/AuthPassword enable optional Basic auth on /v2 reads.
-	// Empty values mean network-only (no client auth).
+	// AuthUsername/AuthPassword enable optional Basic auth on registry API
+	// reads in both the bare /v2 and /<registry>/v2 forms. Empty values mean
+	// network-only (no client auth).
 	AuthUsername string
 	AuthPassword string
 	requests     atomic.Uint64
@@ -241,8 +242,9 @@ func (s *Server) Handler() http.Handler {
 	}
 	return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		requestPath := stripBasePath(r.URL.Path, s.Config.BasePath())
-		// Health probes stay open; /api/convert has its own Bearer secret.
-		if strings.HasPrefix(requestPath, "/v2") {
+		// Health probes and /api/convert stay open; /api/convert has its own
+		// Bearer secret. Every registry API path requires client auth.
+		if s.requiresBasicAuth(requestPath) {
 			user, password, ok := r.BasicAuth()
 			if !ok || !equalConstantTime(user, s.AuthUsername) || !equalConstantTime(password, s.AuthPassword) {
 				w.Header().Set("WWW-Authenticate", `Basic realm="registry"`)
@@ -252,6 +254,18 @@ func (s *Server) Handler() http.Handler {
 		}
 		handler.ServeHTTP(w, r)
 	})
+}
+
+func (s *Server) requiresBasicAuth(requestPath string) bool {
+	switch requestPath {
+	case "/healthz", "/readyz", "/metrics", "/api/convert":
+		return false
+	}
+	if requestPath == "/v2" || strings.HasPrefix(requestPath, "/v2/") {
+		return true
+	}
+	parts := strings.SplitN(strings.TrimPrefix(requestPath, "/"), "/", 2)
+	return len(parts) == 2 && (parts[1] == "v2" || strings.HasPrefix(parts[1], "v2/"))
 }
 
 func equalConstantTime(value, expected string) bool {
