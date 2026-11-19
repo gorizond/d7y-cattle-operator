@@ -460,11 +460,11 @@ func TestSharedRegistryProxyHostAliasesTemplate(t *testing.T) {
 
 	// 3. A real annotation renders a parsed list of {ip, hostnames:[host]}.
 	rendered := renderFleetValue(t, noStaticTemplate, map[string]any{
-		AnnotationProxyHostAliases: "10.43.110.19=harbor.koldun.negash.ru",
+		AnnotationProxyHostAliases: "203.0.113.10=harbor.example.com",
 	})
 	hosts, _ := rendered[0]["hostnames"].([]any)
-	if len(rendered) != 1 || rendered[0]["ip"] != "10.43.110.19" || len(hosts) != 1 || hosts[0] != "harbor.koldun.negash.ru" {
-		t.Errorf("annotation rendered %v, want the harbor.koldun.negash.ru alias", rendered)
+	if len(rendered) != 1 || rendered[0]["ip"] != "203.0.113.10" || len(hosts) != 1 || hosts[0] != "harbor.example.com" {
+		t.Errorf("annotation rendered %v, want the harbor.example.com alias", rendered)
 	}
 
 	// 4. No static list and no annotation renders a real empty list.
