@@ -12,14 +12,16 @@ proxy, or the seed role.
 
 | Input | Output |
 |---|---|
-| any explicit registry (`registry.gitlab.com/...`, `quay.io/...`, `ghcr.io/...`) | `<proxy.domain>/<registry>/<repo>:<tag>` |
+| any explicit registry (`registry.example.test/...`, `quay.example.test/...`, `ghcr.example.test/...`) | `<proxy.domain>/<registry>/<repo>:<tag>` |
 | unqualified Docker Hub (`nginx:1.27`, `library/nginx:1.27`) | `<proxy.domain>/docker.io/library/nginx:1.27` |
 | proxy or Harbor ref | unchanged |
 
 `@sha256` digests are preserved exactly, and a second admission of an
 already-rewritten pod is a no-op. `kube-system`, `fleet-system`, `cattle-*`,
 `kube-node-lease`, and `kube-public` are excluded via `namespaceSelector` and
-the handler. `failurePolicy` defaults to `Fail`; the chart runs two replicas.
+the handler. The Helm release namespace is always appended to the selector from
+`.Release.Namespace`, so the webhook cannot block its own Deployment.
+`failurePolicy` defaults to `Fail`; the chart runs two replicas.
 
 ## Credentials (proxy pull path)
 
@@ -43,9 +45,14 @@ nydusd falls back to anonymous pulls and fails on private proxy projects.
 
 ## TLS
 
-With `tls.secretName` empty the chart generates a CA + serving certificate for
-the Service and reuses the Secret across upgrades; `caBundle` is wired into the
-`MutatingWebhookConfiguration`. With an external `tls.secretName`, set
+With `tls.secretName` empty the chart generates a CA + serving certificate and
+reuses the Secret across upgrades; `caBundle` is wired into the
+`MutatingWebhookConfiguration`. The certificate SANs cover the Service
+(`.Release.Name`, `.Release.Name.<namespace>`, and the `.svc` /
+`.svc.cluster.local` forms) plus the legacy TLS Secret name, because the
+webhook `clientConfig.service.name` is the Service. The SAN layout is marked in
+the Secret, so an upgrade from chart 0.1.0 reissues the certificate once. No
+alias Service is created. With an external `tls.secretName`, set
 `tls.caBundle` to the CA PEM.
 
 ## Values
@@ -58,5 +65,5 @@ the Service and reuses the Secret across upgrades; `caBundle` is wired into the
 | `inject.serviceAccountName` | `""` | serviceAccountName injected for proxy pulls |
 | `failurePolicy` | `Fail` | webhook failure policy |
 | `timeoutSeconds` | `5` | admission timeout |
-| `namespaceSelector` | excludes system namespaces | extend with opt-in matchLabels/expressions |
+| `namespaceSelector` | excludes system namespaces | extend with opt-in matchLabels/expressions; the release namespace is always excluded |
 | `tls.secretName` / `tls.caBundle` | `""` | external TLS Secret and CA |

@@ -43,5 +43,8 @@ jobs:
       - name: Render registry proxy checks
         run: bash scripts/test-registry-proxy.sh
 
+      - name: Render admission webhook checks
+        run: bash scripts/test-admission-webhook.sh
+
       - name: Render fork chart TLS probes
         run: bash scripts/test-fork-chart-tls.sh

@@ -55,16 +55,24 @@ const (
 
 	RegistryProxyChartRepo    = "https://gorizond.github.io/d7y-cattle-operator"
 	RegistryProxyChartName    = "registry-proxy"
-	RegistryProxyChartVersion = "0.1.11"
+	RegistryProxyChartVersion = "0.1.13"
 
 	AdmissionChartRepo    = "https://gorizond.github.io/d7y-cattle-operator"
 	AdmissionChartName    = "admission-webhook"
-	AdmissionChartVersion = "0.1.0"
+	AdmissionChartVersion = "0.1.1"
 )
 
 // HelmOpGVR identifies Fleet HelmOps for the resource client.
 var HelmOpGVR = schema.GroupVersionResource{
 	Group: "fleet.cattle.io", Version: "v1alpha1", Resource: "helmops",
+}
+
+// BundleGVR identifies the Fleet Bundle generated from a HelmOp. The helmop
+// controller names the Bundle after the HelmOp and labels it with
+// fleet.cattle.io/fleet-helm-name; deleting the Bundle is the bounded way to
+// let Fleet purge its BundleDeployments and downstream release.
+var BundleGVR = schema.GroupVersionResource{
+	Group: "fleet.cattle.io", Version: "v1alpha1", Resource: "bundles",
 }
 
 // Chart identifies a pinned Helm chart release.

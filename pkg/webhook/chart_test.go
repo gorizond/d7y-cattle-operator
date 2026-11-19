@@ -54,3 +54,38 @@ func TestOperatorChartWebhookContract(t *testing.T) {
 		t.Error("chart values do not enable the webhook and cert mount")
 	}
 }
+
+func TestAdmissionWebhookChartContract(t *testing.T) {
+	root := filepath.Join("..", "..", "charts", "admission-webhook")
+	read := func(path string) string {
+		t.Helper()
+		data, err := os.ReadFile(filepath.Join(root, path))
+		if err != nil {
+			t.Fatalf("read %s: %v", path, err)
+		}
+		return string(data)
+	}
+
+	webhook := read("templates/webhook.yaml")
+	for _, want := range []string{
+		`$serviceName := .Release.Name`,
+		`(printf "%s.%s.svc" $serviceName .Release.Namespace)`,
+		`(printf "%s.%s.svc.cluster.local" $serviceName .Release.Namespace)`,
+		`d7y.gorizond.io/tls-sans`,
+		`- key: kubernetes.io/metadata.name`,
+		`- {{ .Release.Namespace | quote }}`,
+		`name: {{ .Release.Name }}`,
+	} {
+		if !strings.Contains(webhook, want) {
+			t.Errorf("admission webhook template lacks %q", want)
+		}
+	}
+
+	service := read("templates/service.yaml")
+	if !strings.Contains(service, "name: {{ .Release.Name }}") {
+		t.Error("admission Service name is not .Release.Name")
+	}
+	if strings.Contains(service, "-tls") {
+		t.Error("admission chart must not render an alias TLS Service")
+	}
+}

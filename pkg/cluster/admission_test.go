@@ -188,3 +188,81 @@ func TestAdmissionHelmOpUsesIndependentChart(t *testing.T) {
 		t.Errorf("ProxyDomain = %q", hc.ProxyDomain)
 	}
 }
+
+func fleetBundle(name, namespace string) *unstructured.Unstructured {
+	return &unstructured.Unstructured{Object: map[string]any{
+		"apiVersion": "fleet.cattle.io/v1alpha1",
+		"kind":       "Bundle",
+		"metadata": map[string]any{
+			"name":      name,
+			"namespace": namespace,
+			"labels":    map[string]any{"fleet.cattle.io/fleet-helm-name": name},
+		},
+	}}
+}
+
+func TestReconcileAdmissionDisableDeletesBundle(t *testing.T) {
+	controller, store, _ := newTestController(t)
+	cluster := admissionCluster()
+	if _, err := controller.reconcile("", cluster); err != nil {
+		t.Fatalf("reconcile() error = %v", err)
+	}
+	bundles := controller.bundles.(*fakeHelmOpStore)
+	bundles.objects["fleet-default/c1-admission-webhook"] = fleetBundle("c1-admission-webhook", "fleet-default")
+	bundles.objects["fleet-default/c1-harbor"] = fleetBundle("c1-harbor", "fleet-default")
+
+	delete(cluster.Annotations, AnnotationAdmission)
+	if _, err := controller.reconcile("", cluster); err != nil {
+		t.Fatalf("reconcile(remove admission) error = %v", err)
+	}
+	if store.has("fleet-default/c1-admission-webhook") {
+		t.Error("admission HelmOp was not removed")
+	}
+	if bundles.has("fleet-default/c1-admission-webhook") {
+		t.Error("admission Bundle was not removed")
+	}
+	if !bundles.has("fleet-default/c1-harbor") {
+		t.Error("unrelated Bundle was removed with admission cleanup")
+	}
+}
+
+func TestReconcileDisableClusterDeletesAdmissionBundle(t *testing.T) {
+	controller, store, _ := newTestController(t)
+	cluster := admissionCluster()
+	if _, err := controller.reconcile("", cluster); err != nil {
+		t.Fatalf("reconcile() error = %v", err)
+	}
+	bundles := controller.bundles.(*fakeHelmOpStore)
+	bundles.objects["fleet-default/c1-admission-webhook"] = fleetBundle("c1-admission-webhook", "fleet-default")
+
+	delete(cluster.Labels, LabelEnabled)
+	if _, err := controller.reconcile("", cluster); err != nil {
+		t.Fatalf("reconcile(disable cluster) error = %v", err)
+	}
+	if store.has("fleet-default/c1-admission-webhook") {
+		t.Error("admission HelmOp was not removed by cleanupAll")
+	}
+	if bundles.has("fleet-default/c1-admission-webhook") {
+		t.Error("admission Bundle was not removed by cleanupAll")
+	}
+}
+
+func TestReconcileAdmissionDisableLeavesUnlabeledBundle(t *testing.T) {
+	controller, _, _ := newTestController(t)
+	cluster := admissionCluster()
+	if _, err := controller.reconcile("", cluster); err != nil {
+		t.Fatalf("reconcile() error = %v", err)
+	}
+	bundles := controller.bundles.(*fakeHelmOpStore)
+	foreign := fleetBundle("c1-admission-webhook", "fleet-default")
+	delete(foreign.Object["metadata"].(map[string]any)["labels"].(map[string]any), "fleet.cattle.io/fleet-helm-name")
+	bundles.objects["fleet-default/c1-admission-webhook"] = foreign
+
+	delete(cluster.Annotations, AnnotationAdmission)
+	if _, err := controller.reconcile("", cluster); err != nil {
+		t.Fatalf("reconcile(remove admission) error = %v", err)
+	}
+	if !bundles.has("fleet-default/c1-admission-webhook") {
+		t.Error("same-named Bundle without the HelmOp label was deleted")
+	}
+}

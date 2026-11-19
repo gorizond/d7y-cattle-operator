@@ -27,8 +27,11 @@ inject:
   serviceAccountName: ""
 
 # TLS/CA. With an empty tls.secretName the chart generates a CA and a serving
-# certificate for the Service and reuses them across upgrades. Set
-# tls.secretName (and tls.caBundle) to use an external Secret instead.
+# certificate whose SANs cover both the Service (.Release.Name) and the TLS
+# Secret (.Release.Name-tls), then reuses them across upgrades. The SAN layout
+# is versioned by a Secret annotation, so a chart upgrade reissues the
+# certificate once when the layout changes. Set tls.secretName (and
+# tls.caBundle) to use an external Secret instead.
 tls:
   secretName: ""
   caBundle: ""
@@ -40,7 +43,9 @@ timeoutSeconds: 5
 # Opt-in allowlist first: add matchExpressions/matchLabels here to restrict the
 # webhook to selected namespaces. kube-system, fleet-system, cattle-*,
 # kube-node-lease, and kube-public are always excluded (the handler also skips
-# cattle-* as a prefix).
+# cattle-* as a prefix). The Helm release namespace (.Release.Namespace) is
+# always appended as an extra NotIn expression so the webhook can never block
+# its own Deployment.
 namespaceSelector:
   matchExpressions:
     - key: kubernetes.io/metadata.name

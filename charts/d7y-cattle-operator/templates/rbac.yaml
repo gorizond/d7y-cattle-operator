@@ -15,6 +15,11 @@ rules:
   - apiGroups: ["fleet.cattle.io"]
     resources: ["helmops"]
     verbs: ["get", "list", "watch", "create", "update", "patch", "delete"]
+  # Bounded admission cleanup deletes the Fleet Bundle named after the HelmOp;
+  # Fleet itself purges BundleDeployments and the downstream release.
+  - apiGroups: ["fleet.cattle.io"]
+    resources: ["bundles"]
+    verbs: ["get", "list", "watch", "delete"]
   - apiGroups: ["rke-machine-config.cattle.io"]
     resources: ["*"]
     verbs: ["get", "list", "watch"]

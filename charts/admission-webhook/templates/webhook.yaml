@@ -1,10 +1,31 @@
 {{- $name := include "admission-webhook.tlsSecretName" . }}
+{{- $serviceName := .Release.Name }}
+{{- $sanVersion := "service-v1" }}
 {{- $ca := genCA (printf "%s-ca" .Release.Name) 3650 }}
-{{- $dns := list $name (printf "%s.%s" $name .Release.Namespace) (printf "%s.%s.svc" $name .Release.Namespace) (printf "%s.%s.svc.cluster.local" $name .Release.Namespace) }}
-{{- $cert := genSignedCert (printf "%s.%s.svc" $name .Release.Namespace) (list "127.0.0.1") $dns 3650 $ca }}
+{{- /* The MWC targets the Service (.Release.Name); the Secret name is kept as
+       an additional SAN for compatibility. Both are rendered from the release,
+       never from a hardcoded namespace or an alias Service. */ -}}
+{{- $dns := list
+      $serviceName
+      (printf "%s.%s" $serviceName .Release.Namespace)
+      (printf "%s.%s.svc" $serviceName .Release.Namespace)
+      (printf "%s.%s.svc.cluster.local" $serviceName .Release.Namespace)
+      $name
+      (printf "%s.%s" $name .Release.Namespace)
+      (printf "%s.%s.svc" $name .Release.Namespace)
+      (printf "%s.%s.svc.cluster.local" $name .Release.Namespace) }}
+{{- $cert := genSignedCert (printf "%s.%s.svc" $serviceName .Release.Namespace) (list "127.0.0.1") $dns 3650 $ca }}
 {{- $existing := lookup "v1" "Secret" .Release.Namespace $name }}
+{{- $marker := "" }}
+{{- if and $existing $existing.metadata $existing.metadata.annotations }}
+{{- $marker = index $existing.metadata.annotations "d7y.gorizond.io/tls-sans" | default "" }}
+{{- end }}
+{{- /* Reuse only a Secret generated with the current SAN layout. An upgrade
+       from chart 0.1.0 lacks the marker and therefore reissues the CA and the
+       serving certificate once with the Service SANs. */ -}}
+{{- $reuse := and $existing $existing.data (index $existing.data "ca.crt") (index $existing.data "tls.crt") (index $existing.data "tls.key") (eq $marker $sanVersion) }}
 {{- $caBundle := $ca.Cert }}
-{{- if and $existing $existing.data (index $existing.data "ca.crt") }}
+{{- if $reuse }}
 {{- $caBundle = index $existing.data "ca.crt" | b64dec }}
 {{- end }}
 {{- if .Values.tls.secretName }}
@@ -18,9 +39,11 @@ metadata:
   namespace: {{ .Release.Namespace }}
   labels:
     {{- include "admission-webhook.labels" . | nindent 4 }}
+  annotations:
+    d7y.gorizond.io/tls-sans: {{ $sanVersion | quote }}
 type: kubernetes.io/tls
 data:
-  {{- if and $existing $existing.data (index $existing.data "tls.crt") (index $existing.data "tls.key") }}
+  {{- if $reuse }}
   ca.crt: {{ index $existing.data "ca.crt" }}
   tls.crt: {{ index $existing.data "tls.crt" }}
   tls.key: {{ index $existing.data "tls.key" }}
@@ -50,7 +73,20 @@ webhooks:
         resources: ["pods"]
         scope: "Namespaced"
     namespaceSelector:
-      {{- toYaml .Values.namespaceSelector | nindent 6 }}
+      {{- with .Values.namespaceSelector.matchLabels }}
+      matchLabels:
+        {{- toYaml . | nindent 8 }}
+      {{- end }}
+      matchExpressions:
+        {{- with .Values.namespaceSelector.matchExpressions }}
+        {{- toYaml . | nindent 8 }}
+        {{- end }}
+        {{- /* Always exclude the Helm release namespace so the webhook cannot
+               block its own Deployment, wherever the chart is installed. */}}
+        - key: kubernetes.io/metadata.name
+          operator: NotIn
+          values:
+            - {{ .Release.Namespace | quote }}
     clientConfig:
       caBundle: {{ $caBundle | b64enc }}
       service:
