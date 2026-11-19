@@ -89,6 +89,28 @@ func TestCopierCopiesToMirrorAndLeavesSourceUntouched(t *testing.T) {
 	}
 }
 
+func TestCopierUsesGenericSourceProject(t *testing.T) {
+	source := newFakeRegistry()
+	mirror := newFakeRegistry()
+	body := []byte(`{"schemaVersion":2,"mediaType":"application/vnd.oci.image.manifest.v1+json","config":{"digest":"sha256:config"},"layers":[{"digest":"sha256:layer"}]}`)
+	source.manifests["quayio-generic/skopeo/stable:1.16.0"] = Manifest{
+		Digest: "sha256:source", MediaType: ociManifestType, Body: body,
+	}
+	source.blobs["quayio-generic/skopeo/stable:sha256:config"] = []byte("config")
+	source.blobs["quayio-generic/skopeo/stable:sha256:layer"] = []byte("layer")
+
+	copier := &Copier{
+		Source: source, Mirror: mirror, MirrorProject: "mirror",
+		SourceProject: func(string) string { return "quayio-generic" },
+	}
+	if _, err := copier.Copy(context.Background(), "quay.io", "skopeo/stable", "1.16.0"); err != nil {
+		t.Fatalf("Copy() error = %v", err)
+	}
+	if _, ok := mirror.manifests["mirror/quay.io/skopeo/stable:1.16.0"]; !ok {
+		t.Error("mirror manifest was not written from the generic project")
+	}
+}
+
 func TestCopierCopiesOCIIndexChildren(t *testing.T) {
 	source := newFakeRegistry()
 	mirror := newFakeRegistry()

@@ -170,7 +170,7 @@ func initialize(ctx context.Context, cfg *registryproxy.Config, bootstrap *boots
 	}
 	source := &registryproxy.HTTPRegistry{BaseURL: base, Username: robot.Name, Password: robot.Secret}
 	mirror := source
-	copier := &registryproxy.Copier{Source: source, Mirror: mirror, MirrorProject: cfg.Mirror.Project}
+	copier := &registryproxy.Copier{Source: source, Mirror: mirror, MirrorProject: cfg.Mirror.Project, SourceProject: provisioner.ProjectFor}
 	timeout, _ := time.ParseDuration(cfg.Conversion.Timeout)
 	converter := &registryproxy.Converter{
 		HarborURL: base, MirrorProject: cfg.Mirror.Project, ProxyPublicURL: cfg.Proxy.PublicURL,

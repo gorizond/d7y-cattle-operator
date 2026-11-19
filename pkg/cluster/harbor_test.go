@@ -151,7 +151,7 @@ func proxyRobotRevision(t *testing.T, store *fakeHelmOpStore) string {
 }
 
 func TestRegistryProxySourceProjects(t *testing.T) {
-	want := []string{"dockerio", "ghcrio", "*"}
+	want := []string{"dockerio", "dockerio-generic", "ghcrio", "ghcrio-generic", "*"}
 	if got := registryProxySourceProjects([]string{"docker.io", " ghcr.io ", "", "*"}); !reflect.DeepEqual(got, want) {
 		t.Errorf("source projects = %v, want %v", got, want)
 	}

@@ -182,7 +182,10 @@ func registryProxySourceProjects(registries []string) []string {
 			projects = append(projects, "*")
 			continue
 		}
-		projects = append(projects, registryproxy.ProjectName(registry))
+		name := registryproxy.ProjectName(registry)
+		// The proxy falls back to "<name>-generic" when Harbor refuses to
+		// re-point an existing proxy-cache project to a reconciled endpoint.
+		projects = append(projects, name, name+"-generic")
 	}
 	return projects
 }

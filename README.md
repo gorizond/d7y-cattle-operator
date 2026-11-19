@@ -470,11 +470,15 @@ bootstrap layer rather than descriptor position, and moves that index to
 `<tag>`. A multiarch tag is converted through its target-platform child digest;
 the published index keeps only that child plus the nydus artifact, because
 nydusify copies only the converted child and Harbor rejects an index whose
-descriptors are absent from the target repository. The proxy also reconciles
-Harbor registry endpoints: an existing endpoint with a stale type or URL is
-updated in place (deleted and recreated if Harbor refuses), so a legacy
-`quay`-type endpoint is replaced by the generic `docker-registry` adapter that
-Harbor actually supports. `/api/convert` is a Harbor-reachable shared-secret endpoint
+descriptors are absent from the target repository. Harbor registry endpoints are
+reconciled without changing an existing type: Docker Hub keeps the
+`docker-hub` adapter, every other host uses the generic `docker-registry`
+adapter (the typed GitHub/GitLab/Quay adapters embed it), and a stale-type
+endpoint is left untouched while a deterministic `<host>-generic` endpoint is
+created. A same-type URL drift is updated in place. When a source project still
+points at the old endpoint, the proxy re-points the project `registry_id` if Harbor
+allows, otherwise it creates and uses a deterministic `<project>-generic`
+project. `/api/convert` is a Harbor-reachable shared-secret endpoint
 and returns 202 before the asynchronous copy/conversion.
 
 The proxy Manager is intentionally in-memory. After a proxy restart, in-flight
