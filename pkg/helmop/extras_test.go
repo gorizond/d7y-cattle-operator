@@ -32,7 +32,7 @@ func TestExtrasHelmOp(t *testing.T) {
 	if len(op.Spec.DownstreamResources) != 0 {
 		t.Errorf("downstreamResources = %+v, want none", op.Spec.DownstreamResources)
 	}
-	if op.Spec.Helm.Chart != "dragonfly-extras" || op.Spec.Helm.Version != "0.1.8" {
+	if op.Spec.Helm.Chart != "dragonfly-extras" || op.Spec.Helm.Version != "0.1.9" {
 		t.Errorf("chart = %s %s", op.Spec.Helm.Chart, op.Spec.Helm.Version)
 	}
 
