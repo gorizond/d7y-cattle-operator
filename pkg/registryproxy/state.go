@@ -42,6 +42,7 @@ type JobState struct {
 	Attempts  int
 	LastError string
 	Digest    string
+	Permanent bool
 	UpdatedAt time.Time
 }
 
@@ -90,6 +91,9 @@ func (m *Manager) Enqueue(job Job) bool {
 	m.mu.Lock()
 	defer m.mu.Unlock()
 	if existing, ok := m.jobs[key]; ok {
+		if existing.Permanent && existing.State == "failed" && (job.Digest == "" || existing.Digest == job.Digest) {
+			return false
+		}
 		if existing.State != "failed" && (job.Digest == "" || existing.Digest == job.Digest) {
 			return false
 		}
@@ -181,6 +185,12 @@ func (m *Manager) run(ctx context.Context, job Job) {
 			"attempt", attempt,
 			"error", err,
 		)
+		if errors.Is(err, ErrNonConvertible) {
+			// A platform mismatch is permanent: retrying cannot change the
+			// source image and would only stall the single worker.
+			m.finishFailed(key, attempt, err)
+			return
+		}
 		if errors.Is(err, context.DeadlineExceeded) || errors.Is(err, context.Canceled) || ctx.Err() != nil {
 			// A timed-out or shutting-down attempt is not retried: retrying a
 			// stuck conversion only extends the worker stall.
@@ -197,6 +207,11 @@ func (m *Manager) finishFailed(key string, attempts int, err error) {
 		err = errors.New("job failed")
 	}
 	m.setState(key, "failed", attempts, err.Error())
+	m.mu.Lock()
+	if job := m.jobs[key]; job != nil {
+		job.Permanent = errors.Is(err, ErrNonConvertible)
+	}
+	m.mu.Unlock()
 	m.failed.Add(1)
 }
 

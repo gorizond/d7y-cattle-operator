@@ -94,10 +94,12 @@ func (h *HarborClient) do(ctx context.Context, method, path string, body any, ou
 
 // registrySpec returns the Harbor endpoint for an upstream host. Harbor 2.15.4
 // types github-ghcr, gitlab, and quay embed the same native docker adapter, so
-// the generic docker-registry type is used for every host except Docker Hub.
-// Docker Hub needs the docker-hub adapter (registry-1.docker.io plus library/
-// path handling); a generic endpoint pointed at https://hub.docker.com fails
-// its health check with 404.
+// the generic docker-registry type is used for new endpoints on every host
+// except Docker Hub. Docker Hub needs the docker-hub adapter
+// (registry-1.docker.io plus library/ path handling); a generic endpoint
+// pointed at https://hub.docker.com fails its health check with 404. An
+// existing github-ghcr endpoint is accepted for ghcr.io instead of creating an
+// unused generic endpoint.
 func registrySpec(host string) HarborRegistry {
 	if host == "docker.io" {
 		return HarborRegistry{Name: host, Type: "docker-hub", URL: "https://hub.docker.com"}
@@ -106,6 +108,19 @@ func registrySpec(host string) HarborRegistry {
 	// MCR, registry.k8s.io, NVCR, Elastic, Red Hat, and SUSE OCI registries.
 	// Private NVCR/Red Hat endpoints additionally need credentials.
 	return HarborRegistry{Name: host, Type: "docker-registry", URL: "https://" + host}
+}
+
+// compatibleRegistryType reports whether an existing endpoint type can serve
+// host. Harbor's github-ghcr adapter is equivalent to docker-registry for
+// ghcr.io and already carries the working proxy-cache project, so it is kept
+// instead of being replaced by a "<host>-generic" endpoint. Quay's typed
+// adapter is not accepted: the live stale quay endpoint used the broken quay
+// path, so quay.io keeps the generic fallback.
+func compatibleRegistryType(host, typ string) bool {
+	if typ == registrySpec(host).Type {
+		return true
+	}
+	return host == "ghcr.io" && typ == "github-ghcr"
 }
 
 // genericRegistryName derives a Harbor-safe deterministic endpoint name for a
@@ -136,9 +151,23 @@ func (h *HarborClient) EnsureRegistry(ctx context.Context, host string) (HarborR
 		return HarborRegistry{}, err
 	}
 	if existing == nil {
+		// A previous generic fallback is still the working endpoint for this
+		// host; reuse it instead of recreating the canonical name and moving
+		// the project again.
+		alternate, err := h.findRegistry(ctx, genericRegistryName(host))
+		if err != nil {
+			return HarborRegistry{}, err
+		}
+		// Only reuse a generic endpoint that was created with this host's
+		// adapter type. In particular, docker.io must not reuse a
+		// docker-registry generic endpoint (the docker-hub adapter is
+		// required for Docker Hub).
+		if alternate != nil && alternate.Type == spec.Type {
+			return h.reconcileRegistryURL(ctx, *alternate, spec, host)
+		}
 		return h.createRegistry(ctx, spec, host)
 	}
-	if existing.Type == spec.Type {
+	if compatibleRegistryType(host, existing.Type) {
 		return h.reconcileRegistryURL(ctx, *existing, spec, host)
 	}
 	generic := spec
@@ -148,7 +177,7 @@ func (h *HarborClient) EnsureRegistry(ctx context.Context, host string) (HarborR
 		return HarborRegistry{}, err
 	}
 	if alternate != nil {
-		if alternate.Type != spec.Type {
+		if !compatibleRegistryType(host, alternate.Type) {
 			return HarborRegistry{}, fmt.Errorf(
 				"harbor endpoint %q has type %q, want %q; remove or rename it manually",
 				alternate.Name, alternate.Type, spec.Type)
@@ -175,7 +204,7 @@ func (h *HarborClient) CleanupStaleRegistry(ctx context.Context, host string) er
 	if err != nil {
 		return err
 	}
-	if stale == nil || stale.Name == genericRegistryName(host) || stale.Type == registrySpec(host).Type {
+	if stale == nil || stale.Name == genericRegistryName(host) || compatibleRegistryType(host, stale.Type) {
 		return nil
 	}
 	path := "/api/v2.0/registries/" + strconv.Itoa(stale.ID)
@@ -192,6 +221,43 @@ func (h *HarborClient) CleanupStaleRegistry(ctx context.Context, host string) er
 	}
 	slog.Info("harbor stale registry endpoint removed",
 		"registry", stale.Name, "type", stale.Type, "id", stale.ID)
+	return nil
+}
+
+// CleanupUnusedGenericRegistry removes a leftover "<host>-generic" endpoint
+// when the canonical endpoint is compatible and used for the host. It is
+// explicit and bounded (two lookups and at most one DELETE) and never touches
+// the canonical endpoint. A generic endpoint that still has a project answers
+// 412; it is logged and kept. Hosts that actually use their generic endpoint
+// (canonical missing or stale, for example quay.io) are left untouched.
+func (h *HarborClient) CleanupUnusedGenericRegistry(ctx context.Context, host string) error {
+	canonical, err := h.findRegistry(ctx, host)
+	if err != nil {
+		return err
+	}
+	if canonical == nil || !compatibleRegistryType(host, canonical.Type) {
+		return nil
+	}
+	generic, err := h.findRegistry(ctx, genericRegistryName(host))
+	if err != nil {
+		return err
+	}
+	if generic == nil || generic.Type != registrySpec(host).Type {
+		return nil
+	}
+	status, err := h.do(ctx, http.MethodDelete, "/api/v2.0/registries/"+strconv.Itoa(generic.ID), nil, nil)
+	if err != nil {
+		if status == http.StatusPreconditionFailed {
+			slog.Info("harbor unused generic endpoint is still referenced; leaving it",
+				"registry", generic.Name, "type", generic.Type, "id", generic.ID)
+			return nil
+		}
+		slog.Warn("harbor unused generic endpoint cleanup failed; leaving it",
+			"registry", generic.Name, "type", generic.Type, "id", generic.ID, "error", err)
+		return nil
+	}
+	slog.Info("harbor unused generic endpoint removed",
+		"registry", generic.Name, "type", generic.Type, "id", generic.ID)
 	return nil
 }
 
@@ -553,6 +619,12 @@ func (p *Provisioner) Ensure(ctx context.Context, registry string) error {
 	// a referenced endpoint answers 412 and stays.
 	if err := p.Harbor.CleanupStaleRegistry(ctx, registry); err != nil {
 		slog.Warn("harbor stale registry endpoint cleanup skipped", "registry", registry, "error", err)
+	}
+	// A previous rollout may have created "<host>-generic" before the
+	// canonical endpoint was recognized as compatible (ghcr.io); remove it
+	// once the canonical endpoint serves the project again.
+	if err := p.Harbor.CleanupUnusedGenericRegistry(ctx, registry); err != nil {
+		slog.Warn("harbor unused generic endpoint cleanup skipped", "registry", registry, "error", err)
 	}
 	if _, err := p.Harbor.EnsureProject(ctx, p.MirrorProject, 0); err != nil {
 		return fmt.Errorf("ensure Harbor mirror project %q: %w", p.MirrorProject, err)
