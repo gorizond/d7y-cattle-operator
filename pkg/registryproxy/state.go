@@ -181,6 +181,12 @@ func (m *Manager) run(ctx context.Context, job Job) {
 			"attempt", attempt,
 			"error", err,
 		)
+		if errors.Is(err, ErrNonConvertible) {
+			// A platform mismatch is permanent: retrying cannot change the
+			// source image and would only stall the single worker.
+			m.finishFailed(key, attempt, err)
+			return
+		}
 		if errors.Is(err, context.DeadlineExceeded) || errors.Is(err, context.Canceled) || ctx.Err() != nil {
 			// A timed-out or shutting-down attempt is not retried: retrying a
 			// stuck conversion only extends the worker stall.
