@@ -20,19 +20,22 @@ helm install p2p-static charts/p2p-static \
 populate it from GitOps/an init job. `static.sizeLimit` optionally caps the
 `emptyDir`.
 
-The chart values `nydus.fsDriver` and `nydus.clusterId` are rendered into
-`p2p-install.sh`:
+The chart value `nydus.clusterId` is rendered into `p2p-install.sh`:
 
 ```bash
 helm install p2p-static charts/p2p-static \
-  --set nydus.fsDriver=fusedev        # legacy fallback; default is fscache
   --set nydus.clusterId=example-node  # nydusd id/domain_id; default empty
 ```
 
-`nydus.fsDriver` selects the host snapshotter filesystem driver (`fscache`
-by default, `fusedev` as the documented fallback). `nydus.clusterId` is
-optional: when empty the installer uses the payload scheduler cluster ID and
-then the node hostname.
+`nydus.clusterId` is optional: when empty the installer uses the payload
+scheduler cluster ID and then the node hostname.
+
+The filesystem driver is not a chart value. `p2p-install.sh` installs both
+nydusd configs and `/usr/local/bin/nydus-fs-select`; the selector runs before
+every snapshotter start and chooses fscache or fusedev from the running kernel
+and the fscache prerequisites. Stock kernels therefore get fusedev without a
+chart override, and a later kernel upgrade can enable fscache without
+rerunning the installer.
 
 The Ingress is optional and does not manage TLS or DNS.
 
@@ -91,19 +94,22 @@ deployed, and workloads do not need `runtimeClass: nydus`.
 - containerd 1.7 / config v2 has no drop-in imports, so the script writes a
   global-nydus `config.toml.tmpl` with the same snapshotter and proxy settings.
 - The host unit starts before `rke2-server.service`/`rke2-agent.service`
-  (`Before=`) and uses
-  `containerd-nydus-grpc --config /etc/nydus/config.toml --nydusd /usr/local/bin/nydusd --nydusd-config <config>`.
-  `<config>` is `/etc/nydus/nydusd-config.fscache.json` for `fscache` and
-  `/etc/nydus/nydusd-config.json` for `fusedev`.
-- `/etc/nydus/config.toml` uses the fscache shape by default:
+  (`Before=`), runs `ExecStartPre=/usr/local/bin/nydus-fs-select`, and uses
+  `containerd-nydus-grpc --config /etc/nydus/config.toml --nydusd /usr/local/bin/nydusd`.
+  The nydusd config path comes from `/etc/nydus/config.toml`, so the selector
+  can change it between starts without editing the unit.
+- `/usr/local/bin/nydus-fs-select` writes `/etc/nydus/config.toml`
+  idempotently. When the running kernel has `CONFIG_EROFS_FS_ONDEMAND=y` and
+  `CONFIG_CACHEFILES_ONDEMAND=y`, the modules load, `/dev/cachefiles` exists,
+  and cachefilesd does not own the device, it selects the fscache shape:
   `daemon_mode = "shared"`, `nydusd_config =
   "/etc/nydus/nydusd-config.fscache.json"`, `fs_driver = "fscache"`,
   `threads_number = 8`, `[remote] skip_ssl_verify = false`, and
-  `[remote.auth] enable_kubeconfig_keychain = true`. With
-  `nydus.fsDriver=fusedev` it instead uses `daemon_mode = "multiple"`,
-  `fs_driver = "fusedev"`, `[experimental] enable_referrer_detect =
-  true`/`enable_index_detect = true`, and the legacy
-  `/etc/nydus/nydusd-config.json`. Tarfs is never enabled.
+  `[remote.auth] enable_kubeconfig_keychain = true`. Otherwise it selects
+  fusedev: `daemon_mode = "multiple"`, `fs_driver = "fusedev"`,
+  `[experimental] enable_referrer_detect = true`/`enable_index_detect = true`,
+  and the legacy `/etc/nydus/nydusd-config.json`. Tarfs is never enabled.
+  The chosen mode and reason are logged; no secrets are read or logged.
 - `/etc/nydus/nydusd-config.fscache.json` is the nydusd bootstrap config for
   EROFS over fscache. It is generated from the canonical
   `files/nydusd-config.fscache.json` shape: `registry` backend over the local
@@ -127,29 +133,29 @@ deployed, and workloads do not need `runtimeClass: nydus`.
 
 Stock Ubuntu 24.04 GA/HWE kernels ship both required options as `n`
 (`CONFIG_EROFS_FS_ONDEMAND=n`, `CONFIG_CACHEFILES_ONDEMAND=n`); 6.12 is not a
-noble HWE kernel. The default `fscache` driver therefore requires a custom or
-signed kernel built with:
+noble HWE kernel. The selector probes the running kernel at every snapshotter
+start and requires:
 
-- `CONFIG_EROFS_FS_ONDEMAND=y` and `CONFIG_CACHEFILES_ONDEMAND=y` in the
-  running kernel config (`/boot/config-$(uname -r)`, or `/proc/config.gz`).
-  `p2p-install.sh` requires the literal `=y` and falls back to `fusedev` with
-  a clear error otherwise. `=m` and unset are rejected.
-- The `erofs`, `fscache`, and `cachefiles` modules. The installer loads them
-  with `modprobe`, writes `/etc/modules-load.d/nydus.conf` with `erofs` and
-  `cachefiles` for the next boot, and verifies `/dev/cachefiles` appears.
-  A present `/dev/cachefiles` only proves `CONFIG_CACHEFILES` is loaded; it
-  does not prove on-demand support, so the CONFIG check is independent and
-  runs first.
-- Exclusive ownership of `/dev/cachefiles`. `cachefilesd` must not be used:
-  the installer never starts or installs it, and when the unit is present it
-  stops, disables, masks, and verifies it is inactive; if that fails it falls
-  back to `fusedev` instead of racing cachefilesd for the device.
+- The literal `CONFIG_EROFS_FS_ONDEMAND=y` and
+  `CONFIG_CACHEFILES_ONDEMAND=y` in the running kernel config
+  (`/boot/config-$(uname -r)`, or `/proc/config.gz`). `=n`, `=m`, and unset
+  select fusedev. A stock kernel therefore works out of the box on fusedev.
+- The `erofs`, `fscache`, and `cachefiles` modules loaded with `modprobe`, and
+  `/dev/cachefiles` present. A present `/dev/cachefiles` only proves
+  `CONFIG_CACHEFILES` is loaded; it does not prove on-demand support, so the
+  CONFIG check is independent and runs first. `p2p-install.sh` also writes
+  `/etc/modules-load.d/nydus.conf` (`erofs`, `cachefiles`) for the next boot.
+- Exclusive ownership of `/dev/cachefiles`. `cachefilesd` must be absent or
+  stopped, disabled, masked, and inactive: the selector stops/disables/masks
+  the unit when present and verifies it is inactive. If it is still active,
+  masking fails, or a `cachefilesd` process is running, the selector chooses
+  fusedev instead of racing it for the device.
 
-Any missing prerequisite logs an error and falls back to `fusedev` with the
-legacy nydusd config, rather than starting a snapshotter that cannot mount
-images. Set `nydus.fsDriver=fusedev` to skip the fscache probe entirely.
-`SKIP_KERNEL_CHECK=1` bypasses only the kernel config-file check and is meant
-for kernels where both on-demand options are known to be built in.
+Any missing prerequisite selects fusedev with the legacy nydusd config and a
+logged reason, rather than starting a snapshotter that cannot mount images.
+`nydus-updater` reruns the selector before deciding whether to restart the
+unit, and the unit's `ExecStartPre` reruns it on every start, so a kernel or
+module change is picked up without rerunning `p2p-install.sh`.
 
 Images must be RAFS v6 for EROFS/fscache. The registry-proxy nydusify
 conversion must pass `--fs-version 6` (the proxy PR wires `fs_version=6`);
@@ -158,12 +164,13 @@ conversion code.
 
 ### Nydus mirror config
 
-The mirror layout applies to the `fusedev` driver only. In the default
-`fscache` mode the installer keeps the local dfdaemon proxy in the nydusd
-bootstrap and logs a warning if `NYDUS_MIRROR_URL` is set; the fscache
-`config.toml` does not include `[remote.mirrors_config]`.
+The mirror layout applies only when the selector chooses `fusedev`. The
+installer always writes the mirror assets for a configured `NYDUS_MIRROR_URL`
+and records `/etc/nydus/mirrors.enabled`; if fscache is selected, the fscache
+`config.toml` omits `[remote.mirrors_config]`, keeps the local dfdaemon proxy
+in the nydusd bootstrap, and the selector logs a warning.
 
-When `NYDUS_MIRROR_URL` is set with `fusedev`, the installer writes:
+When `NYDUS_MIRROR_URL` is set, the installer writes:
 
 ```text
 /etc/nydus/mirrors/docker.io/hosts.toml
@@ -181,8 +188,8 @@ server = "https://proxy.example.test/docker.io"
 ```
 
 The `server` line documents the default server; the `[host."<url>"]` entry is
-the containerd-compatible mirror table that nydus-snapshotter reads. It also
-adds this to `/etc/nydus/config.toml`:
+the containerd-compatible mirror table that nydus-snapshotter reads. When the
+selector chooses fusedev, it also adds this to `/etc/nydus/config.toml`:
 
 ```toml
 [remote.mirrors_config]
@@ -327,28 +334,30 @@ bash charts/p2p-static/files/test.sh
 ```
 
 The test uses temporary roots, `SKIP_DOWNLOAD=1`, and a fake `curl`/release
-asset for the snapshotter download path; it asserts the env payload decode,
+asset for the snapshotter download path. It asserts the env payload decode,
 certificate files/modes, `dfget.yaml`, `dynconfig.yaml`, scheduler ID, the
-default fscache `/etc/nydus/config.toml` shape and the exact
-`nydusd-config.fscache.json` render (including dynamic `id`/`domain_id`),
-the `fusedev` fallback config and unit path, `modprobe` calls for
-`erofs`/`fscache`/`cachefiles` plus the module-failure fallback, the
-registry-backend `nydusd-config.json`, the fusedev nydus mirror layout and
-proxy-free backend, the global nydus drop-in (containerd
-2.x) and global template (containerd 1.x), the host snapshotter unit and
-release URL/checksum, the updater script/units, the fail-open direct-registry
-path, and absence of certificate values in logs. `shellcheck` runs when
-installed. `scripts/test-p2p-static.sh` runs `bash -n`, `shellcheck` when
-available, the self-test, and a `helm template` render check.
+exact selector-installed fscache and fusedev `/etc/nydus/config.toml` shapes,
+the selector matrix (`=n`, `=m`, missing config, both `=y` plus device and no
+cachefilesd, active cachefilesd, missing device, missing fscache config), the
+exact `nydusd-config.fscache.json` render (including dynamic
+`id`/`domain_id`), both installed nydusd configs, `ExecStartPre` and the
+`nydus-updater` selector call, the fusedev nydus mirror layout and proxy-free
+backend, the fscache mirror warning, the global nydus drop-in (containerd 2.x)
+and global template (containerd 1.x), release URL/checksum, the fail-open
+direct-registry path, and absence of certificate values in logs or hardcoded
+hosts in the selector. `shellcheck` runs when installed.
+`scripts/test-p2p-static.sh` runs `bash -n`, `shellcheck` when available, the
+self-test, and a `helm template` render check.
 
 ## Pilot gaps
 
 - The fscache path is unit- and render-tested only. Stock Ubuntu 24.04
-  GA/HWE kernels report both CONFIG options as `n`; a live poligon VM with a
-  custom or signed kernel must confirm both are `=y`, `/dev/cachefiles` is
-  created, cachefilesd is absent/stopped/disabled/masked, and the pinned
-  snapshotter supports `threads_number`/`enable_kubeconfig_keychain` before
-  rollout.
+  GA/HWE kernels report both CONFIG options as `n`, so the selector must choose
+  fusedev there. A live poligon VM with a custom or signed kernel must confirm
+  both are `=y`, `/dev/cachefiles` is created, cachefilesd is
+  absent/stopped/disabled/masked, `ExecStartPre` rewrites `/etc/nydus/config.toml`
+  to the fscache shape, and the pinned snapshotter supports
+  `threads_number`/`enable_kubeconfig_keychain` before rollout.
 - Base-template merge and drop-in import behaviour need a live pilot, including
   `containerd config dump` after a manual `rke2-agent`/`rke2-server` restart.
 - The static `/bin` (or `/nydus/<version>`) volume must be populated externally
@@ -362,10 +371,10 @@ available, the self-test, and a `helm template` render check.
   to its origin host.
 - nydus tarfs is intentionally disabled; enabling it later requires a kernel
   with tarfs support (>= 6.4) and a matching nydusd.
-- The updater restarts the host snapshotter after a static binary change; the
-  pilot must confirm that the short socket outage does not disturb running
-  pods, and that the static asset layout matches the deployed p2p-static
-  volume.
+- The updater reruns `nydus-fs-select` and restarts the host snapshotter only
+  when the binaries or the driver selection changed; the pilot must confirm
+  that the short socket outage does not disturb running pods, and that the
+  static asset layout matches the deployed p2p-static volume.
 - The bootstrap `dfget.yaml` intentionally has no `manager.addr`; it uses a
   local `dynconfig.yaml` with `scheduler.addr: <SCHEDULER_HOST>:443` so the
   node uses the public Traefik front. The exact dfdaemon dynconfig reload needs

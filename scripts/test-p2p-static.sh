@@ -3,6 +3,7 @@ set -euo pipefail
 
 root="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
 script="$root/charts/p2p-static/files/p2p-install.sh"
+selector="$root/charts/p2p-static/files/nydus-fs-select.sh"
 self_test="$root/charts/p2p-static/files/test.sh"
 tmp="$(mktemp -d)"
 trap 'rm -rf "$tmp"' EXIT
@@ -13,8 +14,9 @@ fail() {
 }
 
 bash -n "$script" || fail "p2p-install.sh has a syntax error"
+bash -n "$selector" || fail "nydus-fs-select.sh has a syntax error"
 if command -v shellcheck >/dev/null 2>&1; then
-  shellcheck "$script" "$self_test" || fail "shellcheck failed"
+  shellcheck "$script" "$selector" "$self_test" || fail "shellcheck failed"
 else
   echo "shellcheck not installed; skipping shellcheck"
 fi
@@ -44,7 +46,9 @@ grep -q 'use_local_image_pull' "$tmp/p2p-static.yaml" || fail "p2p-static script
 grep -q 'enable_referrer_detect = true' "$tmp/p2p-static.yaml" || fail "p2p-static script is missing enable_referrer_detect"
 grep -q 'enable_index_detect = true' "$tmp/p2p-static.yaml" || fail "p2p-static script is missing enable_index_detect"
 grep -q 'nydusd-config.fscache.json' "$tmp/p2p-static.yaml" || fail "p2p-static script is missing the fscache nydusd config"
+grep -q 'nydus-fs-select' "$tmp/p2p-static.yaml" || fail "p2p-static script is missing the filesystem selector"
 grep -q 'fs_driver = "fscache"' "$tmp/p2p-static.yaml" || fail "p2p-static script is missing the fscache fs_driver"
+grep -q 'fs_driver = "fusedev"' "$tmp/p2p-static.yaml" || fail "p2p-static script is missing the fusedev fs_driver"
 grep -q 'threads_number = 8' "$tmp/p2p-static.yaml" || fail "p2p-static script is missing fscache threads_number"
 grep -q 'enable_kubeconfig_keychain = true' "$tmp/p2p-static.yaml" || fail "p2p-static script is missing the kubeconfig keychain"
 grep -q 'CONFIG_EROFS_FS_ONDEMAND' "$tmp/p2p-static.yaml" || fail "p2p-static script is missing the EROFS on-demand config check"
@@ -54,11 +58,16 @@ grep -q 'CACHEFILES_DEVICE="${CACHEFILES_DEVICE:-/dev/cachefiles}"' "$tmp/p2p-st
 grep -q 'cachefilesd.service' "$tmp/p2p-static.yaml" || fail "p2p-static script is missing the cachefilesd mask"
 grep -q 'stop cachefilesd.service' "$tmp/p2p-static.yaml" || fail "p2p-static script is missing the cachefilesd stop"
 grep -q 'mask cachefilesd.service' "$tmp/p2p-static.yaml" || fail "p2p-static script is missing the cachefilesd mask call"
-grep -q 'falling back to fusedev' "$tmp/p2p-static.yaml" || fail "p2p-static script is missing the fscache fallback"
+grep -q 'ExecStartPre=/usr/local/bin/nydus-fs-select' "$tmp/p2p-static.yaml" || fail "p2p-static unit is missing the selector ExecStartPre"
+if grep -q -- '--nydusd-config' "$tmp/p2p-static.yaml"; then
+  fail "p2p-static unit must let the selector choose --nydusd-config via config.toml"
+fi
 grep -q 'fs_version=6' "$tmp/p2p-static.yaml" || fail "p2p-static script is missing the RAFS v6 prerequisite note"
-grep -q 'NYDUS_FS_DRIVER="${NYDUS_FS_DRIVER:-fscache}"' "$tmp/p2p-static.yaml" || fail "p2p-static chart value nydus.fsDriver did not render"
 if grep -q '__NYDUS_FS_DRIVER__' "$tmp/p2p-static.yaml" || grep -q '__NYDUS_CLUSTER_ID__' "$tmp/p2p-static.yaml"; then
   fail "p2p-static script still contains unrendered nydus placeholders"
+fi
+if grep -q 'NYDUS_FS_DRIVER' "$tmp/p2p-static.yaml"; then
+  fail "p2p-static must not pin the filesystem driver"
 fi
 if grep -q 'k3s-gpu-erofs' "$tmp/p2p-static.yaml"; then
   fail "p2p-static must not hardcode a cluster name"
@@ -79,8 +88,8 @@ if grep -q 'kind: PersistentVolumeClaim' "$tmp/p2p-static.yaml"; then
 fi
 
 helm template p2p-static "$root/charts/p2p-static" --namespace dragonfly-system \
-  --set nydus.fsDriver=fusedev --set nydus.clusterId=example-node >"$tmp/p2p-static-values.yaml"
-grep -q 'NYDUS_FS_DRIVER="${NYDUS_FS_DRIVER:-fusedev}"' "$tmp/p2p-static-values.yaml" || fail "p2p-static chart value nydus.fsDriver=fusedev did not render"
+  --set nydus.clusterId=example-node >"$tmp/p2p-static-values.yaml"
 grep -q 'NYDUS_CLUSTER_ID_DEFAULT="example-node"' "$tmp/p2p-static-values.yaml" || fail "p2p-static chart value nydus.clusterId did not render"
+grep -q 'nydus-fs-select' "$tmp/p2p-static-values.yaml" || fail "p2p-static selector did not render"
 
 echo "p2p-static render checks passed"

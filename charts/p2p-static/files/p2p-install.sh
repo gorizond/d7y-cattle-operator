@@ -35,13 +35,10 @@ NYDUS_SNAPSHOTTER_BINARY="containerd-nydus-grpc"
 # from the mirror path and removes that proxy block.
 NYDUS_MIRROR_DIR="/etc/nydus/mirrors"
 NYDUS_MIRROR_URL="${NYDUS_MIRROR_URL:-}"
-# Host nydus-snapshotter filesystem driver. The Helm chart renders the
-# nydus.fsDriver value into the placeholder below; a raw script run defaults to
-# fscache. fusedev is the documented fallback when fscache modules are absent.
-NYDUS_FS_DRIVER="${NYDUS_FS_DRIVER:-__NYDUS_FS_DRIVER__}"
-case "$NYDUS_FS_DRIVER" in
-  ""|__NYDUS_*) NYDUS_FS_DRIVER="fscache" ;;
-esac
+# Both nydusd configs are installed. /usr/local/bin/nydus-fs-select runs as
+# ExecStartPre on every snapshotter start and picks fscache or fusedev from the
+# running kernel and the fscache/cachefiles prerequisites. The installer does
+# not pin the mode, so a kernel change is picked up without rerunning it.
 SCHEDULER_PORT=443
 PREFLIGHT_TIMEOUT="${P2P_PREFLIGHT_TIMEOUT:-3}"
 BIN_DIR="${ROOT}/usr/local/bin"
@@ -274,11 +271,6 @@ if [ "$SCHEDULER_CLUSTER_ID" -lt 1 ] 2>/dev/null; then
   die "scheduler_cluster_id must be a positive integer"
 fi
 
-case "$NYDUS_FS_DRIVER" in
-  fscache|fusedev) ;;
-  *) die "nydus_fs_driver must be fscache or fusedev" ;;
-esac
-
 # nydusd bootstrap id/domain_id. Precedence: optional payload/env value (or the
 # chart nydus.clusterId render), then the scheduler cluster ID, then hostname.
 NYDUS_CLUSTER_ID_DEFAULT="__NYDUS_CLUSTER_ID__"
@@ -373,159 +365,14 @@ preflight() {
 
 preflight
 
-# fscache (EROFS over the kernel fscache/cachefiles stack) needs kernel
-# on-demand support, the erofs/fscache/cachefiles modules, and a free
-# /dev/cachefiles. Any missing prerequisite falls back to fusedev explicitly
-# instead of starting a snapshotter that cannot mount images.
-MODPROBE_BIN="${MODPROBE:-modprobe}"
-SYSTEMCTL_BIN="${SYSTEMCTL:-systemctl}"
-CACHEFILES_DEVICE="${CACHEFILES_DEVICE:-/dev/cachefiles}"
-KERNEL_CONFIG_FILE="${KERNEL_CONFIG_FILE:-}"
-
-# The running kernel config is at /boot/config-$(uname -r); /proc/config.gz
-# is the fallback. EROFS on-demand read is what lets the fscache driver serve
-# RAFS v6 blobs. Stock Ubuntu 24.04 GA/HWE kernels ship both on-demand options
-# as =n, and 6.12 is not a noble HWE kernel, so fscache requires a custom or
-# signed kernel built with CONFIG_EROFS_FS_ONDEMAND=y and
-# CONFIG_CACHEFILES_ONDEMAND=y. A present /dev/cachefiles only proves that
-# CONFIG_CACHEFILES is loaded; it does not prove on-demand support.
-kernel_config_file() {
-  local candidate
-  if [ -n "$KERNEL_CONFIG_FILE" ]; then
-    printf '%s' "$KERNEL_CONFIG_FILE"
-    return 0
-  fi
-  candidate="${ROOT}/boot/config-$(uname -r)"
-  if [ -r "$candidate" ]; then
-    printf '%s' "$candidate"
-    return 0
-  fi
-  if [ "$REAL_ROOT" = "1" ] && [ -r /proc/config.gz ] && command -v zcat >/dev/null 2>&1; then
-    if zcat /proc/config.gz > "$TMP/kernel-config" 2>/dev/null; then
-      printf '%s' "$TMP/kernel-config"
-      return 0
-    fi
-  fi
-  return 1
-}
-
-check_fscache_kernel_config() {
-  local cfg key found
-  if ! cfg="$(kernel_config_file)"; then
-    log "ERROR: no readable kernel config (${ROOT}/boot/config-$(uname -r) or /proc/config.gz); cannot verify CONFIG_EROFS_FS_ONDEMAND=y and CONFIG_CACHEFILES_ONDEMAND=y"
-    return 1
-  fi
-  if [ ! -r "$cfg" ]; then
-    log "ERROR: kernel config ${cfg} is not readable; cannot verify CONFIG_EROFS_FS_ONDEMAND=y and CONFIG_CACHEFILES_ONDEMAND=y"
-    return 1
-  fi
-  for key in CONFIG_EROFS_FS_ONDEMAND CONFIG_CACHEFILES_ONDEMAND; do
-    found="$(grep -m1 "^${key}=" "$cfg" 2>/dev/null || true)"
-    if [ "$found" != "${key}=y" ]; then
-      log "ERROR: ${key}=y is required for EROFS over fscache (${cfg} has '${found:-unset}'); stock Ubuntu 24.04 GA/HWE has =n, use a custom or signed kernel"
-      return 1
-    fi
-  done
-}
-
-# nydusd's fscache driver must own /dev/cachefiles. If the distro cachefilesd
-# package is installed, stop/disable/mask it so it cannot claim the device or
-# serve a competing cache. Never start it.
-disable_system_cachefilesd() {
-  local unit
-  for unit in \
-    "${ROOT}/etc/systemd/system/cachefilesd.service" \
-    "${ROOT}/usr/lib/systemd/system/cachefilesd.service" \
-    "${ROOT}/lib/systemd/system/cachefilesd.service"; do
-    if [ -e "$unit" ]; then
-      "$SYSTEMCTL_BIN" stop cachefilesd.service >/dev/null 2>&1 || true
-      "$SYSTEMCTL_BIN" disable cachefilesd.service >/dev/null 2>&1 || true
-      if ! "$SYSTEMCTL_BIN" mask cachefilesd.service >/dev/null 2>&1; then
-        log "ERROR: could not mask cachefilesd.service; nydusd cannot guarantee ownership of ${CACHEFILES_DEVICE}"
-        return 1
-      fi
-      if "$SYSTEMCTL_BIN" is-active --quiet cachefilesd.service >/dev/null 2>&1; then
-        log "ERROR: cachefilesd.service is still active; nydusd cannot own ${CACHEFILES_DEVICE}"
-        return 1
-      fi
-      log "cachefilesd stopped, disabled, masked, and inactive; nydusd fscache owns ${CACHEFILES_DEVICE}"
-      return 0
-    fi
-  done
-  log "cachefilesd is not installed; nydusd fscache owns ${CACHEFILES_DEVICE}"
-}
-
-prepare_fscache() {
-  local module
-  for module in erofs fscache cachefiles; do
-    if ! "$MODPROBE_BIN" "$module" >/dev/null 2>&1; then
-      log "ERROR: could not load kernel module ${module} required by fscache"
-      return 1
-    fi
-  done
-  # /dev/cachefiles only proves CONFIG_CACHEFILES is loaded; the config
-  # preflight above is what proves the on-demand path. Check both.
-  if [ ! -e "$CACHEFILES_DEVICE" ]; then
-    log "ERROR: ${CACHEFILES_DEVICE} is missing after loading cachefiles; nydusd fscache needs it"
-    return 1
-  fi
-  if [ "${SKIP_SYSTEMD:-0}" != "1" ] && { [ "$REAL_ROOT" = "1" ] || [ -n "${SYSTEMCTL:-}" ]; }; then
-    if ! disable_system_cachefilesd; then
-      return 1
-    fi
-  fi
-  log "fscache ready: erofs/fscache/cachefiles loaded, ${CACHEFILES_DEVICE} present"
-}
-
-load_fusedev_modules() {
-  local module
-  for module in fuse erofs; do
-    "$MODPROBE_BIN" "$module" >/dev/null 2>&1 || log "warning: could not load module ${module}"
-  done
-}
-
-# On-demand support is a kernel build option, not a loadable module: verify it
-# before touching modules so stock Ubuntu 24.04 GA/HWE kernels (=n) fail clearly.
-if [ "$NYDUS_FS_DRIVER" = "fscache" ] && [ "${SKIP_KERNEL_CHECK:-0}" != "1" ] &&
-  { [ "$REAL_ROOT" = "1" ] || [ -n "$KERNEL_CONFIG_FILE" ]; }; then
-  if ! check_fscache_kernel_config; then
-    log "ERROR: fscache selected but the kernel lacks the required on-demand options; falling back to fusedev"
-    NYDUS_FS_DRIVER="fusedev"
-  fi
-fi
-
-if [ "${SKIP_MODULES:-0}" != "1" ] && { [ "$REAL_ROOT" = "1" ] || [ -n "${MODPROBE:-}" ]; }; then
-  if command -v "$MODPROBE_BIN" >/dev/null 2>&1; then
-    if [ "$NYDUS_FS_DRIVER" = "fscache" ]; then
-      if ! prepare_fscache; then
-        log "ERROR: fscache selected but its prerequisites are not met; falling back to fusedev"
-        NYDUS_FS_DRIVER="fusedev"
-      fi
-    else
-      load_fusedev_modules
-    fi
-  elif [ "$NYDUS_FS_DRIVER" = "fscache" ]; then
-    log "ERROR: fscache selected but ${MODPROBE_BIN} is unavailable; falling back to fusedev"
-    NYDUS_FS_DRIVER="fusedev"
-  else
-    log "warning: ${MODPROBE_BIN} is not available"
-  fi
-fi
-
-# Declarative boot-time module loading for the fscache stack. cachefiles pulls
-# fscache as a dependency; the modules-load.d file only lists the two modules
-# the snapshotter mounts need.
-if [ "$NYDUS_FS_DRIVER" = "fscache" ]; then
-  write_file "${ROOT}/etc/modules-load.d/nydus.conf" 0644 <<'MODULES'
+# Declarative boot-time module loading for the nydus stack. cachefiles pulls
+# fscache as a dependency; the selector below tolerates missing modules and
+# falls back to fusedev, so this list is safe on kernels without on-demand
+# fscache support.
+write_file "${ROOT}/etc/modules-load.d/nydus.conf" 0644 <<'MODULES'
 erofs
 cachefiles
 MODULES
-fi
-
-case "$NYDUS_FS_DRIVER" in
-  fscache) NYDUSD_CONFIG_PATH="${NYDUS_DIR}/nydusd-config.fscache.json" ;;
-  *) NYDUSD_CONFIG_PATH="${NYDUS_DIR}/nydusd-config.json" ;;
-esac
 
 mkdir -p \
   "${ROOT}${CERT_DIR}" \
@@ -561,7 +408,7 @@ write_file "${ROOT}${CERT_DIR}/tls.key" 0600 < "$TMP/tls.key"
 # matching hosts.toml entry. The same proxy path is used for docker.io and its
 # index.docker.io alias; _default covers any other registry host. These files
 # contain only the public mirror URL, never credentials.
-if [ -n "${NYDUS_MIRROR_URL:-}" ] && [ "$NYDUS_FS_DRIVER" = "fusedev" ]; then
+if [ -n "${NYDUS_MIRROR_URL:-}" ]; then
   for mirror_host in docker.io index.docker.io _default; do
     mirror_dir="${ROOT}${NYDUS_MIRROR_DIR}/${mirror_host}"
     mkdir -p "$mirror_dir"
@@ -572,6 +419,11 @@ if [ -n "${NYDUS_MIRROR_URL:-}" ] && [ "$NYDUS_FS_DRIVER" = "fusedev" ]; then
       printf '\n[host."%s"]\n' "$NYDUS_MIRROR_URL"
     } | write_file "${mirror_dir}/hosts.toml" 0644
   done
+  # The selector reads this marker (not the mirror files) so an unchanged
+  # mirror URL stays idempotent and stale entries are never invented.
+  : | write_file "${ROOT}${NYDUS_DIR}/mirrors.enabled" 0644
+else
+  rm -f "${ROOT}${NYDUS_DIR}/mirrors.enabled"
 fi
 
 # P2P data upload is intentionally plaintext here; only the scheduler control
@@ -595,71 +447,9 @@ scheduler:
   addr: "$SCHEDULER_HOST:$SCHEDULER_PORT"
 EOF
 
-if [ "$NYDUS_FS_DRIVER" = "fscache" ]; then
-  # Exact fscache shape: one shared snapshotter daemon, EROFS over the kernel
-  # fscache/cachefiles stack, kubeconfig keychain for registry auth. The nydus
-  # mirror layout is not part of this shape; the nydusd fscache bootstrap keeps
-  # the local dfdaemon proxy instead.
-  write_file "${ROOT}${NYDUS_DIR}/config.toml" 0644 <<TOML
-version = 1
-root = "/var/lib/containerd-nydus"
-address = "/run/containerd-nydus/containerd-nydus-grpc.sock"
-daemon_mode = "shared"
-
-[daemon]
-  nydusd_path = "/usr/local/bin/nydusd"
-  nydusimage_path = "/usr/local/bin/nydus-image"
-  nydusd_config = "${NYDUSD_CONFIG_PATH}"
-  fs_driver = "fscache"
-  threads_number = 8
-
-[remote]
-  skip_ssl_verify = false
-
-[remote.auth]
-  enable_kubeconfig_keychain = true
-TOML
-  if [ -n "${NYDUS_MIRROR_URL:-}" ]; then
-    log "warning: NYDUS_MIRROR_URL is only applied with fs_driver=fusedev; the fscache nydusd config keeps the dfdaemon proxy"
-  fi
-  log "fscache requires RAFS v6 images; the registry-proxy nydusify conversion must pass --fs-version 6 (fs_version=6; proxy-owned, not this chart)"
-else
-  {
-    cat <<'TOML'
-version = 1
-root = "/var/lib/containerd-nydus"
-address = "/run/containerd-nydus/containerd-nydus-grpc.sock"
-daemon_mode = "multiple"
-
-# The patched snapshotter reads containerd's certs.d directly
-# (/var/lib/rancher/rke2/agent/etc/containerd/certs.d, then
-# /etc/containerd/certs.d), so it honors the same hosts.toml mirrors and
-# headers that containerd used for the pull. No local MITM proxy or CA is installed.
-[daemon]
-  nydusd_config = "/etc/nydus/nydusd-config.json"
-  nydusd_path = "/usr/local/bin/nydusd"
-  nydusimage_path = "/usr/local/bin/nydus-image"
-  fs_driver = "fusedev"
-  recover_policy = "failover"
-
-# Experimental image auto-detection. These are nydus-snapshotter config.toml
-# options under [experimental], not nydusd JSON fields; tarfs stays disabled.
-[experimental]
-  enable_referrer_detect = true
-  enable_index_detect = true
-TOML
-    if [ -n "${NYDUS_MIRROR_URL:-}" ]; then
-      cat <<TOML
-
-# Mirror host selection for nydusd. The snapshotter rewrites the backend host
-# to the first matching mirror before each mount; the files are written under
-# ${NYDUS_MIRROR_DIR}. Without a mirror entry nydusd keeps the origin registry.
-[remote.mirrors_config]
-  dir = "$NYDUS_MIRROR_DIR"
-TOML
-    fi
-  } | write_file "${ROOT}${NYDUS_DIR}/config.toml" 0644
-fi
+# /etc/nydus/config.toml is written below by nydus-fs-select after both nydusd
+# configs exist, so the initial install and every snapshotter start use the
+# same selection logic.
 
 # nydusd fscache bootstrap. This is the canonical shape shipped as
 # files/nydusd-config.fscache.json; the ids come from the chart value or the
@@ -778,6 +568,243 @@ else
   }
 }
 JSON
+fi
+
+# The selector is the single writer of /etc/nydus/config.toml. Both modes stay
+# installed; at every snapshotter start it probes the running kernel and picks
+# the driver that can actually mount images. Keep this heredoc byte-identical
+# to files/nydus-fs-select.sh (files/test.sh compares the installed copy).
+write_file "${BIN_DIR}/nydus-fs-select" 0755 <<'SELECTOR'
+#!/usr/bin/env bash
+# Select the nydus snapshotter filesystem driver at service start.
+#
+# fscache (EROFS over the kernel fscache/cachefiles stack) is used only when
+# the running kernel has on-demand read support, the required modules load,
+# /dev/cachefiles is available, and cachefilesd does not own it. Every other
+# case selects fusedev, so the snapshotter always has a working config.
+set -Eeuo pipefail
+IFS=$'\n\t'
+
+P2P_ROOT="${P2P_ROOT:-/}"
+ROOT="${P2P_ROOT%/}"
+NYDUS_DIR="/etc/nydus"
+CONFIG_PATH="${ROOT}${NYDUS_DIR}/config.toml"
+FSCACHE_JSON="${NYDUS_DIR}/nydusd-config.fscache.json"
+FUSEDEV_JSON="${NYDUS_DIR}/nydusd-config.json"
+CACHEFILES_DEVICE="${CACHEFILES_DEVICE:-/dev/cachefiles}"
+MODPROBE_BIN="${MODPROBE:-modprobe}"
+SYSTEMCTL_BIN="${SYSTEMCTL:-systemctl}"
+KERNEL_CONFIG_FILE="${KERNEL_CONFIG_FILE:-}"
+MIRRORS_DIR="${NYDUS_MIRROR_DIR:-/etc/nydus/mirrors}"
+MIRRORS_MARKER="${ROOT}${NYDUS_DIR}/mirrors.enabled"
+TMP="$(mktemp -d)"
+trap 'rm -rf "$TMP"' EXIT
+
+log() {
+  printf 'nydus-fs-select: %s\n' "$*" >&2
+}
+
+write_config() {
+  local tmp
+  mkdir -p "$(dirname "$CONFIG_PATH")"
+  tmp="${CONFIG_PATH}.tmp.$$"
+  cat > "$tmp"
+  chmod 0644 "$tmp"
+  if [ -f "$CONFIG_PATH" ] && cmp -s "$tmp" "$CONFIG_PATH"; then
+    rm -f "$tmp"
+    chmod 0644 "$CONFIG_PATH"
+  else
+    mv -f "$tmp" "$CONFIG_PATH"
+  fi
+}
+
+kernel_config_file() {
+  local candidate
+  if [ -n "$KERNEL_CONFIG_FILE" ]; then
+    printf '%s' "$KERNEL_CONFIG_FILE"
+    return 0
+  fi
+  candidate="${ROOT}/boot/config-$(uname -r)"
+  if [ -r "$candidate" ]; then
+    printf '%s' "$candidate"
+    return 0
+  fi
+  if [ -r /proc/config.gz ] && command -v zcat >/dev/null 2>&1; then
+    if zcat /proc/config.gz > "$TMP/kernel-config" 2>/dev/null; then
+      printf '%s' "$TMP/kernel-config"
+      return 0
+    fi
+  fi
+  return 1
+}
+
+reason=""
+
+release_cachefilesd() {
+  local unit
+  for unit in \
+    "${ROOT}/etc/systemd/system/cachefilesd.service" \
+    "${ROOT}/usr/lib/systemd/system/cachefilesd.service" \
+    "${ROOT}/lib/systemd/system/cachefilesd.service"; do
+    if [ -e "$unit" ]; then
+      if ! command -v "$SYSTEMCTL_BIN" >/dev/null 2>&1; then
+        reason="${SYSTEMCTL_BIN} is unavailable while cachefilesd.service exists"
+        return 1
+      fi
+      "$SYSTEMCTL_BIN" stop cachefilesd.service >/dev/null 2>&1 || true
+      "$SYSTEMCTL_BIN" disable cachefilesd.service >/dev/null 2>&1 || true
+      if ! "$SYSTEMCTL_BIN" mask cachefilesd.service >/dev/null 2>&1; then
+        reason="cachefilesd.service could not be masked; it may own ${CACHEFILES_DEVICE}"
+        return 1
+      fi
+      if "$SYSTEMCTL_BIN" is-active --quiet cachefilesd.service >/dev/null 2>&1; then
+        reason="cachefilesd.service is active and may own ${CACHEFILES_DEVICE}"
+        return 1
+      fi
+      break
+    fi
+  done
+  if command -v pgrep >/dev/null 2>&1 && pgrep -x cachefilesd >/dev/null 2>&1; then
+    reason="cachefilesd is running and may own ${CACHEFILES_DEVICE}"
+    return 1
+  fi
+  return 0
+}
+
+fscache_usable() {
+  local cfg key found module
+  if ! cfg="$(kernel_config_file)"; then
+    reason="no readable kernel config (${ROOT}/boot/config-$(uname -r) or /proc/config.gz)"
+    return 1
+  fi
+  if [ ! -r "$cfg" ]; then
+    reason="kernel config ${cfg} is not readable"
+    return 1
+  fi
+  for key in CONFIG_EROFS_FS_ONDEMAND CONFIG_CACHEFILES_ONDEMAND; do
+    found="$(grep -m1 "^${key}=" "$cfg" 2>/dev/null | cut -d= -f2- || true)"
+    if [ "$found" != "y" ]; then
+      reason="${key} is '${found:-unset}', required literal ${key}=y"
+      return 1
+    fi
+  done
+
+  if [ "${SKIP_MODULES:-0}" != "1" ]; then
+    if ! command -v "$MODPROBE_BIN" >/dev/null 2>&1; then
+      reason="${MODPROBE_BIN} is unavailable"
+      return 1
+    fi
+    for module in erofs fscache cachefiles; do
+      if ! "$MODPROBE_BIN" "$module" >/dev/null 2>&1; then
+        reason="kernel module ${module} could not be loaded"
+        return 1
+      fi
+    done
+  fi
+  if [ ! -e "$CACHEFILES_DEVICE" ]; then
+    reason="${CACHEFILES_DEVICE} is missing after loading cachefiles"
+    return 1
+  fi
+  if [ "${SKIP_SYSTEMD:-0}" != "1" ]; then
+    if ! release_cachefilesd; then
+      return 1
+    fi
+  fi
+  return 0
+}
+
+load_fusedev_modules() {
+  local module
+  [ "${SKIP_MODULES:-0}" = "1" ] && return 0
+  command -v "$MODPROBE_BIN" >/dev/null 2>&1 || return 0
+  for module in fuse erofs; do
+    "$MODPROBE_BIN" "$module" >/dev/null 2>&1 || log "warning: could not load module ${module}"
+  done
+}
+
+if ! fscache_usable; then
+  mode="fusedev"
+elif [ ! -f "${ROOT}${FSCACHE_JSON}" ]; then
+  mode="fusedev"
+  reason="${FSCACHE_JSON} is not installed"
+else
+  mode="fscache"
+  reason="kernel has CONFIG_EROFS_FS_ONDEMAND=y and CONFIG_CACHEFILES_ONDEMAND=y, modules loaded, ${CACHEFILES_DEVICE} present, cachefilesd is not running"
+fi
+
+if [ "$mode" = "fusedev" ]; then
+  if [ ! -f "${ROOT}${FUSEDEV_JSON}" ]; then
+    log "ERROR: ${FUSEDEV_JSON} is missing; refusing to write an unusable config"
+    exit 1
+  fi
+  load_fusedev_modules
+  {
+    cat <<'TOML'
+version = 1
+root = "/var/lib/containerd-nydus"
+address = "/run/containerd-nydus/containerd-nydus-grpc.sock"
+daemon_mode = "multiple"
+
+# The patched snapshotter reads containerd's certs.d directly
+# (/var/lib/rancher/rke2/agent/etc/containerd/certs.d, then
+# /etc/containerd/certs.d), so it honors the same hosts.toml mirrors and
+# headers that containerd used for the pull. No local MITM proxy or CA is installed.
+[daemon]
+  nydusd_config = "/etc/nydus/nydusd-config.json"
+  nydusd_path = "/usr/local/bin/nydusd"
+  nydusimage_path = "/usr/local/bin/nydus-image"
+  fs_driver = "fusedev"
+  recover_policy = "failover"
+
+# Experimental image auto-detection. These are nydus-snapshotter config.toml
+# options under [experimental], not nydusd JSON fields; tarfs stays disabled.
+[experimental]
+  enable_referrer_detect = true
+  enable_index_detect = true
+TOML
+    if [ -f "$MIRRORS_MARKER" ]; then
+      cat <<TOML
+
+# Mirror host selection for nydusd. The snapshotter rewrites the backend host
+# to the first matching mirror before each mount; the files are written under
+# ${MIRRORS_DIR}. Without a mirror entry nydusd keeps the origin registry.
+[remote.mirrors_config]
+  dir = "$MIRRORS_DIR"
+TOML
+    fi
+  } | write_config
+else
+  if [ -f "$MIRRORS_MARKER" ]; then
+    log "warning: nydus mirrors are only applied with fs_driver=fusedev; fscache keeps the dfdaemon proxy"
+  fi
+  write_config <<'TOML'
+version = 1
+root = "/var/lib/containerd-nydus"
+address = "/run/containerd-nydus/containerd-nydus-grpc.sock"
+daemon_mode = "shared"
+
+[daemon]
+  nydusd_path = "/usr/local/bin/nydusd"
+  nydusimage_path = "/usr/local/bin/nydus-image"
+  nydusd_config = "/etc/nydus/nydusd-config.fscache.json"
+  fs_driver = "fscache"
+  threads_number = 8
+
+[remote]
+  skip_ssl_verify = false
+
+[remote.auth]
+  enable_kubeconfig_keychain = true
+TOML
+fi
+
+log "selected fs_driver=${mode}: ${reason}"
+SELECTOR
+
+# Write the initial config.toml now so ConditionPathExists on the unit passes
+# before the first start. ExecStartPre repeats the same probe on every start.
+if ! "${BIN_DIR}/nydus-fs-select"; then
+  fallback_direct "nydus filesystem selector failed"
 fi
 
 CONTAINERD_MAJOR="${CONTAINERD_MAJOR:-$(detect_containerd_major)}"
@@ -997,7 +1024,10 @@ ConditionPathExists=/etc/nydus/config.toml
 Type=simple
 Environment=PATH=/usr/local/bin:/usr/local/sbin:/usr/sbin:/usr/bin:/sbin:/bin
 UNIT
-  printf 'ExecStart=/usr/local/bin/containerd-nydus-grpc --config /etc/nydus/config.toml --nydusd /usr/local/bin/nydusd --nydusd-config %s\n' "$NYDUSD_CONFIG_PATH"
+  cat <<'UNIT'
+ExecStartPre=/usr/local/bin/nydus-fs-select
+ExecStart=/usr/local/bin/containerd-nydus-grpc --config /etc/nydus/config.toml --nydusd /usr/local/bin/nydusd
+UNIT
   cat <<'UNIT'
 ExecStartPost=/bin/sh -c 'i=0; while [ ! -S /run/containerd-nydus/containerd-nydus-grpc.sock ]; do i=$((i + 1)); [ "$i" -ge 60 ] && exit 1; sleep 1; done'
 Restart=always
@@ -1062,7 +1092,26 @@ for binary in nydusd nydus-image nydus-overlayfs; do
   mv -f "${bin_dir}/.${binary}.new" "${bin_dir}/${binary}"
   changed=1
 done
-if [ "$changed" = 1 ]; then
+# Re-evaluate the driver even when the binaries did not change: a kernel
+# upgrade can make fscache usable (or unusable). Restart only when the
+# selection actually rewrote config.toml.
+config_changed=0
+if [ -x /usr/local/bin/nydus-fs-select ]; then
+  config_before=""
+  config_after=""
+  if [ -f /etc/nydus/config.toml ]; then
+    config_before="$(sha256sum /etc/nydus/config.toml | cut -d' ' -f1)"
+  fi
+  /usr/local/bin/nydus-fs-select
+  if [ -f /etc/nydus/config.toml ]; then
+    config_after="$(sha256sum /etc/nydus/config.toml | cut -d' ' -f1)"
+  fi
+  if [ "$config_before" != "$config_after" ]; then
+    config_changed=1
+  fi
+fi
+
+if [ "$changed" = 1 ] || [ "$config_changed" = 1 ]; then
   systemctl restart nydus-snapshotter-bootstrap.service
   systemctl is-active --quiet nydus-snapshotter-bootstrap.service || {
     echo "nydus-updater: nydus-snapshotter-bootstrap.service is not active after restart" >&2
@@ -1070,7 +1119,7 @@ if [ "$changed" = 1 ]; then
   }
   echo "nydus-updater: updated to ${NYDUS_VERSION} and restarted the host snapshotter"
 else
-  echo "nydus-updater: ${NYDUS_VERSION} already installed"
+  echo "nydus-updater: ${NYDUS_VERSION} already installed; fs_driver selection unchanged"
 fi
 UPDATER
 
@@ -1150,10 +1199,11 @@ fi
 log "certificates written to ${CERT_DIR}"
 log "dfget.yaml written with scheduler cluster ID ${SCHEDULER_CLUSTER_ID}"
 log "dynconfig written with scheduler ${SCHEDULER_HOST}:${SCHEDULER_PORT}"
-log "nydus ${NYDUS_VERSION} configuration written to ${NYDUS_DIR} (fs_driver=${NYDUS_FS_DRIVER}, nydusd_config=${NYDUSD_CONFIG_PATH})"
-if [ -n "${NYDUS_MIRROR_URL:-}" ] && [ "$NYDUS_FS_DRIVER" = "fusedev" ]; then
-  log "nydus mirror ${NYDUS_MIRROR_URL} configured; dfdaemon proxy block disabled for nydus blobs"
-elif [ -z "${NYDUS_MIRROR_URL:-}" ]; then
+log "nydus ${NYDUS_VERSION} fscache and fusedev configs written to ${NYDUS_DIR}; nydus-fs-select chooses the driver at snapshotter start"
+log "nydus fscache requires RAFS v6 images; the registry-proxy nydusify conversion must pass --fs-version 6 (fs_version=6; proxy-owned, not this chart)"
+if [ -n "${NYDUS_MIRROR_URL:-}" ]; then
+  log "nydus mirror ${NYDUS_MIRROR_URL} installed for fusedev; fscache keeps the dfdaemon proxy"
+else
   log "nydus mirror disabled; keeping the dfdaemon proxy fallback for nydus blobs"
 fi
 log "nydus-snapshotter ${NYDUS_SNAPSHOTTER_VERSION} installed from ${NYDUS_SNAPSHOTTER_REPO}"
