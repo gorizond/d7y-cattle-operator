@@ -39,6 +39,13 @@ type CreatePersonalAccessTokenResponse struct {
 	Token string `json:"token"`
 }
 
+// PersonalAccessToken is the subset of a manager PAT record the operator uses.
+// The list endpoint may include a token field; it is deliberately not decoded.
+type PersonalAccessToken struct {
+	ID   int64  `json:"id"`
+	Name string `json:"name"`
+}
+
 // SchedulerCluster is the subset of a manager record the operator uses.
 type SchedulerCluster struct {
 	ID   int64  `json:"id"`
