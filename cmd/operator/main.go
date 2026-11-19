@@ -142,6 +142,8 @@ func run() error {
 		ProxyRegistries:          splitCSV(cfg.ProxyRegistries),
 		ProxyBasePath:            cfg.ProxyBasePath,
 		ProxyTLSSecret:           cfg.ProxyTLSSecret,
+		ProxyBasicAuthEnabled:    cfg.ProxyBasicAuthEnabled,
+		ProxyBasicAuthUsername:   cfg.ProxyBasicAuthUsername,
 		ProxyHostAliases:         cfg.ProxyHostAliases,
 		AdmissionImagePullSecret: cfg.AdmissionImagePullSecret,
 		AdmissionServiceAccount:  cfg.AdmissionServiceAccount,

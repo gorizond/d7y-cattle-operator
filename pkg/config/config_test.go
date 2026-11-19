@@ -38,6 +38,8 @@ var envKeys = []string{
 	"PROXY_REGISTRIES",
 	"PROXY_BASE_PATH",
 	"PROXY_TLS_SECRET",
+	"PROXY_BASIC_AUTH_ENABLED",
+	"PROXY_BASIC_AUTH_USERNAME",
 	"PROXY_HOST_ALIASES",
 	"EXTRAS_INGRESS_CONTROLLER",
 	"EXTRAS_INGRESS_CLASS_NAME",
@@ -140,6 +142,12 @@ func TestLoadDefaults(t *testing.T) {
 	if cfg.ProxyTLSSecret != "" {
 		t.Errorf("ProxyTLSSecret = %q, want empty", cfg.ProxyTLSSecret)
 	}
+	if cfg.ProxyBasicAuthEnabled {
+		t.Error("ProxyBasicAuthEnabled = true, want false")
+	}
+	if cfg.ProxyBasicAuthUsername != DefaultProxyBasicAuthUsername {
+		t.Errorf("ProxyBasicAuthUsername = %q, want %q", cfg.ProxyBasicAuthUsername, DefaultProxyBasicAuthUsername)
+	}
 	if cfg.ExtrasIngressController != DefaultExtrasIngressController {
 		t.Errorf("ExtrasIngressController = %q, want %q", cfg.ExtrasIngressController, DefaultExtrasIngressController)
 	}
@@ -188,7 +196,7 @@ func TestForkChartDefaults(t *testing.T) {
 	if DefaultMirrorChartVersion != "0.1.0" {
 		t.Errorf("DefaultMirrorChartVersion = %q", DefaultMirrorChartVersion)
 	}
-	if DefaultRegistryProxyChartVersion != "0.1.21" {
+	if DefaultRegistryProxyChartVersion != "0.1.22" {
 		t.Errorf("DefaultRegistryProxyChartVersion = %q", DefaultRegistryProxyChartVersion)
 	}
 }
@@ -428,6 +436,22 @@ func TestLoadHarborProxyEnv(t *testing.T) {
 	}
 	if cfg.ProxyBasePath != "/proxy" || cfg.ProxyTLSSecret != "demo-harbor-tls" {
 		t.Errorf("proxy path/TLS = %q/%q", cfg.ProxyBasePath, cfg.ProxyTLSSecret)
+	}
+}
+
+func TestLoadProxyBasicAuthEnv(t *testing.T) {
+	clearEnv(t)
+	t.Setenv("PROXY_BASIC_AUTH_ENABLED", "true")
+	t.Setenv("PROXY_BASIC_AUTH_USERNAME", "proxy-user")
+	cfg, err := Load(requiredArgs())
+	if err != nil {
+		t.Fatalf("Load() error = %v", err)
+	}
+	if !cfg.ProxyBasicAuthEnabled {
+		t.Error("ProxyBasicAuthEnabled = false, want true")
+	}
+	if cfg.ProxyBasicAuthUsername != "proxy-user" {
+		t.Errorf("ProxyBasicAuthUsername = %q, want proxy-user", cfg.ProxyBasicAuthUsername)
 	}
 }
 

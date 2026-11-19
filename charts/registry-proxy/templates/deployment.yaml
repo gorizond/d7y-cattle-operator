@@ -1,3 +1,7 @@
+{{- if eq .Values.auth.mode "basic" }}
+{{- if not .Values.auth.username }}{{ fail "registry-proxy: auth.username is required when auth.mode is basic" }}{{ end }}
+{{- if not .Values.auth.passwordSecret }}{{ fail "registry-proxy: auth.passwordSecret is required when auth.mode is basic" }}{{ end }}
+{{- end }}
 apiVersion: apps/v1
 kind: Deployment
 metadata:
@@ -98,6 +102,11 @@ spec:
             - name: webhook
               mountPath: /etc/registry-proxy/secrets/webhook
               readOnly: true
+            {{- if eq .Values.auth.mode "basic" }}
+            - name: basic-auth
+              mountPath: /etc/registry-proxy/secrets/auth
+              readOnly: true
+            {{- end }}
             - name: work
               mountPath: /tmp
       volumes:
@@ -115,5 +124,13 @@ spec:
           secret:
             secretName: {{ .Values.webhook.secretName }}
             optional: true
+        {{- if eq .Values.auth.mode "basic" }}
+        - name: basic-auth
+          secret:
+            secretName: {{ .Values.auth.passwordSecret | quote }}
+            items:
+              - key: password
+                path: password
+        {{- end }}
         - name: work
           emptyDir: {}

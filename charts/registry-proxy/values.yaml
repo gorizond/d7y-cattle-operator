@@ -30,6 +30,13 @@ harbor:
   # chart only mounts it and grants get on this one name.
   robotSecret: registry-proxy-robot
 
+# Optional client Basic auth for /v2 reads. /api/convert keeps its webhook
+# secret. Keep mode network-only until node registry credentials are updated.
+auth:
+  mode: "" # "" / network-only / basic
+  username: ""
+  passwordSecret: "" # Secret with a `password` key
+
 mirror:
   project: mirror
 

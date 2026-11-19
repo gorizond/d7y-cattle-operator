@@ -12,6 +12,12 @@ data:
       admin_secret: {{ .Values.harbor.adminSecret | quote }}
     mirror:
       project: {{ .Values.mirror.project | quote }}
+    auth:
+      mode: {{ .Values.auth.mode | default "network-only" | quote }}
+{{- if eq .Values.auth.mode "basic" }}
+      username: {{ .Values.auth.username | quote }}
+      password_file: /etc/registry-proxy/secrets/auth/password
+{{- end }}
     registry:
       allowlist:
 {{- range .Values.registry.allowlist }}

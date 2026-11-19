@@ -61,6 +61,8 @@ type Options struct {
 	ProxyRegistries             []string
 	ProxyBasePath               string
 	ProxyTLSSecret              string
+	ProxyBasicAuthEnabled       bool
+	ProxyBasicAuthUsername      string
 	ProxyHostAliases            []helmop.HostAlias
 	AdmissionImagePullSecret    string
 	AdmissionServiceAccount     string
@@ -473,6 +475,8 @@ func (c *Controller) helmopCluster(cluster *provv1.Cluster) helmop.Cluster {
 		ProxyPublicURL:              proxyPublicURL(c.opts.ProxyDomain, c.opts.ProxyBasePath),
 		ProxyBasePath:               c.opts.ProxyBasePath,
 		ProxyTLSSecret:              c.opts.ProxyTLSSecret,
+		ProxyBasicAuthEnabled:       c.opts.ProxyBasicAuthEnabled,
+		ProxyBasicAuthUsername:      c.opts.ProxyBasicAuthUsername,
 		ProxyHostAliases:            c.opts.ProxyHostAliases,
 		ProxyRegistries:             c.opts.ProxyRegistries,
 		AdmissionImagePullSecret:    c.opts.AdmissionImagePullSecret,

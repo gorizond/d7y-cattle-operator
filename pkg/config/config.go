@@ -36,12 +36,14 @@ const (
 	DefaultHarborChartVersion            = "1.19.4"
 	DefaultRegistryProxyChartRepo        = "https://gorizond.github.io/d7y-cattle-operator"
 	DefaultRegistryProxyChartName        = "registry-proxy"
-	DefaultRegistryProxyChartVersion     = "0.1.21"
+	DefaultRegistryProxyChartVersion     = "0.1.22"
 	DefaultAdmissionChartRepo            = "https://gorizond.github.io/d7y-cattle-operator"
 	DefaultAdmissionChartName            = "admission-webhook"
 	DefaultAdmissionChartVersion         = "0.1.2"
 	DefaultAdmissionNetworkOnly          = true
 	DefaultProxyHarborAdminSecret        = "harbor-admin"
+	DefaultProxyBasicAuthEnabled         = false
+	DefaultProxyBasicAuthUsername        = "d7y-proxy"
 	DefaultProxyRegistries               = "*"
 	DefaultProxyBasePath                 = ""
 	DefaultExtrasIngressController       = "nginx"
@@ -95,6 +97,8 @@ type Config struct {
 	ProxyDomain                 string
 	ProxyHarborURL              string
 	ProxyHarborAdminSecret      string
+	ProxyBasicAuthEnabled       bool
+	ProxyBasicAuthUsername      string
 	ProxyRegistries             string
 	ProxyBasePath               string
 	ProxyTLSSecret              string
@@ -140,6 +144,10 @@ func Load(args []string) (*Config, error) {
 	if err != nil {
 		return nil, err
 	}
+	defaultProxyBasicAuthEnabled, err := envBool("PROXY_BASIC_AUTH_ENABLED", DefaultProxyBasicAuthEnabled)
+	if err != nil {
+		return nil, err
+	}
 
 	cfg := &Config{}
 	proxyHostAliases := envOr("PROXY_HOST_ALIASES", "")
@@ -182,6 +190,8 @@ func Load(args []string) (*Config, error) {
 	fs.StringVar(&cfg.ProxyRegistries, "proxy-registries", envOr("PROXY_REGISTRIES", DefaultProxyRegistries), "comma-separated upstream registry allowlist")
 	fs.StringVar(&cfg.ProxyBasePath, "proxy-base-path", envOr("PROXY_BASE_PATH", DefaultProxyBasePath), "public proxy base path (empty disables the path prefix; e.g. /proxy)")
 	fs.StringVar(&cfg.ProxyTLSSecret, "proxy-tls-secret", envOr("PROXY_TLS_SECRET", ""), "TLS Secret name for the proxy ingress (empty uses the ingress controller default)")
+	fs.BoolVar(&cfg.ProxyBasicAuthEnabled, "proxy-basic-auth-enabled", defaultProxyBasicAuthEnabled, "enable client Basic auth on registry proxy /v2 reads")
+	fs.StringVar(&cfg.ProxyBasicAuthUsername, "proxy-basic-auth-username", envOr("PROXY_BASIC_AUTH_USERNAME", DefaultProxyBasicAuthUsername), "registry proxy client Basic auth username")
 	fs.StringVar(&proxyHostAliases, "proxy-host-aliases", proxyHostAliases, "JSON list of {ip, hostnames} entries added to the registry proxy pod /etc/hosts")
 	fs.StringVar(&cfg.ExtrasIngressController, "extras-ingress-controller", envOr("EXTRAS_INGRESS_CONTROLLER", DefaultExtrasIngressController), "extras Ingress controller: nginx or traefik")
 	fs.StringVar(&cfg.ExtrasIngressClassName, "extras-ingress-class-name", envOr("EXTRAS_INGRESS_CLASS_NAME", DefaultExtrasIngressClassName), "extras Ingress class name (empty uses the cluster default)")
@@ -399,6 +409,9 @@ func (c *Config) Validate() error {
 		if msgs := validation.IsDNS1123Subdomain(registry); len(msgs) > 0 {
 			add("--proxy-registries: %s: %s", registry, strings.Join(msgs, "; "))
 		}
+	}
+	if c.ProxyBasicAuthEnabled && strings.TrimSpace(c.ProxyBasicAuthUsername) == "" {
+		add("--proxy-basic-auth-username is required when --proxy-basic-auth-enabled is true")
 	}
 	switch c.ExtrasIngressController {
 	case "nginx", "traefik":
