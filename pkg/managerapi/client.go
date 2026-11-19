@@ -157,6 +157,25 @@ func (c *Client) CreatePersonalAccessToken(ctx context.Context, name string, use
 	return out.Token, nil
 }
 
+// ListPersonalAccessTokens returns the manager PAT records. The response is
+// decoded into ID/name only, so any token material is ignored and never logged.
+func (c *Client) ListPersonalAccessTokens(ctx context.Context) ([]PersonalAccessToken, error) {
+	var out []PersonalAccessToken
+	if err := c.do(ctx, http.MethodGet, PersonalAccessTokensPath, nil, nil, &out); err != nil {
+		return nil, err
+	}
+	return out, nil
+}
+
+// DeletePersonalAccessToken removes a PAT by server-assigned ID. A 404 maps to
+// ErrNotFound.
+func (c *Client) DeletePersonalAccessToken(ctx context.Context, id int64) error {
+	if id < 1 {
+		return fmt.Errorf("manager api: personal access token ID must be positive")
+	}
+	return c.do(ctx, http.MethodDelete, fmt.Sprintf("%s/%d", PersonalAccessTokensPath, id), nil, nil, nil)
+}
+
 // ListSchedulerClusters returns all scheduler clusters, following the Link
 // header rel=next pagination. A null response is treated as an empty list.
 func (c *Client) ListSchedulerClusters(ctx context.Context) ([]SchedulerCluster, error) {

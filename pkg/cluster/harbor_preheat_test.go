@@ -5,6 +5,7 @@ import (
 	"encoding/json"
 	"net/http"
 	"net/http/httptest"
+	"strconv"
 	"strings"
 	"sync"
 	"testing"
@@ -96,22 +97,34 @@ func managerString(value any) string {
 }
 
 type preheatManagerState struct {
-	mu      sync.Mutex
-	signins int
-	pats    int
-	token   string
+	mu           sync.Mutex
+	signins      int
+	pats         int
+	lists        int
+	deletes      []int64
+	tokens       []managerapi.PersonalAccessToken
+	conflictOnce bool
+	token        string
 }
 
 func (f *preheatManagerState) handler(t *testing.T) http.Handler {
 	return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		f.mu.Lock()
 		defer f.mu.Unlock()
-		switch r.URL.Path {
-		case managerapi.SignInPath:
+		switch {
+		case r.URL.Path == managerapi.SignInPath:
 			f.signins++
 			writeTestJSON(w, http.StatusOK, managerapi.SignInResponse{Token: "jwt-1"})
-		case managerapi.PersonalAccessTokensPath:
+		case r.URL.Path == managerapi.PersonalAccessTokensPath && r.Method == http.MethodGet:
+			f.lists++
+			writeTestJSON(w, http.StatusOK, f.tokens)
+		case r.URL.Path == managerapi.PersonalAccessTokensPath && r.Method == http.MethodPost:
 			f.pats++
+			if f.conflictOnce {
+				f.conflictOnce = false
+				writeTestJSON(w, http.StatusConflict, map[string]string{"message": "Conflict"})
+				return
+			}
 			var body managerapi.CreatePersonalAccessTokenRequest
 			if err := json.NewDecoder(r.Body).Decode(&body); err != nil {
 				t.Errorf("decode PAT body: %v", err)
@@ -121,6 +134,21 @@ func (f *preheatManagerState) handler(t *testing.T) http.Handler {
 				t.Errorf("PAT body = %+v", body)
 			}
 			writeTestJSON(w, http.StatusCreated, managerapi.CreatePersonalAccessTokenResponse{Token: f.token})
+		case r.Method == http.MethodDelete && strings.HasPrefix(r.URL.Path, managerapi.PersonalAccessTokensPath+"/"):
+			id, err := strconv.ParseInt(strings.TrimPrefix(r.URL.Path, managerapi.PersonalAccessTokensPath+"/"), 10, 64)
+			if err != nil {
+				t.Errorf("delete PAT id: %v", err)
+				http.NotFound(w, r)
+				return
+			}
+			f.deletes = append(f.deletes, id)
+			for i := range f.tokens {
+				if f.tokens[i].ID == id {
+					f.tokens = append(f.tokens[:i], f.tokens[i+1:]...)
+					break
+				}
+			}
+			w.WriteHeader(http.StatusNoContent)
 		default:
 			http.NotFound(w, r)
 		}
@@ -193,8 +221,9 @@ func TestEnsureHarborPreheatCreatesPATAndInstance(t *testing.T) {
 	if err := controller.ensureHarborPreheat(cluster, hc); err != nil {
 		t.Fatalf("ensureHarborPreheat(second) error = %v", err)
 	}
-	if manager.signins != 1 || manager.pats != 1 {
-		t.Errorf("manager signin/PAT after reuse = %d/%d, want 1/1", manager.signins, manager.pats)
+	if manager.signins != 1 || manager.pats != 1 || manager.lists != 0 || len(manager.deletes) != 0 {
+		t.Errorf("manager after reuse = signin:%d PAT:%d list:%d delete:%v, want 1/1/0/[]",
+			manager.signins, manager.pats, manager.lists, manager.deletes)
 	}
 	if harbor.posts != 1 || harbor.puts != 1 || harbor.pings != 2 {
 		t.Errorf("Harbor POST/PUT/ping after reuse = %d/%d/%d, want 1/1/2", harbor.posts, harbor.puts, harbor.pings)
@@ -268,5 +297,94 @@ func TestReconcileCreatesHarborPreheatInstance(t *testing.T) {
 	}
 	if harbor.lastToken != "existing-pat" {
 		t.Error("Harbor did not receive the stored PAT")
+	}
+}
+
+func TestEnsureHarborPreheatRecoversPATConflict(t *testing.T) {
+	controller, _, events := newTestController(t)
+	harbor := &preheatHarborState{}
+	harborServer := httptest.NewServer(harbor.handler())
+	t.Cleanup(harborServer.Close)
+	manager, managerServer := newPreheatManager(t, "recreated-pat")
+	manager.conflictOnce = true
+	manager.tokens = []managerapi.PersonalAccessToken{{ID: 9, Name: harborPreheatPATName}}
+	controller.opts.ManagerAPIURL = managerServer.URL
+	controller.managerHTTPClient = managerServer.Client()
+	delete(controller.secrets.(*fakeSecretStore).secrets, "dragonfly-system/"+harborPreheatPATSecretName)
+	controller.secrets.(*fakeSecretStore).put(&corev1.Secret{
+		ObjectMeta: metav1.ObjectMeta{Name: "manager-api-credentials", Namespace: "dragonfly-system"},
+		Data:       map[string][]byte{"username": []byte("root"), "password": []byte("password")},
+	})
+	cluster := testHarborCluster()
+	controller.secrets.(*fakeSecretStore).put(&corev1.Secret{
+		ObjectMeta: metav1.ObjectMeta{Name: "c1-harbor-admin", Namespace: "fleet-default"},
+		Data:       map[string][]byte{"HARBOR_ADMIN_PASSWORD": []byte("admin-password")},
+	})
+	hc := controller.helmopCluster(cluster)
+	hc.HarborURL = harborServer.URL
+	controller.preheatEnsurer = &registryproxy.HarborClient{
+		BaseURL: harborServer.URL, Username: "admin", Password: "admin-password",
+	}
+
+	if err := controller.ensureHarborPreheat(cluster, hc); err != nil {
+		t.Fatalf("ensureHarborPreheat() error = %v", err)
+	}
+	if manager.pats != 2 || manager.lists != 1 || len(manager.deletes) != 1 || manager.deletes[0] != 9 {
+		t.Errorf("manager recovery = PAT:%d list:%d delete:%v, want 2/1/[9]",
+			manager.pats, manager.lists, manager.deletes)
+	}
+	pat, err := controller.secrets.Get("dragonfly-system", harborPreheatPATSecretName, metav1.GetOptions{})
+	if err != nil {
+		t.Fatalf("PAT Secret was not created after recovery: %v", err)
+	}
+	if got := string(pat.Data[harborPreheatPATSecretKey]); got != "recreated-pat" {
+		t.Errorf("PAT Secret token = %q, want the recreated token", got)
+	}
+	if harbor.posts != 1 || harbor.lastToken != "recreated-pat" {
+		t.Errorf("Harbor POST/token = %d/%q, want 1/recreated-pat", harbor.posts, harbor.lastToken)
+	}
+	if len(events.events) != 0 {
+		t.Errorf("events = %+v, want none", events.events)
+	}
+}
+
+func TestEnsureHarborPreheatPATConflictWithoutMatchingName(t *testing.T) {
+	controller, _, _ := newTestController(t)
+	harbor := &preheatHarborState{}
+	harborServer := httptest.NewServer(harbor.handler())
+	t.Cleanup(harborServer.Close)
+	manager, managerServer := newPreheatManager(t, "unused-token")
+	manager.conflictOnce = true
+	manager.tokens = []managerapi.PersonalAccessToken{{ID: 9, Name: "someone-else"}}
+	controller.opts.ManagerAPIURL = managerServer.URL
+	controller.managerHTTPClient = managerServer.Client()
+	delete(controller.secrets.(*fakeSecretStore).secrets, "dragonfly-system/"+harborPreheatPATSecretName)
+	controller.secrets.(*fakeSecretStore).put(&corev1.Secret{
+		ObjectMeta: metav1.ObjectMeta{Name: "manager-api-credentials", Namespace: "dragonfly-system"},
+		Data:       map[string][]byte{"username": []byte("root"), "password": []byte("password")},
+	})
+	cluster := testHarborCluster()
+	controller.secrets.(*fakeSecretStore).put(&corev1.Secret{
+		ObjectMeta: metav1.ObjectMeta{Name: "c1-harbor-admin", Namespace: "fleet-default"},
+		Data:       map[string][]byte{"HARBOR_ADMIN_PASSWORD": []byte("admin-password")},
+	})
+	hc := controller.helmopCluster(cluster)
+	hc.HarborURL = harborServer.URL
+	controller.preheatEnsurer = &registryproxy.HarborClient{
+		BaseURL: harborServer.URL, Username: "admin", Password: "admin-password",
+	}
+
+	if err := controller.ensureHarborPreheat(cluster, hc); err == nil {
+		t.Fatal("ensureHarborPreheat() error = nil, want unresolved PAT conflict")
+	}
+	if manager.pats != 1 || manager.lists != 1 || len(manager.deletes) != 0 {
+		t.Errorf("manager recovery = PAT:%d list:%d delete:%v, want 1/1/[]",
+			manager.pats, manager.lists, manager.deletes)
+	}
+	if _, err := controller.secrets.Get("dragonfly-system", harborPreheatPATSecretName, metav1.GetOptions{}); err == nil {
+		t.Error("PAT Secret was written despite an unresolved conflict")
+	}
+	if harbor.posts != 0 {
+		t.Errorf("Harbor POST = %d, want 0 without a PAT", harbor.posts)
 	}
 }

@@ -738,3 +738,71 @@ func TestCreatePersonalAccessTokenEmptyResponse(t *testing.T) {
 		t.Fatal("CreatePersonalAccessToken() error = nil, want missing-token error")
 	}
 }
+
+func TestListPersonalAccessTokens(t *testing.T) {
+	client := newTestClient(t, http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		switch {
+		case r.URL.Path == SignInPath:
+			writeJSON(w, http.StatusOK, SignInResponse{Token: "jwt-1"})
+		case r.URL.Path == PersonalAccessTokensPath && r.Method == http.MethodGet:
+			if got := r.Header.Get("Authorization"); got != "Bearer jwt-1" {
+				t.Errorf("list Authorization = %q", got)
+			}
+			writeJSON(w, http.StatusOK, []map[string]any{
+				{"id": 5, "name": "harbor-preheat", "token": "must-be-ignored"},
+				{"id": 6, "name": "other"},
+			})
+		default:
+			t.Errorf("unexpected request %s %s", r.Method, r.URL.Path)
+			w.WriteHeader(http.StatusNotFound)
+		}
+	}))
+
+	tokens, err := client.ListPersonalAccessTokens(context.Background())
+	if err != nil {
+		t.Fatalf("ListPersonalAccessTokens() error = %v", err)
+	}
+	if len(tokens) != 2 || tokens[0].ID != 5 || tokens[0].Name != "harbor-preheat" ||
+		tokens[1].ID != 6 || tokens[1].Name != "other" {
+		t.Errorf("tokens = %+v", tokens)
+	}
+}
+
+func TestDeletePersonalAccessToken(t *testing.T) {
+	client := newTestClient(t, http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		switch {
+		case r.URL.Path == SignInPath:
+			writeJSON(w, http.StatusOK, SignInResponse{Token: "jwt-1"})
+		case r.URL.Path == PersonalAccessTokensPath+"/5" && r.Method == http.MethodDelete:
+			if got := r.Header.Get("Authorization"); got != "Bearer jwt-1" {
+				t.Errorf("delete Authorization = %q", got)
+			}
+			w.WriteHeader(http.StatusNoContent)
+		default:
+			t.Errorf("unexpected request %s %s", r.Method, r.URL.Path)
+			w.WriteHeader(http.StatusNotFound)
+		}
+	}))
+
+	if err := client.DeletePersonalAccessToken(context.Background(), 5); err != nil {
+		t.Fatalf("DeletePersonalAccessToken() error = %v", err)
+	}
+}
+
+func TestDeletePersonalAccessTokenNotFound(t *testing.T) {
+	client := newTestClient(t, http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		switch {
+		case r.URL.Path == SignInPath:
+			writeJSON(w, http.StatusOK, SignInResponse{Token: "jwt-1"})
+		case r.URL.Path == PersonalAccessTokensPath+"/5" && r.Method == http.MethodDelete:
+			w.WriteHeader(http.StatusNotFound)
+		default:
+			w.WriteHeader(http.StatusNotFound)
+		}
+	}))
+
+	err := client.DeletePersonalAccessToken(context.Background(), 5)
+	if !errors.Is(err, ErrNotFound) {
+		t.Fatalf("DeletePersonalAccessToken() error = %v, want ErrNotFound", err)
+	}
+}

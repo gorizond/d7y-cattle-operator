@@ -2,6 +2,7 @@ package cluster
 
 import (
 	"context"
+	"errors"
 	"fmt"
 	"strings"
 	"time"
@@ -109,8 +110,10 @@ func (c *Controller) ensureHarborPreheatPAT() (string, error) {
 	if err != nil {
 		return "", fmt.Errorf("manager API client: %w", err)
 	}
-	token, err := client.CreatePersonalAccessToken(c.ctx, harborPreheatPATName, harborPreheatPATUserID,
-		[]string{harborPreheatPATScope}, time.Now().AddDate(harborPreheatPATLifetime, 0, 0))
+	token, err := c.createHarborPreheatPAT(client)
+	if errors.Is(err, managerapi.ErrConflict) {
+		token, err = c.recreateHarborPreheatPAT(client)
+	}
 	if err != nil {
 		return "", fmt.Errorf("create Harbor preheat personal access token: %w", err)
 	}
@@ -131,4 +134,33 @@ func (c *Controller) ensureHarborPreheatPAT() (string, error) {
 		return "", fmt.Errorf("update Harbor preheat PAT Secret %s/%s: %w", namespace, name, err)
 	}
 	return token, nil
+}
+
+func (c *Controller) createHarborPreheatPAT(client *managerapi.Client) (string, error) {
+	return client.CreatePersonalAccessToken(c.ctx, harborPreheatPATName, harborPreheatPATUserID,
+		[]string{harborPreheatPATScope}, time.Now().AddDate(harborPreheatPATLifetime, 0, 0))
+}
+
+// recreateHarborPreheatPAT recovers a manager 409 caused by a PAT carrying the
+// operator's name while the local Secret is missing. Only exact-name records
+// are deleted; the PAT is then created once more.
+func (c *Controller) recreateHarborPreheatPAT(client *managerapi.Client) (string, error) {
+	tokens, err := client.ListPersonalAccessTokens(c.ctx)
+	if err != nil {
+		return "", fmt.Errorf("list personal access tokens for Harbor preheat recovery: %w", err)
+	}
+	deleted := false
+	for _, token := range tokens {
+		if token.Name != harborPreheatPATName {
+			continue
+		}
+		if err := client.DeletePersonalAccessToken(c.ctx, token.ID); err != nil && !errors.Is(err, managerapi.ErrNotFound) {
+			return "", fmt.Errorf("delete stale Harbor preheat personal access token: %w", err)
+		}
+		deleted = true
+	}
+	if !deleted {
+		return "", fmt.Errorf("recover Harbor preheat personal access token: %w", managerapi.ErrConflict)
+	}
+	return c.createHarborPreheatPAT(client)
 }
