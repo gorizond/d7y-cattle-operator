@@ -3,14 +3,13 @@
 Kubernetes operator that runs [Dragonfly](https://d7y.io) P2P on Rancher-managed
 RKE2 clusters.
 
-**Status**: MR-12 (manager gRPC via public Traefik TCP TLS passthrough; DNS-
-resolved public scheduler front; no node/ClusterIP SANs; fail-open bootstrap).
-The manager gRPC edge is a TCP passthrough on `manager-grpc:443` with exact
-`HostSNI`; scheduler clients and bootstrap nodes reach it externally, and the
-manager terminates mTLS end-to-end. The Cluster controller, role resolution,
-KeyDB, manager, seed role, manager registration, `dragonfly-extras`, the
-fail-open `p2p-static` bootstrap, and the admission webhook are implemented.
-Live envtest/pilot verification remains deferred.
+**Status**: v0.1.51 (2026-11-19). The operator implements the Cluster controller,
+role resolution, KeyDB, manager, seed role, manager registration,
+`dragonfly-extras`, the fail-open `p2p-static` bootstrap, admission webhook,
+Harbor, registry proxy with source-OCI first pull, manager root credentials,
+Harbor Dragonfly preheat distribution, and host nydus. The
+manager/Harbor/proxy/seed/nydus stack and the Harbor preheat instance have live
+pilot verification; remaining items are listed under Follow-ups.
 
 ## What it does today
 
@@ -37,6 +36,11 @@ Live envtest/pilot verification remains deferred.
 - Deploys Harbor on `p2p.dragonfly.io/harbor: "true"` and the external
   stateless registry proxy on `p2p.dragonfly.io/proxy: "true"`. Harbor uses the
   existing `<cluster>-keydb`; the proxy has no PVC.
+- Runs the stateless registry proxy with source-OCI first-pull passthrough: a
+  tag manifest is served from the source immediately while nydusify conversion
+  is queued in the background; digest refs stay source OCI. The operator passes
+  its own image repository/tag to the proxy HelmOp, so the proxy image follows
+  the operator release.
 - Deploys the opt-in Pod image-rewriting webhook on
   `p2p.dragonfly.io/admission: "true"` (`<cluster>-admission-webhook`). It
   rewrites any explicit registry (and Docker Hub shorthand) to
@@ -58,6 +62,12 @@ Live envtest/pilot verification remains deferred.
   the durable `scheduler-cluster-id-auto` marker; user-owned IDs are never
   overwritten and mismatches are reported via the `d7y.io/IdMismatch` condition.
   Missing records are recreated and relinked on every reconcile.
+- Generates or repairs the manager root credentials Secret (`username`,
+  `password`, `jwt-key`) and wires the password/JWT key into the manager; see
+  [Manager root credentials](#manager-root-credentials).
+- Registers the Dragonfly manager as a Harbor Administration → Distributions
+  preheat provider with an operator-generated `job` PAT; this is not a Harbor
+  registry adapter; see [Harbor Dragonfly distribution](#harbor-dragonfly-distribution).
 - Publishes role/registration state as Cluster conditions
   (`d7y.io/RolesResolved`, `d7y.io/KeyDBReady`, `d7y.io/ControlReady`,
   `d7y.io/DataReady`, `d7y.io/Registered`) and updates them only when they
@@ -66,8 +76,9 @@ Live envtest/pilot verification remains deferred.
 
 ## Follow-ups
 
-- Live envtest/pilot verification of the CREATE-only webhook, node bootstrap,
-  and the status/condition transitions.
+- Remaining pilot work: cold cross-node P2P, fscache/EROFS on a kernel with
+  `EROFS_FS_ONDEMAND`/`CACHEFILES_ONDEMAND`, and full envtest coverage. The
+  manager/Harbor/proxy/seed/nydus path is verified on the pilot.
 - The extras chart's VPA targetRef names must be verified against live workload
   names in the pilot.
 - The KeyDB chart is external: `enapter/keydb` `0.48.0` from
@@ -456,7 +467,9 @@ Harbor values use the existing KeyDB HelmOp
 no Redis PVC. Registry, jobservice, and database PVCs are 50Gi/5Gi/10Gi on the
 `longhorn` storage class with `resourcePolicy: keep`. Internal database,
 `trivy.enabled=false`, and ingress TLS Secret `<cluster>-harbor-tls` are the v1
-defaults.
+defaults. The generated `<cluster>-harbor-secret` `secretKey` is 16 random
+bytes encoded as 32 hex characters (AES-256); the DB password remains 32 bytes
+encoded as 64 hex characters.
 
 ### Harbor Dragonfly distribution
 
@@ -477,10 +490,15 @@ returned once by the manager, stored in that Secret, reused on later
 reconciles, and never written to logs, events, or HelmOp values. The operator
 reads the Harbor admin credentials from the per-cluster Harbor admin Secret
 (`username`, defaulting to `admin`, and `HARBOR_ADMIN_PASSWORD`) and updates an
-existing instance in place. Harbor answers `409` when the name already exists;
-the operator re-lists and updates. After a successful create/update it pings
-the instance; a ping failure is reported as a `HarborPreheatFailed` Cluster
-event while the instance is kept for the next retry.
+existing instance in place. Harbor 2.15.4 addresses preheat instances by
+**name**, not numeric ID: the operator sends
+`PUT /api/v2.0/p2p/preheat/instances/<name>` with the numeric `id` in the body.
+A numeric-id PUT returns `404 instance <id> not found` even when the list
+contains that instance. Harbor answers `409` when the name already exists; the
+operator re-lists and updates. After a successful create/update it pings the
+instance; a ping failure is reported as a `HarborPreheatFailed` Cluster event
+while the instance is kept for the next retry. Harbor displays `status:
+Unknown` for a healthy row; use the ping endpoint as the health signal.
 
 The instance is created only when the Harbor role is enabled, a Harbor URL is
 resolved, and `manager.apiURL` is set. It requires the manager to be reachable
@@ -878,9 +896,13 @@ and a matching nydusd. Ordinary-OCI Zran is not claimed.
 | MR-7 | Operator-managed gRPC ingress (nginx and Traefik) | merged |
 | MR-8 | Edge TLS termination, h2c backend, and CA-only Secret for Traefik clientAuth | merged |
 | MR-9 | Render the CA-only Secret in the extras chart instead of Fleet downstreamResources | merged |
-| MR-10 | Patched Dragonfly chart and end-to-end gRPC TLS (HTTPS backend + ServersTransport) | this change |
+| MR-10 | Patched Dragonfly chart and end-to-end gRPC TLS (HTTPS backend + ServersTransport) | merged |
+| MR-11 | Smart registry proxy direct refs, admission webhook, universal Harbor registries, source OCI first pull, release-derived image tag | merged |
+| MR-12 | Operator-generated manager root password/JWT key and Harbor Dragonfly preheat distribution | merged |
+| MR-13 | Harbor preheat PAT conflict recovery | merged |
+| MR-14 | Harbor preheat NotFound recovery, name-addressed updates, and 32-hex Harbor core secret | merged |
 
-Live envtest/pilot items remain deferred for the MR-10 follow-up list.
+Remaining pilot work is listed under [Follow-ups](#follow-ups).
 
 ## Development
 
