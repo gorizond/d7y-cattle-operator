@@ -61,8 +61,8 @@ func TestReconcileAdmissionToggleMatrix(t *testing.T) {
 				t.Fatalf("reconcile() error = %v", err)
 			}
 			for name, want := range map[string]bool{
-				"c1-harbor":         test.wantHarbor,
-				"c1-registry-proxy": test.wantProxy,
+				"c1-harbor":                      test.wantHarbor,
+				helmop.SharedRegistryProxyName(): test.wantProxy,
 			} {
 				if got := store.has("fleet-default/" + name); got != want {
 					t.Errorf("%s present = %t, want %t", name, got, want)
@@ -108,7 +108,7 @@ func TestReconcileAdmissionToggleKeepsSharedHelmOp(t *testing.T) {
 	if store.has("fleet-default/c1-admission-webhook") {
 		t.Error("legacy per-cluster admission HelmOp still exists")
 	}
-	for _, name := range []string{"c1-harbor", "c1-registry-proxy"} {
+	for _, name := range []string{"c1-harbor", helmop.SharedRegistryProxyName()} {
 		if !store.has("fleet-default/" + name) {
 			t.Errorf("%s was removed with admission", name)
 		}
@@ -164,7 +164,7 @@ func TestReconcileAdmissionProxyDomainMissingDoesNotBlockOthers(t *testing.T) {
 	}
 	// The proxy shares the same operator-wide proxy.domain, so it reports its
 	// own precondition failure; admission must not change that behavior.
-	if store.has("fleet-default/c1-registry-proxy") {
+	if store.has("fleet-default/" + helmop.SharedRegistryProxyName()) {
 		t.Error("registry proxy was applied without proxy.domain")
 	}
 	found := false

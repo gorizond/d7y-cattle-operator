@@ -1,3 +1,7 @@
+# When set, every object is named <fullnameOverride>-registry-proxy; empty
+# keeps the legacy names based on the Helm release name.
+fullnameOverride: ""
+
 replicaCount: 1
 
 serviceAccount:

@@ -91,7 +91,10 @@ const (
 	// AnnotationSchedulerPublicIP is stamped per Cluster so shared values can
 	// render the resolved public advertiseIP without changing the DNS-based
 	// resolution itself.
-	AnnotationSchedulerPublicIP  = "p2p.dragonfly.io/scheduler-public-ip"
+	AnnotationSchedulerPublicIP = "p2p.dragonfly.io/scheduler-public-ip"
+	// AnnotationProxyTLSSecret carries the per-cluster registry-proxy ingress
+	// TLS Secret. The operator stamps the configured default only when absent.
+	AnnotationProxyTLSSecret     = "p2p.dragonfly.io/proxy-tls-secret"
 	AnnotationSchedulerReplicas  = "p2p.dragonfly.io/scheduler-replicas"
 	AnnotationSeedClientReplicas = "p2p.dragonfly.io/seedclient-replicas"
 
@@ -107,6 +110,13 @@ const (
 	// SharedSchedulerClusterIDTemplate resolves the per-target scheduler ID
 	// written by the registration flow.
 	SharedSchedulerClusterIDTemplate = `${ index .ClusterAnnotations "p2p.dragonfly.io/scheduler-cluster-id" }`
+	// SharedProxyTLSSecretTemplate resolves the per-target proxy ingress TLS
+	// Secret. Empty means the ingress renders without TLS.
+	SharedProxyTLSSecretTemplate = `${ index .ClusterAnnotations "p2p.dragonfly.io/proxy-tls-secret" | default "" }`
+	// SharedProxyWebhookAddressTemplate points a same-cluster managed Harbor at
+	// the proxy Service. External-Harbor clusters keep the chart default
+	// (proxy.publicURL + /api/convert).
+	SharedProxyWebhookAddressTemplate = `${ if and (eq (index .ClusterLabels "d7y-operator-harbor") "true") (eq (index .ClusterAnnotations "p2p.dragonfly.io/harbor-url") "") }http://${ .ClusterName }-registry-proxy.dragonfly-system.svc:8080/api/convert${ end }`
 )
 
 // Shared HelmOp names. These are also the Helm release names, so they must be
@@ -120,6 +130,7 @@ const (
 	sharedExtrasName    = "d7y-extras"
 	sharedMirrorName    = "d7y-containerd-mirror"
 	sharedAdmissionName = "d7y-admission"
+	sharedProxyName     = "d7y-registry-proxy"
 )
 
 // SharedKeyDBName returns the shared KeyDB HelmOp and release name.
@@ -144,9 +155,24 @@ func SharedMirrorName() string { return sharedMirrorName }
 // name.
 func SharedAdmissionName() string { return sharedAdmissionName }
 
+// SharedRegistryProxyName returns the shared registry-proxy HelmOp and release
+// name.
+func SharedRegistryProxyName() string { return sharedProxyName }
+
+// SharedRegistryProxyRobotSecretName is the fleet-wide robot Secret shared by
+// every registry-proxy target.
+func SharedRegistryProxyRobotSecretName() string { return "d7y-registry-proxy-robot" }
+
+// SharedRegistryProxyWebhookSecretName is the fleet-wide Harbor webhook Secret.
+func SharedRegistryProxyWebhookSecretName() string { return "d7y-registry-proxy-webhook" }
+
+// SharedHarborAdminSecretName is the fleet-wide Harbor admin Secret used by the
+// shared registry proxy.
+func SharedHarborAdminSecretName() string { return "harbor-admin" }
+
 // GateSelector matches every Cluster that opted into the Dragonfly stack. KeyDB
-// must reach manager-only and label-only Clusters too: the per-cluster manager
-// and Harbor releases point at the cluster-local <cluster>-keydb Service.
+// must reach manager-only and label-only Clusters too: the manager, Harbor and
+// registry-proxy releases point at the cluster-local <cluster>-keydb Service.
 func GateSelector() map[string]string {
 	return map[string]string{LabelGate: "true"}
 }
@@ -154,6 +180,11 @@ func GateSelector() map[string]string {
 // ManagerSelector matches the manager role.
 func ManagerSelector() map[string]string {
 	return map[string]string{LabelGate: "true", LabelRoleManager: "true"}
+}
+
+// ProxySelector matches the registry-proxy role.
+func ProxySelector() map[string]string {
+	return map[string]string{LabelGate: "true", LabelRoleProxy: "true"}
 }
 
 // SharedSelector matches the seed role: the shared control, data, extras, and
@@ -272,6 +303,7 @@ type Cluster struct {
 	ProxyEnabled bool
 	// ProxyDomain is the public proxy host used by the admission rewrite.
 	ProxyDomain            string
+	ProxyHarborURL         string
 	ProxyPublicURL         string
 	ProxyBasePath          string
 	ProxyTLSSecret         string

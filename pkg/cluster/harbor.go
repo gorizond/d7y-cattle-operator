@@ -64,14 +64,12 @@ func (c *Controller) ensureHarbor(cluster *provv1.Cluster, hc helmop.Cluster, ro
 	return c.applyHelmOp(cluster, helmop.Harbor(hc))
 }
 
-// ensureRegistryProxy reconciles the independent proxy HelmOp. It requires
-// either harbor-url or proxy.harborURL when the operator does not own Harbor.
-func (c *Controller) ensureRegistryProxy(cluster *provv1.Cluster, hc helmop.Cluster, roles Roles, harborErr error) error {
+// ensureSharedRegistryProxy reconciles the shared registry-proxy HelmOp. It
+// requires either harbor-url or proxy.harborURL when the operator does not own
+// Harbor. The robot and webhook Secrets are fleet-wide fixed names; the Harbor
+// admin Secret keeps the operator's fixed `harbor-admin` name.
+func (c *Controller) ensureSharedRegistryProxy(cluster *provv1.Cluster, hc helmop.Cluster, roles Roles, harborErr error) error {
 	if !roles.Proxy {
-		if err := c.deleteHelmOp(cluster, helmop.RegistryProxyName(cluster.Name)); err != nil {
-			c.event(cluster, corev1.EventTypeWarning, "RegistryProxyCleanupFailed", err.Error())
-			return err
-		}
 		return nil
 	}
 	if hc.HarborManaged && harborErr != nil {
@@ -110,7 +108,7 @@ func (c *Controller) ensureRegistryProxy(cluster *provv1.Cluster, hc helmop.Clus
 	// A rotated robot Secret must roll the proxy pods, which read the mounted
 	// credentials only at bootstrap.
 	hc.ProxyRobotSecretRevision = c.robotSecretRevision(cluster, hc.ProxyRobotSecretName)
-	return c.applyHelmOp(cluster, helmop.RegistryProxy(hc))
+	return c.applyHelmOp(cluster, helmop.SharedRegistryProxy(hc))
 }
 
 // ensureRegistryProxyRobotSecret creates or refreshes the Harbor robot Secret

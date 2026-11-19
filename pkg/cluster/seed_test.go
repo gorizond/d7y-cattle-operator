@@ -132,7 +132,7 @@ func TestReconcileSeedMirrorIsDefaultOnly(t *testing.T) {
 	if got := valueAtPath(t, values, "port"); got != int64(4001) {
 		t.Errorf("mirror port = %v, want 4001", got)
 	}
-	if !store.has("fleet-default/c1-registry-proxy") {
+	if !store.has("fleet-default/" + helmop.SharedRegistryProxyName()) {
 		t.Error("per-cluster proxy HelmOp was not created independently of the mirror")
 	}
 }
