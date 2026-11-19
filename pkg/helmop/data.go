@@ -65,7 +65,7 @@ func dataValues(c Cluster, names Names, schedulerAddr string) map[string]any {
 				"ip":     "127.0.0.1",
 				"server": map[string]any{"port": 4101, "requestRateLimit": 500},
 				// Always schedule blob pulls through the seed client: the live
-				// poligon-data client needed 500 rps and "always" to stop
+				// demo-data client needed 500 rps and "always" to stop
 				// falling back to the origin.
 				"rules": proxyRules(),
 			},
@@ -99,7 +99,7 @@ func dataValues(c Cluster, names Names, schedulerAddr string) map[string]any {
 				"ip":     "127.0.0.1",
 				"server": map[string]any{"port": 4001, "requestRateLimit": 500},
 				// Always schedule blob pulls through the node client: the live
-				// poligon-data client needed 500 rps and "always" to stop
+				// demo-data client needed 500 rps and "always" to stop
 				// falling back to the origin.
 				"rules": proxyRules(),
 			},

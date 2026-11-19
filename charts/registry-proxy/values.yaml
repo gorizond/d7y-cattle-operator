@@ -45,7 +45,7 @@ proxy:
   # Extra /etc/hosts entries for the proxy pod, for example a same-cluster
   # Harbor reachable only through the Traefik ClusterIP.
   hostAliases: []
-  # - ip: 10.43.0.10
+  # - ip: 203.0.113.10
   #   hostnames:
   #     - harbor.example.test
 

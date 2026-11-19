@@ -129,7 +129,7 @@ proxy:
   # Optional /etc/hosts entries for the registry proxy pod, e.g. a
   # same-cluster Harbor reached through the Traefik ClusterIP.
   hostAliases: []
-  # - ip: 10.43.0.10
+  # - ip: 203.0.113.10
   #   hostnames:
   #     - harbor.example.test
 

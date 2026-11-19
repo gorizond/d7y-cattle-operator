@@ -78,7 +78,7 @@ func TestRegistryProxyHelmOp(t *testing.T) {
 	c.ProxyEnabled = true
 	c.ProxyPublicURL = "https://proxy.example.com/proxy"
 	c.ProxyBasePath = "/proxy"
-	c.ProxyTLSSecret = "poligon-harbor-tls"
+	c.ProxyTLSSecret = "demo-harbor-tls"
 	c.HarborAdminSecret = "c1-harbor-admin"
 	c.ProxyWebhookSecretName = "c1-registry-proxy-webhook"
 	c.ProxyRobotSecretName = "c1-registry-proxy-robot"
@@ -128,7 +128,7 @@ func TestRegistryProxyHelmOp(t *testing.T) {
 	if got := valueAt(t, values, "ingress", "path"); got != "/proxy" {
 		t.Errorf("ingress.path = %v", got)
 	}
-	if got := valueAt(t, values, "ingress", "tlsSecret"); got != "poligon-harbor-tls" {
+	if got := valueAt(t, values, "ingress", "tlsSecret"); got != "demo-harbor-tls" {
 		t.Errorf("ingress.tlsSecret = %v", got)
 	}
 	if got := valueAt(t, values, "proxy", "basePath"); got != "/proxy" {
@@ -174,7 +174,7 @@ func TestRegistryProxyEmptyBasePathUsesRoot(t *testing.T) {
 	c.HarborManaged = true
 	c.ProxyPublicURL = "https://proxy.example.com"
 	c.ProxyBasePath = ""
-	c.ProxyTLSSecret = "poligon-proxy-tls"
+	c.ProxyTLSSecret = "demo-proxy-tls"
 	op := RegistryProxy(c)
 	values := op.Spec.Helm.Values.Data
 	if got := valueAt(t, values, "ingress", "path"); got != "/" {
@@ -183,7 +183,7 @@ func TestRegistryProxyEmptyBasePathUsesRoot(t *testing.T) {
 	if got := valueAt(t, values, "proxy", "basePath"); got != "" {
 		t.Errorf("proxy.basePath = %v, want empty", got)
 	}
-	if got := valueAt(t, values, "ingress", "tlsSecret"); got != "poligon-proxy-tls" {
+	if got := valueAt(t, values, "ingress", "tlsSecret"); got != "demo-proxy-tls" {
 		t.Errorf("ingress.tlsSecret = %v", got)
 	}
 }

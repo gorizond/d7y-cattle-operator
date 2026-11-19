@@ -49,7 +49,7 @@ func SharedHarbor(c Cluster) *fleetv1alpha1.HelmOp {
 	//   Warning: unknown field "spec.helm.preserveOnReplace"
 	// Without that field a force replace sends each PVC without its
 	// server-assigned volumeName and the API server rejects it:
-	//   PersistentVolumeClaim "poligon-harbor-jobservice" is invalid:
+	//   PersistentVolumeClaim "demo-harbor-jobservice" is invalid:
 	//   spec: Forbidden: spec is immutable after creation except
 	//   resources.requests and volumeAttributesClassName for bound claims
 	//   -  "VolumeName": "pvc-39b93102-2294-47b3-82dd-272b343e98a8",

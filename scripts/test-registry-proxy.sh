@@ -14,17 +14,17 @@ fail() {
 helm lint "$chart" >/dev/null || fail "registry-proxy chart lint failed"
 helm template registry-proxy "$chart" --namespace dragonfly-system \
   --set ingress.enabled=true --set ingress.host=proxy.example.com \
-  --set ingress.path=/proxy --set ingress.tlsSecret=poligon-harbor-tls \
+  --set ingress.path=/proxy --set ingress.tlsSecret=demo-harbor-tls \
   --set proxy.basePath=/proxy \
   --set webhook.address=http://c1-registry-proxy.dragonfly-system.svc:8080/api/convert \
-  --set proxy.hostAliases[0].ip=10.43.0.10 \
+  --set proxy.hostAliases[0].ip=203.0.113.10 \
   --set proxy.hostAliases[0].hostnames[0]=harbor.example.test >"$tmp/proxy.yaml"
 
 helm template registry-proxy "$chart" --namespace dragonfly-system \
-  --set fullnameOverride=poligon --show-only templates/deployment.yaml >"$tmp/fullname.yaml"
-grep -q 'name: poligon-registry-proxy' "$tmp/fullname.yaml" || \
+  --set fullnameOverride=demo --show-only templates/deployment.yaml >"$tmp/fullname.yaml"
+grep -q 'name: demo-registry-proxy' "$tmp/fullname.yaml" || \
   fail "fullnameOverride Deployment name is missing"
-grep -q 'app.kubernetes.io/instance: poligon-registry-proxy' "$tmp/fullname.yaml" || \
+grep -q 'app.kubernetes.io/instance: demo-registry-proxy' "$tmp/fullname.yaml" || \
   fail "fullnameOverride selector label is missing"
 
 helm template registry-proxy "$chart" --namespace dragonfly-system \
@@ -52,7 +52,7 @@ grep -A3 'cidr: 0.0.0.0/0' "$tmp/netpol.yaml" | grep -q 'port: 443' || \
 grep -q 'kind: Ingress' "$tmp/proxy.yaml" || fail "proxy Ingress is missing"
 grep -q 'host: "proxy.example.com"' "$tmp/proxy.yaml" || fail "proxy Ingress host is missing"
 grep -q 'path: /proxy' "$tmp/proxy.yaml" || fail "proxy Ingress path is missing"
-grep -q 'secretName: poligon-harbor-tls' "$tmp/proxy.yaml" || fail "proxy Ingress TLS Secret is missing"
+grep -q 'secretName: demo-harbor-tls' "$tmp/proxy.yaml" || fail "proxy Ingress TLS Secret is missing"
 grep -q 'base_path: "/proxy"' "$tmp/proxy.yaml" || fail "proxy config base_path is missing"
 helm template registry-proxy "$chart" --namespace dragonfly-system \
   --set ingress.enabled=true --set ingress.host=proxy.example.com \
@@ -67,16 +67,16 @@ if grep -q 'kind: Certificate' "$tmp/proxy.yaml"; then
 fi
 helm template registry-proxy "$chart" --namespace dragonfly-system \
   --set ingress.enabled=true --set ingress.host=proxy.example.com \
-  --set ingress.tlsSecret=poligon-proxy-tls --set certificate.enabled=true \
+  --set ingress.tlsSecret=demo-proxy-tls --set certificate.enabled=true \
   --show-only templates/certificate.yaml >"$tmp/certificate.yaml"
 grep -q 'kind: Certificate' "$tmp/certificate.yaml" || fail "proxy Certificate is missing"
-grep -q 'secretName: "poligon-proxy-tls"' "$tmp/certificate.yaml" || fail "Certificate secretName is missing"
+grep -q 'secretName: "demo-proxy-tls"' "$tmp/certificate.yaml" || fail "Certificate secretName is missing"
 grep -q -- '- "proxy.example.com"' "$tmp/certificate.yaml" || fail "Certificate dnsNames is missing"
 grep -q 'name: "letsencrypt-prod"' "$tmp/certificate.yaml" || fail "Certificate issuer name is missing"
 grep -q 'kind: "ClusterIssuer"' "$tmp/certificate.yaml" || fail "Certificate issuer kind is missing"
 grep -q 'address: "http://c1-registry-proxy.dragonfly-system.svc:8080/api/convert"' "$tmp/proxy.yaml" || \
   fail "proxy config webhook address is missing"
-grep -q 'ip: "10.43.0.10"' "$tmp/proxy.yaml" || fail "proxy hostAliases IP is missing"
+grep -q 'ip: "203.0.113.10"' "$tmp/proxy.yaml" || fail "proxy hostAliases IP is missing"
 grep -q -- '- "harbor.example.test"' "$tmp/proxy.yaml" || fail "proxy hostAliases hostname is missing"
 grep -q 'command:' "$tmp/proxy.yaml" || fail "proxy command is missing"
 grep -q '/registry-proxy' "$tmp/proxy.yaml" || fail "proxy command does not use /registry-proxy"

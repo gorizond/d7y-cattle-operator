@@ -270,7 +270,7 @@ which cannot fit three replicas on the pilot nodes. `pkg/helmop/data.go` pins:
 | `seedClient` | `1 CPU / 2Gi` | `4 CPU / 8Gi` |
 | `client` | `250m / 512Mi` | `2 CPU / 4Gi` |
 
-The four poligon nodes each have 16 CPU and 32,100 MiB allocatable. Before the
+The four demo nodes each have 16 CPU and 32,100 MiB allocatable. Before the
 seed role they carried 8.7-10.3 CPU and 18.2-21.0 GiB of requests per node,
 leaving 5.7-7.3 CPU and 10.4-13.1 GiB free. Three `seedClient` replicas plus
 one `client` pod per node and two control schedulers add 4.25 CPU / 8.5 GiB
@@ -540,8 +540,8 @@ scheme/port/path); the shared values read it from the Cluster annotations, so
 it becomes the Harbor `externalURL` and Ingress host on every target.
 
 The chart `fullnameOverride` is `${ .ClusterName }-harbor`, so the workloads
-and the existing PVCs keep their names (`poligon-harbor-registry`,
-`poligon-harbor-jobservice`, `poligon-harbor-database`). Harbor's immutable
+and the existing PVCs keep their names (`demo-harbor-registry`,
+`demo-harbor-jobservice`, `demo-harbor-database`). Harbor's immutable
 workload selectors include the Helm release name, so the shared release also
 sets Fleet's Helm `force` option for the one-time adoption: Helm replaces those
 immutable fields instead of failing. The legacy `<cluster>-harbor` HelmOp and
@@ -562,7 +562,7 @@ secret key, and delivers the latter with `existingSecretSecretKey` (the DB
 password is passed in the chart values).
 
 The Harbor ingress TLS Secret defaults to `<cluster>-harbor-tls`, matching the
-cert-manager naming convention (for example `poligon-harbor-tls`). Pin a
+cert-manager naming convention (for example `demo-harbor-tls`). Pin a
 different name with `p2p.dragonfly.io/harbor-tls-secret`. The Secret must exist
 in the `harbor` namespace (cert-manager or manual) before Harbor starts.
 
@@ -629,7 +629,7 @@ overwrites a pinned value.
 
 Per-cluster `/etc/hosts` entries come from the
 `p2p.dragonfly.io/proxy-host-aliases` annotation, a comma-separated list of
-`ip=hostname` pairs (for example `10.43.110.19=harbor.koldun.negash.ru`). The
+`ip=hostname` pairs (for example `203.0.113.10=harbor.example.com`). The
 shared release renders it into the chart's `proxy.hostAliases` as a real YAML
 list; when the annotation is absent or blank it falls back to the operator-wide
 `proxy.hostAliases` (`--proxy-host-aliases` / `PROXY_HOST_ALIASES`), and then to

@@ -297,7 +297,7 @@ func TestSANsMatchIgnoresOrderAndIPForms(t *testing.T) {
 	if !SANsMatch(certs[0], leaf.DNSNames, leaf.IPAddresses) {
 		t.Error("SANsMatch() = false for the generated SAN set")
 	}
-	if SANsMatch(certs[0], leaf.DNSNames, append(leaf.IPAddresses, net.ParseIP("10.43.0.231"))) {
+	if SANsMatch(certs[0], leaf.DNSNames, append(leaf.IPAddresses, net.ParseIP("203.0.113.231"))) {
 		t.Error("SANsMatch() = true after adding an IP")
 	}
 }
