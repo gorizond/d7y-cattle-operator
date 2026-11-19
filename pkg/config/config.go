@@ -2,9 +2,11 @@
 package config
 
 import (
+	"encoding/json"
 	"errors"
 	"flag"
 	"fmt"
+	"net"
 	"net/url"
 	"os"
 	"regexp"
@@ -12,6 +14,8 @@ import (
 	"strings"
 
 	"k8s.io/apimachinery/pkg/util/validation"
+
+	"github.com/gorizond/d7y-cattle-operator/pkg/helmop"
 )
 
 // Defaults shared with the Helm chart.
@@ -94,6 +98,7 @@ type Config struct {
 	ProxyRegistries             string
 	ProxyBasePath               string
 	ProxyTLSSecret              string
+	ProxyHostAliases            []helmop.HostAlias
 	ExtrasIngressController     string
 	ExtrasIngressClassName      string
 	ExtrasIngressGRPCEnabled    bool
@@ -137,6 +142,7 @@ func Load(args []string) (*Config, error) {
 	}
 
 	cfg := &Config{}
+	proxyHostAliases := envOr("PROXY_HOST_ALIASES", "")
 	fs := flag.NewFlagSet("d7y-cattle-operator", flag.ContinueOnError)
 	fs.StringVar(&cfg.ManagerGRPCDomain, "manager-grpc-domain", envOr("MANAGER_GRPC_DOMAIN", ""), "public hostname of the manager gRPC endpoint (no scheme)")
 	fs.IntVar(&cfg.ManagerGRPCPort, "manager-grpc-port", defaultManagerGRPCPort, "public port of the manager gRPC endpoint")
@@ -176,6 +182,7 @@ func Load(args []string) (*Config, error) {
 	fs.StringVar(&cfg.ProxyRegistries, "proxy-registries", envOr("PROXY_REGISTRIES", DefaultProxyRegistries), "comma-separated upstream registry allowlist")
 	fs.StringVar(&cfg.ProxyBasePath, "proxy-base-path", envOr("PROXY_BASE_PATH", DefaultProxyBasePath), "public proxy base path (empty disables the path prefix; e.g. /proxy)")
 	fs.StringVar(&cfg.ProxyTLSSecret, "proxy-tls-secret", envOr("PROXY_TLS_SECRET", ""), "TLS Secret name for the proxy ingress (empty uses the ingress controller default)")
+	fs.StringVar(&proxyHostAliases, "proxy-host-aliases", proxyHostAliases, "JSON list of {ip, hostnames} entries added to the registry proxy pod /etc/hosts")
 	fs.StringVar(&cfg.ExtrasIngressController, "extras-ingress-controller", envOr("EXTRAS_INGRESS_CONTROLLER", DefaultExtrasIngressController), "extras Ingress controller: nginx or traefik")
 	fs.StringVar(&cfg.ExtrasIngressClassName, "extras-ingress-class-name", envOr("EXTRAS_INGRESS_CLASS_NAME", DefaultExtrasIngressClassName), "extras Ingress class name (empty uses the cluster default)")
 	fs.BoolVar(&cfg.ExtrasIngressGRPCEnabled, "extras-ingress-grpc-enabled", defaultGRPCEnabled, "render the extras gRPC Ingress")
@@ -191,6 +198,11 @@ func Load(args []string) (*Config, error) {
 
 	if err := fs.Parse(args); err != nil {
 		return nil, err
+	}
+	if raw := strings.TrimSpace(proxyHostAliases); raw != "" {
+		if err := json.Unmarshal([]byte(raw), &cfg.ProxyHostAliases); err != nil {
+			return nil, fmt.Errorf("--proxy-host-aliases: %w", err)
+		}
 	}
 	if err := cfg.Validate(); err != nil {
 		return nil, err
@@ -360,6 +372,19 @@ func (c *Config) Validate() error {
 	if c.ProxyTLSSecret != "" {
 		if msgs := validation.IsDNS1123Subdomain(c.ProxyTLSSecret); len(msgs) > 0 {
 			add("--proxy-tls-secret: %s", strings.Join(msgs, "; "))
+		}
+	}
+	for i, alias := range c.ProxyHostAliases {
+		if net.ParseIP(alias.IP) == nil {
+			add("--proxy-host-aliases[%d].ip: %q is not a valid IP address", i, alias.IP)
+		}
+		if len(alias.Hostnames) == 0 {
+			add("--proxy-host-aliases[%d].hostnames: at least one hostname is required", i)
+		}
+		for _, hostname := range alias.Hostnames {
+			if msgs := validation.IsDNS1123Subdomain(hostname); len(msgs) > 0 {
+				add("--proxy-host-aliases[%d].hostnames: %s: %s", i, hostname, strings.Join(msgs, "; "))
+			}
 		}
 	}
 	for _, registry := range strings.Split(c.ProxyRegistries, ",") {

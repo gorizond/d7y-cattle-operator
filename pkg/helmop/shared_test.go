@@ -1,10 +1,15 @@
 package helmop
 
 import (
+	"bytes"
+	"fmt"
+	"strconv"
 	"strings"
 	"testing"
+	"text/template"
 
 	fleetv1alpha1 "github.com/rancher/fleet/pkg/apis/fleet.cattle.io/v1alpha1"
+	kyaml "sigs.k8s.io/yaml"
 )
 
 func sharedTestCluster() Cluster {
@@ -395,4 +400,105 @@ func TestSharedHarborValues(t *testing.T) {
 		op.Spec.DownstreamResources[1].Name != SharedHarborSecretKeyName() {
 		t.Errorf("downstreamResources = %+v", op.Spec.DownstreamResources)
 	}
+}
+
+func TestSharedRegistryProxyHostAliasesTemplate(t *testing.T) {
+	c := sharedTestCluster()
+	templateString, ok := valueAt(t, SharedRegistryProxy(c).Spec.Helm.Values.Data, "proxy", "hostAliases").(string)
+	if !ok {
+		t.Fatalf("shared proxy hostAliases = %T, want the Fleet template string",
+			valueAt(t, SharedRegistryProxy(c).Spec.Helm.Values.Data, "proxy", "hostAliases"))
+	}
+	for _, want := range []string{
+		AnnotationProxyHostAliases,
+		`splitList ","`,
+		`splitn "=" 2 $pair`,
+		`trim (index (splitn "=" 2 $pair) "_0") | quote`,
+	} {
+		if !strings.Contains(templateString, want) {
+			t.Errorf("shared proxy hostAliases template lacks %q: %s", want, templateString)
+		}
+	}
+	if !strings.Contains(templateString, `]${ else }[`) {
+		t.Errorf("shared proxy hostAliases template lacks the empty/static fallback: %s", templateString)
+	}
+
+	// No annotation and no static list: Fleet renders a real empty list.
+	if rendered := renderFleetValue(t, templateString, map[string]string{}); len(rendered) != 0 {
+		t.Errorf("empty annotation rendered %v, want []", rendered)
+	}
+
+	// Annotation present: a real list of {ip, hostnames:[host]} objects with
+	// trimmed values.
+	rendered := renderFleetValue(t, templateString, map[string]string{
+		AnnotationProxyHostAliases: " 10.43.110.19=harbor.koldun.negash.ru , 10.0.0.2=other.example.com ",
+	})
+	if len(rendered) != 2 {
+		t.Fatalf("annotation rendered %v, want two aliases", rendered)
+	}
+	hosts, _ := rendered[0]["hostnames"].([]any)
+	if rendered[0]["ip"] != "10.43.110.19" || len(hosts) != 1 || hosts[0] != "harbor.koldun.negash.ru" {
+		t.Errorf("rendered alias[0] = %v", rendered[0])
+	}
+
+	// Operator-wide static list is the fallback when the annotation is absent.
+	c.ProxyHostAliases = []HostAlias{{IP: "10.0.0.10", Hostnames: []string{"harbor.example.com"}}}
+	staticTemplate, ok := valueAt(t, SharedRegistryProxy(c).Spec.Helm.Values.Data, "proxy", "hostAliases").(string)
+	if !ok {
+		t.Fatal("shared proxy hostAliases with a static fallback is not a template string")
+	}
+	rendered = renderFleetValue(t, staticTemplate, map[string]string{})
+	hosts, _ = rendered[0]["hostnames"].([]any)
+	if len(rendered) != 1 || rendered[0]["ip"] != "10.0.0.10" || len(hosts) != 1 || hosts[0] != "harbor.example.com" {
+		t.Errorf("static fallback rendered %v", rendered)
+	}
+}
+
+// renderFleetValue mirrors Fleet's values templating: the template is rendered
+// with ${ } delimiters and the result is parsed as YAML.
+func renderFleetValue(t *testing.T, text string, annotations map[string]string) []map[string]any {
+	t.Helper()
+	funcs := template.FuncMap{
+		"splitList": func(sep, s string) []string { return strings.Split(s, sep) },
+		"splitn": func(sep string, n int, s string) map[string]string {
+			parts := strings.SplitN(s, sep, n)
+			result := make(map[string]string, len(parts))
+			for i, part := range parts {
+				result[fmt.Sprintf("_%d", i)] = part
+			}
+			return result
+		},
+		"trim":  strings.TrimSpace,
+		"quote": func(s string) string { return strconv.Quote(s) },
+	}
+	// Mirror Fleet: marshal the values map to YAML, render the whole document,
+	// then parse it back.
+	raw, err := kyaml.Marshal(map[string]any{"proxy": map[string]any{"hostAliases": text}})
+	if err != nil {
+		t.Fatalf("marshal values: %v", err)
+	}
+	tmpl, err := template.New("values").Funcs(funcs).Option("missingkey=error").Delims("${", "}").Parse(string(raw))
+	if err != nil {
+		t.Fatalf("parse template: %v", err)
+	}
+	var b bytes.Buffer
+	if err := tmpl.Execute(&b, map[string]any{
+		"ClusterAnnotations": annotations,
+		"ClusterLabels":      map[string]string{},
+	}); err != nil {
+		t.Fatalf("render template: %v", err)
+	}
+	var doc map[string]any
+	if err := kyaml.Unmarshal(b.Bytes(), &doc); err != nil {
+		t.Fatalf("parse rendered values %q: %v", b.String(), err)
+	}
+	proxy, _ := doc["proxy"].(map[string]any)
+	rawAliases, _ := proxy["hostAliases"].([]any)
+	value := make([]map[string]any, 0, len(rawAliases))
+	for _, item := range rawAliases {
+		if alias, ok := item.(map[string]any); ok {
+			value = append(value, alias)
+		}
+	}
+	return value
 }

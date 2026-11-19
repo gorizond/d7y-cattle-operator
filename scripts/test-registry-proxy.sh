@@ -16,7 +16,9 @@ helm template registry-proxy "$chart" --namespace dragonfly-system \
   --set ingress.enabled=true --set ingress.host=proxy.example.com \
   --set ingress.path=/proxy --set ingress.tlsSecret=poligon-harbor-tls \
   --set proxy.basePath=/proxy \
-  --set webhook.address=http://c1-registry-proxy.dragonfly-system.svc:8080/api/convert >"$tmp/proxy.yaml"
+  --set webhook.address=http://c1-registry-proxy.dragonfly-system.svc:8080/api/convert \
+  --set proxy.hostAliases[0].ip=10.43.0.10 \
+  --set proxy.hostAliases[0].hostnames[0]=harbor.example.test >"$tmp/proxy.yaml"
 
 helm template registry-proxy "$chart" --namespace dragonfly-system \
   --set fullnameOverride=poligon --show-only templates/deployment.yaml >"$tmp/fullname.yaml"
@@ -74,6 +76,8 @@ grep -q 'name: "letsencrypt-prod"' "$tmp/certificate.yaml" || fail "Certificate 
 grep -q 'kind: "ClusterIssuer"' "$tmp/certificate.yaml" || fail "Certificate issuer kind is missing"
 grep -q 'address: "http://c1-registry-proxy.dragonfly-system.svc:8080/api/convert"' "$tmp/proxy.yaml" || \
   fail "proxy config webhook address is missing"
+grep -q 'ip: "10.43.0.10"' "$tmp/proxy.yaml" || fail "proxy hostAliases IP is missing"
+grep -q -- '- "harbor.example.test"' "$tmp/proxy.yaml" || fail "proxy hostAliases hostname is missing"
 grep -q 'command:' "$tmp/proxy.yaml" || fail "proxy command is missing"
 grep -q '/registry-proxy' "$tmp/proxy.yaml" || fail "proxy command does not use /registry-proxy"
 grep -q 'containerPort: 8080' "$tmp/proxy.yaml" || fail "proxy service port is missing"

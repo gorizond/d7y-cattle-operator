@@ -627,6 +627,17 @@ The per-cluster proxy ingress TLS Secret is read from the
 `proxy.tlsSecret` value only when the annotation is absent, and never
 overwrites a pinned value.
 
+Per-cluster `/etc/hosts` entries come from the
+`p2p.dragonfly.io/proxy-host-aliases` annotation, a comma-separated list of
+`ip=hostname` pairs (for example `10.43.110.19=harbor.koldun.negash.ru`). The
+shared release renders it into the chart's `proxy.hostAliases` as a real YAML
+list; when the annotation is absent or blank it falls back to the operator-wide
+`proxy.hostAliases` (`--proxy-host-aliases` / `PROXY_HOST_ALIASES`), and then to
+an empty list. Use it when an in-cluster Harbor domain must resolve to the
+Harbor ClusterIP (typically a same-cluster managed Harbor reached through the
+Traefik ClusterIP). The annotation is per Cluster and never overwritten by the
+operator.
+
 The operator provisions the Harbor system robot and writes its Secret in the
 HelmOp namespace. The robot and webhook Secrets are now fleet-wide fixed names,
 `d7y-registry-proxy-robot` and `d7y-registry-proxy-webhook`, and the Harbor admin
@@ -794,6 +805,7 @@ The operator only acts on Clusters labeled `d7y-operator-cattle: "true"`.
 | `p2p.dragonfly.io/harbor-tls-secret` | Secret name | Per-cluster Harbor ingress TLS Secret; empty keeps the fixed `d7y-harbor-tls` |
 | `p2p.dragonfly.io/proxy` | `"true"` | Deploy the shared registry proxy HelmOp |
 | `p2p.dragonfly.io/proxy-tls-secret` | Secret name | Per-cluster proxy ingress TLS Secret; stamped from `proxy.tlsSecret` only when absent and never overwritten |
+| `p2p.dragonfly.io/proxy-host-aliases` | comma-separated `ip=hostname` pairs | Per-cluster registry-proxy `/etc/hosts` pins; falls back to the operator-wide `proxy.hostAliases` when absent or blank |
 | `p2p.dragonfly.io/mutate-exclure` | comma-separated namespaces | Extra namespaces the admission webhook skips (added to the system and release-namespace exclusions); invalid DNS-1123 labels are logged and skipped |
 | `p2p.dragonfly.io/p2p-data-tls` | `"true"` or `"enabled"` | Keep mTLS on the P2P data path (`seedClient`/`client` upload and scheduler `seedPeer`). Default/off uses plaintext P2P data; scheduler server, manager gRPC/API, and monitoring TLS are unaffected. |
 | `p2p.dragonfly.io/node-config-key` | field name | Machine-config `spec` field patched by the webhook (default `userData`, e.g. `postBootScript`) |
