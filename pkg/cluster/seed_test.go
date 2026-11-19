@@ -252,7 +252,7 @@ func newTestController(t *testing.T) (*Controller, *fakeHelmOpStore, *fakeEventS
 			P2PDomain:                   "example.com",
 			Resolver:                    &fakeResolver{ips: []string{"203.0.113.10"}},
 			DragonflyChart:              helmop.Chart{Repo: "https://charts.example.com", Name: "dragonfly", Version: "1.10.1-patch.2"},
-			ExtrasChart:                 helmop.Chart{Repo: "https://charts.example.com", Name: "dragonfly-extras", Version: "0.1.8"},
+			ExtrasChart:                 helmop.Chart{Repo: "https://charts.example.com", Name: "dragonfly-extras", Version: "0.1.9"},
 			MirrorChart:                 helmop.Chart{Repo: "https://charts.example.com", Name: "containerd-mirror", Version: "0.1.0"},
 			HarborChart:                 helmop.Chart{Repo: "https://helm.example.com", Name: "harbor", Version: "1.19.4"},
 			RegistryProxyChart:          helmop.Chart{Repo: "https://charts.example.com", Name: "registry-proxy", Version: "0.1.0"},

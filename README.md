@@ -150,7 +150,7 @@ and JWT signing key; see [Manager root credentials](#manager-root-credentials).
 Defaults: `mtlsSecretName=dragonfly-p2p-mtls`, `dragonfly.chart.name=dragonfly`,
 `dragonfly.chart.repo=https://gorizond.github.io/dragonflyoss-helm-charts`,
 `dragonfly.chart.version=1.10.1-patch.2`, `extras.chart.name=dragonfly-extras`,
-`extras.chart.version=0.1.8`, `extras.ingress.controller=nginx`,
+`extras.chart.version=0.1.9`, `extras.ingress.controller=nginx`,
 `extras.ingress.grpcEnabled=true`, `extras.ingress.restEnabled=true`,
 `manager.grpcPort=443`, `webhook.port=9443`, `nydus.mirrorURL=""`,
 `leaderElect=false`. The public scheduler IP(s) are resolved from DNS at

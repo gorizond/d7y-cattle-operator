@@ -552,10 +552,10 @@ func schedulerHost(domain, clusterID string) string {
 
 // ensureMTLSCertificate creates or updates the operator P2P Secret from the
 // scheduler host resolved at reconcile time. Seed clusters own the full SAN set:
-// resolved public IPs + manager DNS. A DNS failure leaves
-// the existing certificate untouched and returns an error so the reconcile is
-// retried. Manager-only clusters only bootstrap a missing Secret and never
-// rewrite an existing one (a seed reconcile owns the public IP set).
+// resolved public IPs, the per-cluster scheduler DNS names, and manager DNS. A
+// DNS failure leaves the existing certificate untouched and returns an error so
+// the reconcile is retried. Manager-only clusters only bootstrap a missing
+// Secret and never rewrite an existing one (a seed reconcile owns the SAN set).
 func (c *Controller) ensureMTLSCertificate(cluster *provv1.Cluster, roles Roles) (string, error) {
 	if !roles.Manager && !roles.Seed {
 		return "", nil
@@ -611,6 +611,7 @@ func (c *Controller) ensureMTLSCertificate(cluster *provv1.Cluster, roles Roles)
 		ManagerGRPCDomain:  c.opts.ManagerGRPCDomain,
 		ManagerAPIURL:      c.opts.ManagerAPIURL,
 		SchedulerPublicIPs: publicIPs,
+		SchedulerHosts:     append(existingSchedulerHosts(existing), host),
 	})
 	if err != nil {
 		c.event(cluster, corev1.EventTypeWarning, "MTLSSecretUnavailable", err.Error())
@@ -690,6 +691,28 @@ func existingPublicIPs(secret *corev1.Secret) []string {
 		ips = append(ips, ip.String())
 	}
 	return ips
+}
+
+// existingSchedulerHosts keeps the scheduler DNS names already present in the
+// shared P2P certificate. Manager names are regenerated from configuration on
+// every reconcile; scheduler names are per Cluster, so without this
+// accumulation a second seed Cluster's reconcile would drop the first host and
+// rotate the CA on every pass.
+func existingSchedulerHosts(secret *corev1.Secret) []string {
+	if secret == nil {
+		return nil
+	}
+	certs, err := pki.ParseCertificates(secret.Data[corev1.TLSCertKey])
+	if err != nil || len(certs) == 0 {
+		return nil
+	}
+	hosts := make([]string, 0, len(certs[0].DNSNames))
+	for _, name := range certs[0].DNSNames {
+		if strings.HasPrefix(name, "d7y-scheduler.") {
+			hosts = append(hosts, name)
+		}
+	}
+	return hosts
 }
 
 func dedupeStrings(values []string) []string {

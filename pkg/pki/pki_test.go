@@ -6,6 +6,7 @@ import (
 	"crypto/x509"
 	"net"
 	"slices"
+	"strings"
 	"testing"
 	"time"
 
@@ -129,6 +130,61 @@ func TestGenerate(t *testing.T) {
 	}
 	if !key.PublicKey.Equal(leafKey) {
 		t.Error("private key does not match the leaf certificate")
+	}
+}
+
+func TestGenerateSchedulerHosts(t *testing.T) {
+	bundle, err := Generate(Options{
+		ManagerGRPCDomain: testGRPCDomain,
+		ManagerAPIURL:     testAPIURL,
+		SchedulerHosts: []string{
+			" d7y-scheduler.c-m-a.example.com ",
+			"d7y-scheduler.c-m-a.example.com.",
+			"d7y-scheduler.c-m-b.example.com.",
+			" ",
+			"",
+			" " + testGRPCDomain + ". ",
+		},
+	})
+	if err != nil {
+		t.Fatalf("Generate() error = %v", err)
+	}
+
+	certs, err := ParseCertificates(bundle.CertPEM)
+	if err != nil {
+		t.Fatalf("ParseCertificates(leaf) error = %v", err)
+	}
+	leaf := certs[0]
+	for _, want := range []string{
+		"d7y-scheduler.c-m-a.example.com",
+		"d7y-scheduler.c-m-b.example.com",
+	} {
+		if !slices.Contains(leaf.DNSNames, want) {
+			t.Errorf("leaf SANs %v do not contain %q", leaf.DNSNames, want)
+		}
+	}
+	for _, name := range leaf.DNSNames {
+		if name != strings.TrimSpace(name) || strings.HasSuffix(name, ".") {
+			t.Errorf("leaf SAN %q is not normalized", name)
+		}
+	}
+	count := func(want string) int {
+		n := 0
+		for _, name := range leaf.DNSNames {
+			if name == want {
+				n++
+			}
+		}
+		return n
+	}
+	if got := count("d7y-scheduler.c-m-a.example.com"); got != 1 {
+		t.Errorf("d7y-scheduler.c-m-a.example.com appears %d times, want 1", got)
+	}
+	if got := count(testGRPCDomain); got != 1 {
+		t.Errorf("%s appears %d times, want 1", testGRPCDomain, got)
+	}
+	if !slices.Equal(bundle.DNSNames, leaf.DNSNames) {
+		t.Errorf("bundle DNSNames = %v, leaf DNSNames = %v", bundle.DNSNames, leaf.DNSNames)
 	}
 }
 

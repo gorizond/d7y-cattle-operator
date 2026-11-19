@@ -12,7 +12,7 @@ func testCluster() Cluster {
 		Namespace:                   "fleet-default",
 		MTLSSecretName:              "dragonfly-p2p-mtls",
 		Chart:                       Chart{Repo: "https://charts.example.com", Name: "dragonfly", Version: "1.10.1-patch.2"},
-		ExtrasChart:                 Chart{Repo: "https://charts.example.com", Name: "dragonfly-extras", Version: "0.1.8"},
+		ExtrasChart:                 Chart{Repo: "https://charts.example.com", Name: "dragonfly-extras", Version: "0.1.9"},
 		MirrorChart:                 Chart{Repo: "https://charts.example.com", Name: "containerd-mirror", Version: "0.1.0"},
 		HarborChart:                 Chart{Repo: "https://helm.example.com", Name: "harbor", Version: "1.19.4"},
 		RegistryProxyChart:          Chart{Repo: "https://charts.example.com", Name: "registry-proxy", Version: "0.1.11"},

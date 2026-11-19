@@ -39,6 +39,11 @@ type Options struct {
 	// host. They are public Traefik LB addresses used by bootstrap clients and
 	// DaemonSets.
 	SchedulerPublicIPs []string
+	// SchedulerHosts are the per-cluster scheduler DNS names
+	// (d7y-scheduler.<cluster-id>.<domain>). They are additive SANs so clients
+	// dialing the hostname validate even when a wildcard DNS record points at
+	// a different cluster's load balancer.
+	SchedulerHosts []string
 }
 
 // Bundle holds PEM-encoded mTLS material. The CA private key is intentionally
@@ -53,7 +58,8 @@ type Bundle struct {
 }
 
 // Generate creates a self-signed CA and a leaf certificate valid for the
-// manager gRPC and REST endpoints plus the Dragonfly service DNS names.
+// manager gRPC and REST endpoints, the scheduler DNS names, and the Dragonfly
+// service DNS names.
 func Generate(opts Options) (*Bundle, error) {
 	if opts.ManagerGRPCDomain == "" {
 		return nil, errors.New("pki: manager gRPC domain is required")
@@ -67,7 +73,7 @@ func Generate(opts Options) (*Bundle, error) {
 	if err != nil {
 		return nil, err
 	}
-	dnsNames := leafDNSNames(opts.ManagerGRPCDomain, apiURL.Hostname())
+	dnsNames := leafDNSNames(opts.ManagerGRPCDomain, apiURL.Hostname(), opts.SchedulerHosts)
 
 	now := time.Now()
 	notBefore := now.Add(-time.Hour)
@@ -178,7 +184,7 @@ func ParsePrivateKey(pemBytes []byte) (*ecdsa.PrivateKey, error) {
 	return key, nil
 }
 
-func leafDNSNames(grpcDomain, apiHost string) []string {
+func leafDNSNames(grpcDomain, apiHost string, schedulerHosts []string) []string {
 	candidates := []string{
 		grpcDomain,
 		apiHost,
@@ -186,10 +192,12 @@ func leafDNSNames(grpcDomain, apiHost string) []string {
 		"dragonfly-manager." + dragonflyNamespace + ".svc",
 		"localhost",
 	}
+	candidates = append(candidates, schedulerHosts...)
 
 	seen := make(map[string]struct{}, len(candidates))
 	names := make([]string, 0, len(candidates))
 	for _, name := range candidates {
+		name = strings.TrimRight(strings.TrimSpace(name), ".")
 		if name == "" {
 			continue
 		}
