@@ -232,7 +232,7 @@ func TestEnsureHarborPreheatCreatesPATAndInstance(t *testing.T) {
 	})
 	cluster := testHarborCluster()
 	controller.secrets.(*fakeSecretStore).put(&corev1.Secret{
-		ObjectMeta: metav1.ObjectMeta{Name: "harbor-admin", Namespace: "fleet-default"},
+		ObjectMeta: metav1.ObjectMeta{Name: "d7y-harbor-admin", Namespace: "fleet-default"},
 		Data:       map[string][]byte{"HARBOR_ADMIN_PASSWORD": []byte("admin-password")},
 	})
 	hc := controller.helmopCluster(cluster)
@@ -292,7 +292,7 @@ func TestEnsureHarborPreheatEmitsEventOnFailure(t *testing.T) {
 	})
 	cluster := testHarborCluster()
 	controller.secrets.(*fakeSecretStore).put(&corev1.Secret{
-		ObjectMeta: metav1.ObjectMeta{Name: "harbor-admin", Namespace: "fleet-default"},
+		ObjectMeta: metav1.ObjectMeta{Name: "d7y-harbor-admin", Namespace: "fleet-default"},
 		Data:       map[string][]byte{"HARBOR_ADMIN_PASSWORD": []byte("admin-password")},
 	})
 	hc := controller.helmopCluster(cluster)
@@ -368,7 +368,7 @@ func TestEnsureHarborPreheatRecoversPATConflict(t *testing.T) {
 	})
 	cluster := testHarborCluster()
 	controller.secrets.(*fakeSecretStore).put(&corev1.Secret{
-		ObjectMeta: metav1.ObjectMeta{Name: "harbor-admin", Namespace: "fleet-default"},
+		ObjectMeta: metav1.ObjectMeta{Name: "d7y-harbor-admin", Namespace: "fleet-default"},
 		Data:       map[string][]byte{"HARBOR_ADMIN_PASSWORD": []byte("admin-password")},
 	})
 	hc := controller.helmopCluster(cluster)
@@ -416,7 +416,7 @@ func TestEnsureHarborPreheatPATConflictWithoutMatchingName(t *testing.T) {
 	})
 	cluster := testHarborCluster()
 	controller.secrets.(*fakeSecretStore).put(&corev1.Secret{
-		ObjectMeta: metav1.ObjectMeta{Name: "harbor-admin", Namespace: "fleet-default"},
+		ObjectMeta: metav1.ObjectMeta{Name: "d7y-harbor-admin", Namespace: "fleet-default"},
 		Data:       map[string][]byte{"HARBOR_ADMIN_PASSWORD": []byte("admin-password")},
 	})
 	hc := controller.helmopCluster(cluster)

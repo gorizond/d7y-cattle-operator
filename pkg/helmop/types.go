@@ -94,7 +94,10 @@ const (
 	AnnotationSchedulerPublicIP = "p2p.dragonfly.io/scheduler-public-ip"
 	// AnnotationProxyTLSSecret carries the per-cluster registry-proxy ingress
 	// TLS Secret. The operator stamps the configured default only when absent.
-	AnnotationProxyTLSSecret     = "p2p.dragonfly.io/proxy-tls-secret"
+	AnnotationProxyTLSSecret = "p2p.dragonfly.io/proxy-tls-secret"
+	// AnnotationHarborTLSSecret optionally pins a per-cluster Harbor ingress
+	// TLS Secret; empty falls back to the fleet-wide d7y-harbor-tls.
+	AnnotationHarborTLSSecret    = "p2p.dragonfly.io/harbor-tls-secret"
 	AnnotationSchedulerReplicas  = "p2p.dragonfly.io/scheduler-replicas"
 	AnnotationSeedClientReplicas = "p2p.dragonfly.io/seedclient-replicas"
 
@@ -117,6 +120,14 @@ const (
 	// the proxy Service. External-Harbor clusters keep the chart default
 	// (proxy.publicURL + /api/convert).
 	SharedProxyWebhookAddressTemplate = `${ if and (eq (index .ClusterLabels "d7y-operator-harbor") "true") (eq (index .ClusterAnnotations "p2p.dragonfly.io/harbor-url") "") }http://${ .ClusterName }-registry-proxy.dragonfly-system.svc:8080/api/convert${ end }`
+	// SharedHarborDomainTemplate resolves the per-target Harbor ingress host.
+	SharedHarborDomainTemplate = `${ index .ClusterAnnotations "p2p.dragonfly.io/harbor-domain" }`
+	// SharedHarborTLSSecretTemplate resolves the per-target Harbor ingress TLS
+	// Secret; absent annotation keeps the fleet-wide d7y-harbor-tls.
+	SharedHarborTLSSecretTemplate = `${ index .ClusterAnnotations "p2p.dragonfly.io/harbor-tls-secret" | default "d7y-harbor-tls" }`
+	// SharedHarborFullnameTemplate keeps the legacy <cluster>-harbor fullname,
+	// so Harbor workloads and the existing PVCs keep their names.
+	SharedHarborFullnameTemplate = SharedClusterNameTemplate + "-harbor"
 )
 
 // Shared HelmOp names. These are also the Helm release names, so they must be
@@ -131,6 +142,7 @@ const (
 	sharedMirrorName    = "d7y-containerd-mirror"
 	sharedAdmissionName = "d7y-admission"
 	sharedProxyName     = "d7y-registry-proxy"
+	sharedHarborName    = "d7y-harbor"
 )
 
 // SharedKeyDBName returns the shared KeyDB HelmOp and release name.
@@ -159,16 +171,24 @@ func SharedAdmissionName() string { return sharedAdmissionName }
 // name.
 func SharedRegistryProxyName() string { return sharedProxyName }
 
+// SharedHarborName returns the shared Harbor HelmOp and release name.
+func SharedHarborName() string { return sharedHarborName }
+
+// SharedHarborAdminSecretName is the fleet-wide Harbor admin Secret.
+func SharedHarborAdminSecretName() string { return "d7y-harbor-admin" }
+
+// SharedHarborSecretKeyName is the fleet-wide Harbor core secret-key Secret.
+func SharedHarborSecretKeyName() string { return "d7y-harbor-secret" }
+
+// SharedHarborDBSecretName is the fleet-wide Harbor database password Secret.
+func SharedHarborDBSecretName() string { return "d7y-harbor-db" }
+
 // SharedRegistryProxyRobotSecretName is the fleet-wide robot Secret shared by
 // every registry-proxy target.
 func SharedRegistryProxyRobotSecretName() string { return "d7y-registry-proxy-robot" }
 
 // SharedRegistryProxyWebhookSecretName is the fleet-wide Harbor webhook Secret.
 func SharedRegistryProxyWebhookSecretName() string { return "d7y-registry-proxy-webhook" }
-
-// SharedHarborAdminSecretName is the fleet-wide Harbor admin Secret used by the
-// shared registry proxy.
-func SharedHarborAdminSecretName() string { return "harbor-admin" }
 
 // GateSelector matches every Cluster that opted into the Dragonfly stack. KeyDB
 // must reach manager-only and label-only Clusters too: the manager, Harbor and
@@ -185,6 +205,11 @@ func ManagerSelector() map[string]string {
 // ProxySelector matches the registry-proxy role.
 func ProxySelector() map[string]string {
 	return map[string]string{LabelGate: "true", LabelRoleProxy: "true"}
+}
+
+// HarborSelector matches the Harbor role.
+func HarborSelector() map[string]string {
+	return map[string]string{LabelGate: "true", LabelRoleHarbor: "true"}
 }
 
 // SharedSelector matches the seed role: the shared control, data, extras, and

@@ -61,7 +61,7 @@ func TestReconcileAdmissionToggleMatrix(t *testing.T) {
 				t.Fatalf("reconcile() error = %v", err)
 			}
 			for name, want := range map[string]bool{
-				"c1-harbor":                      test.wantHarbor,
+				helmop.SharedHarborName():        test.wantHarbor,
 				helmop.SharedRegistryProxyName(): test.wantProxy,
 			} {
 				if got := store.has("fleet-default/" + name); got != want {
@@ -108,7 +108,7 @@ func TestReconcileAdmissionToggleKeepsSharedHelmOp(t *testing.T) {
 	if store.has("fleet-default/c1-admission-webhook") {
 		t.Error("legacy per-cluster admission HelmOp still exists")
 	}
-	for _, name := range []string{"c1-harbor", helmop.SharedRegistryProxyName()} {
+	for _, name := range []string{helmop.SharedHarborName(), helmop.SharedRegistryProxyName()} {
 		if !store.has("fleet-default/" + name) {
 			t.Errorf("%s was removed with admission", name)
 		}
@@ -159,7 +159,7 @@ func TestReconcileAdmissionProxyDomainMissingDoesNotBlockOthers(t *testing.T) {
 		t.Error("shared admission HelmOp was created without proxy.domain")
 	}
 	// Harbor has no dependency on the proxy domain and must still be applied.
-	if !store.has("fleet-default/c1-harbor") {
+	if !store.has("fleet-default/" + helmop.SharedHarborName()) {
 		t.Error("Harbor was blocked by the admission failure")
 	}
 	// The proxy shares the same operator-wide proxy.domain, so it reports its
@@ -232,7 +232,7 @@ func TestReconcileAdmissionCleanupDeletesLegacyBundle(t *testing.T) {
 	}
 	bundles := controller.bundles.(*fakeHelmOpStore)
 	bundles.objects["fleet-default/c1-admission-webhook"] = fleetBundle("c1-admission-webhook", "fleet-default")
-	bundles.objects["fleet-default/c1-harbor"] = fleetBundle("c1-harbor", "fleet-default")
+	bundles.objects["fleet-default/unrelated"] = fleetBundle("unrelated", "fleet-default")
 
 	delete(cluster.Annotations, AnnotationAdmission)
 	if _, err := controller.reconcile("", cluster); err != nil {
@@ -241,7 +241,7 @@ func TestReconcileAdmissionCleanupDeletesLegacyBundle(t *testing.T) {
 	if bundles.has("fleet-default/c1-admission-webhook") {
 		t.Error("legacy admission Bundle was not removed")
 	}
-	if !bundles.has("fleet-default/c1-harbor") {
+	if !bundles.has("fleet-default/unrelated") {
 		t.Error("unrelated Bundle was removed with admission cleanup")
 	}
 }

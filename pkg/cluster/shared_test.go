@@ -27,7 +27,7 @@ func TestReconcileCleansLegacyPerClusterHelmOps(t *testing.T) {
 	bundles := controller.bundles.(*fakeHelmOpStore)
 	legacy := []string{
 		"c1-keydb", "c1-manager", "c1-control", "c1-data", "c1-extras",
-		"c1-containerd-mirror", "c1-admission-webhook", "c1-registry-proxy",
+		"c1-containerd-mirror", "c1-admission-webhook", "c1-registry-proxy", "c1-harbor",
 	}
 	for _, name := range legacy {
 		store.objects["fleet-default/"+name] = legacyHelmOp(name)
@@ -39,6 +39,8 @@ func TestReconcileCleansLegacyPerClusterHelmOps(t *testing.T) {
 	cluster := testSeedCluster("42")
 	cluster.Annotations[AnnotationManager] = "true"
 	cluster.Annotations[AnnotationProxy] = "true"
+	cluster.Annotations[AnnotationHarbor] = "true"
+	cluster.Annotations[AnnotationHarborDomain] = "harbor.example.com"
 	if _, err := controller.reconcile("", cluster); err != nil {
 		t.Fatalf("reconcile() error = %v", err)
 	}
@@ -57,7 +59,7 @@ func TestReconcileCleansLegacyPerClusterHelmOps(t *testing.T) {
 	for _, name := range []string{
 		helmop.SharedKeyDBName(), helmop.SharedManagerName(), helmop.SharedControlName(),
 		helmop.SharedDataName(), helmop.SharedExtrasName(), helmop.SharedMirrorName(),
-		helmop.SharedAdmissionName(), helmop.SharedRegistryProxyName(),
+		helmop.SharedAdmissionName(), helmop.SharedRegistryProxyName(), helmop.SharedHarborName(),
 	} {
 		if !store.has("fleet-default/" + name) {
 			t.Errorf("%s shared HelmOp is missing", name)
@@ -225,5 +227,57 @@ func TestProxyTLSSecretAnnotationNotOverwritten(t *testing.T) {
 	}
 	if got := clusterStore.annotation(helmop.AnnotationProxyTLSSecret); got != "custom-proxy-tls" {
 		t.Errorf("proxy-tls-secret annotation = %q, want the pinned value", got)
+	}
+}
+
+func TestReconcileCreatesSharedHarbor(t *testing.T) {
+	controller, store, _ := newTestController(t)
+	cluster := testHarborCluster()
+
+	if _, err := controller.reconcile("", cluster); err != nil {
+		t.Fatalf("reconcile() error = %v", err)
+	}
+	op := store.object("fleet-default/" + helmop.SharedHarborName())
+	if op == nil {
+		t.Fatal("shared Harbor HelmOp was not created")
+	}
+	if labels := selectorLabels(op); labels[helmop.LabelGate] != "true" || labels[helmop.LabelRoleHarbor] != "true" {
+		t.Errorf("harbor selector = %v, want gate+harbor", labels)
+	}
+	if !helmTakeOwnership(op) {
+		t.Error("shared Harbor takeOwnership = false, want true")
+	}
+	values := helmValues(t, op)
+	if got := valueAtPath(t, values, "fullnameOverride"); got != helmop.SharedHarborFullnameTemplate {
+		t.Errorf("fullnameOverride = %v, want %s", got, helmop.SharedHarborFullnameTemplate)
+	}
+	if got := valueAtPath(t, values, "expose", "ingress", "hosts", "core"); got != helmop.SharedHarborDomainTemplate {
+		t.Errorf("ingress host = %v, want the harbor-domain annotation template", got)
+	}
+	if got := valueAtPath(t, values, "expose", "tls", "secret", "secretName"); got != helmop.SharedHarborTLSSecretTemplate {
+		t.Errorf("ingress TLS Secret = %v", got)
+	}
+	for path, want := range map[string]any{
+		"existingSecretAdminPassword": helmop.SharedHarborAdminSecretName(),
+		"existingSecretSecretKey":     helmop.SharedHarborSecretKeyName(),
+		"persistence.resourcePolicy":  "keep",
+		"redis.external.addr":         helmop.SharedClusterNameTemplate + "-keydb.dragonfly-system.svc:6379",
+	} {
+		keys := strings.Split(path, ".")
+		if got := valueAtPath(t, values, keys...); got != want {
+			t.Errorf("%s = %v, want %v", path, got, want)
+		}
+	}
+	for _, secret := range []string{
+		helmop.SharedHarborAdminSecretName(),
+		helmop.SharedHarborDBSecretName(),
+		helmop.SharedHarborSecretKeyName(),
+	} {
+		if _, err := controller.secrets.(*fakeSecretStore).Get("fleet-default", secret, metav1.GetOptions{}); err != nil {
+			t.Errorf("fleet-wide Secret %s was not created: %v", secret, err)
+		}
+	}
+	if store.has("fleet-default/" + helmop.HarborName(cluster.Name)) {
+		t.Error("legacy per-cluster Harbor HelmOp still exists")
 	}
 }

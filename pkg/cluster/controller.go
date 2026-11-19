@@ -188,10 +188,13 @@ func (c *Controller) reconcile(key string, cluster *provv1.Cluster) (result *pro
 	} else {
 		status.set(conditionKeyDBReady, true, "Ready", "KeyDB HelmOp applied")
 	}
-	// Harbor and the registry proxy stay per cluster: they need per-cluster
-	// Secret names and Harbor ClusterIP host aliases that Fleet cannot template.
+	// Harbor is shared; apply it before the proxy, whose precondition needs a
+	// reachable Harbor.
 	hc = c.resolveHarborURL(hc)
-	harborErr := c.ensureHarbor(cluster, hc, roles)
+	harborErr := c.ensureSharedHarbor(cluster, hc, roles)
+	if err := c.cleanupLegacyHarbor(cluster, roles, harborErr); err != nil {
+		errs = append(errs, err)
+	}
 	setHarborCondition(status, roles, harborErr)
 	if harborErr != nil {
 		errs = append(errs, harborErr)
@@ -461,7 +464,7 @@ func (c *Controller) helmopCluster(cluster *provv1.Cluster) helmop.Cluster {
 		RegistryProxyChart:          c.opts.RegistryProxyChart,
 		AdmissionChart:              c.opts.AdmissionChart,
 		HarborAdminSecret:           helmop.SharedHarborAdminSecretName(),
-		HarborSecretKey:             helmop.HarborSecretKeyName(cluster.Name),
+		HarborSecretKey:             helmop.SharedHarborSecretKeyName(),
 		ProxyWebhookSecretName:      helmop.SharedRegistryProxyWebhookSecretName(),
 		ProxyRobotSecretName:        helmop.SharedRegistryProxyRobotSecretName(),
 		ProxyDomain:                 c.opts.ProxyDomain,
@@ -883,6 +886,24 @@ func (c *Controller) cleanupLegacyHelmOps(cluster *provv1.Cluster, shared shared
 		if err := c.deleteBundle(cluster, name); err != nil {
 			errs = append(errs, err)
 		}
+	}
+	return errors.Join(errs...)
+}
+
+// cleanupLegacyHarbor removes the per-cluster Harbor HelmOp and Bundle once the
+// shared release was applied, when the role is gone, or when an external Harbor
+// is configured. A failed shared apply keeps the legacy release running.
+func (c *Controller) cleanupLegacyHarbor(cluster *provv1.Cluster, roles Roles, harborErr error) error {
+	if roles.Harbor && roles.HarborURL == "" && harborErr != nil {
+		return nil
+	}
+	name := helmop.HarborName(cluster.Name)
+	var errs []error
+	if err := c.deleteHelmOp(cluster, name); err != nil {
+		errs = append(errs, err)
+	}
+	if err := c.deleteBundle(cluster, name); err != nil {
+		errs = append(errs, err)
 	}
 	return errors.Join(errs...)
 }

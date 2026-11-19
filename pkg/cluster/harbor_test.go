@@ -41,7 +41,7 @@ func TestReconcileHarborAndProxy(t *testing.T) {
 	if len(events.events) != 0 {
 		t.Errorf("events = %+v, want none", events.events)
 	}
-	for _, name := range []string{"c1-harbor", helmop.SharedRegistryProxyName()} {
+	for _, name := range []string{helmop.SharedHarborName(), helmop.SharedRegistryProxyName()} {
 		if !store.has("fleet-default/" + name) {
 			t.Errorf("%s HelmOp was not created", name)
 		}
@@ -204,7 +204,7 @@ func TestReconcileExternalHarborSkipsHarborHelmOp(t *testing.T) {
 	if _, err := controller.reconcile("", cluster); err != nil {
 		t.Fatalf("reconcile() error = %v", err)
 	}
-	if store.has("fleet-default/c1-harbor") {
+	if store.has("fleet-default/" + helmop.SharedHarborName()) {
 		t.Error("Harbor HelmOp was created for an external Harbor")
 	}
 	proxy := store.object("fleet-default/" + helmop.SharedRegistryProxyName())
@@ -229,7 +229,7 @@ func TestReconcileProxyIndependentOfHarbor(t *testing.T) {
 	if _, err := controller.reconcile("", cluster); err != nil {
 		t.Fatalf("reconcile() error = %v", err)
 	}
-	if store.has("fleet-default/c1-harbor") {
+	if store.has("fleet-default/" + helmop.SharedHarborName()) {
 		t.Error("Harbor HelmOp was created without the Harbor annotation")
 	}
 	if !store.has("fleet-default/" + helmop.SharedRegistryProxyName()) {
@@ -247,7 +247,7 @@ func TestReconcileHarborDomainMissing(t *testing.T) {
 	if _, err := controller.reconcile("", cluster); err == nil {
 		t.Fatal("reconcile() error = nil, want HarborDomainMissing")
 	}
-	if store.has("fleet-default/c1-harbor") || store.has("fleet-default/"+helmop.SharedRegistryProxyName()) {
+	if store.has("fleet-default/"+helmop.SharedHarborName()) || store.has("fleet-default/"+helmop.SharedRegistryProxyName()) {
 		t.Error("Harbor/proxy HelmOps were created without a valid domain")
 	}
 	if got := clusterStore.condition(string(conditionHarborDomainMissing)); got == nil || got.Status != corev1.ConditionTrue {
@@ -267,7 +267,7 @@ func TestReconcileHarborAdminSecretMissing(t *testing.T) {
 	if _, err := controller.reconcile("", cluster); err == nil {
 		t.Fatal("reconcile() error = nil, want missing admin Secret")
 	}
-	if store.has("fleet-default/c1-harbor") || store.has("fleet-default/"+helmop.SharedRegistryProxyName()) {
+	if store.has("fleet-default/"+helmop.SharedHarborName()) || store.has("fleet-default/"+helmop.SharedRegistryProxyName()) {
 		t.Error("Harbor/proxy HelmOps were created without the admin Secret")
 	}
 	found := false
@@ -293,8 +293,13 @@ func TestReconcileRemovesHarborAndProxy(t *testing.T) {
 	if _, err := controller.reconcile("", cluster); err != nil {
 		t.Fatalf("reconcile(remove) error = %v", err)
 	}
-	if store.has("fleet-default/c1-harbor") {
-		t.Error("per-cluster Harbor HelmOp was not removed")
+	if store.has("fleet-default/" + helmop.HarborName(cluster.Name)) {
+		t.Error("legacy per-cluster Harbor HelmOp was not removed")
+	}
+	// The shared Harbor/proxy objects are global; removing the roles only
+	// stops Fleet from targeting this Cluster.
+	if !store.has("fleet-default/" + helmop.SharedHarborName()) {
+		t.Error("shared Harbor HelmOp was removed with the role")
 	}
 	// The shared proxy is global; removing the role only stops Fleet from
 	// targeting this Cluster, so the object remains.

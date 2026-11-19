@@ -188,7 +188,7 @@ The role annotations and matching labels add:
 | `seed: "true"` + scheduler ID | `d7y-keydb`, `d7y-control`, `d7y-data`, `d7y-extras`, `d7y-containerd-mirror` |
 | manager + seed | shared seed set + `d7y-manager` |
 | `proxy: "true"` | `d7y-registry-proxy` (external `harbor-url` allowed) |
-| `harbor: "true"` | `<cluster>-harbor` |
+| `harbor: "true"` | `d7y-harbor` |
 | `admission: "true"` | `d7y-admission` |
 
 The `harbor`, `proxy`, `admission`, and `seed` annotations are independent:
@@ -213,11 +213,13 @@ templates.
 | `d7y-containerd-mirror` | node containerd mirror | same as control |
 | `d7y-admission` | admission webhook | `d7y-operator-cattle=true`, `d7y-operator-admission=true` |
 | `d7y-registry-proxy` | registry proxy | `d7y-operator-cattle=true`, `d7y-operator-proxy=true` |
+| `d7y-harbor` | Harbor | `d7y-operator-cattle=true`, `d7y-operator-harbor=true` |
 
 The rendered values keep the per-cluster downstream names:
 
 - `fullnameOverride`: `${ .ClusterName }` (manager and registry proxy),
-  `${ .ClusterName }-keydb`, `${ .ClusterName }-control`, `${ .ClusterName }-data`
+  `${ .ClusterName }-harbor` (Harbor), `${ .ClusterName }-keydb`,
+  `${ .ClusterName }-control`, `${ .ClusterName }-data`
 - Ingress/VPA backends: `${ .ClusterName }-manager`,
   `${ .ClusterName }-control-scheduler`, `${ .ClusterName }-data-seed-client`
 - Scheduler public host:
@@ -226,15 +228,14 @@ The rendered values keep the per-cluster downstream names:
   `${ index .ClusterAnnotations "p2p.dragonfly.io/scheduler-cluster-id" }` and
   `${ index .ClusterAnnotations "p2p.dragonfly.io/scheduler-public-ip" }`
 
-Harbor stays per cluster: it needs per-cluster Secret names and ClusterIP host
-aliases that Fleet cannot template. When a Cluster stops matching a selector,
-Fleet deletes its BundleDeployment and uninstalls the release.
+When a Cluster stops matching a selector, Fleet deletes its BundleDeployment
+and uninstalls the release.
 
 Legacy per-cluster objects (`<cluster>-keydb`, `<cluster>-manager`,
 `<cluster>-control`, `<cluster>-data`, `<cluster>-extras`,
 `<cluster>-containerd-mirror`, `<cluster>-admission-webhook`,
-`<cluster>-registry-proxy`) are deleted, HelmOp and Bundle, once the
-corresponding shared HelmOp has been applied.
+`<cluster>-registry-proxy`, `<cluster>-harbor`) are deleted, HelmOp and Bundle,
+once the corresponding shared HelmOp has been applied.
 
 Existing annotation-driven Clusters must add the matching role label (for
 example `d7y-operator-seed: "true"` next to `p2p.dragonfly.io/seed: "true"`):
@@ -299,7 +300,7 @@ only when the value, reason, or message changes:
 | `d7y.io/KeyDBReady` | The shared `d7y-keydb` HelmOp was applied. |
 | `d7y.io/ControlReady` | The shared `d7y-control` HelmOp was applied and registration succeeded (`seed: "true"`). |
 | `d7y.io/DataReady` | The shared `d7y-data` and `d7y-containerd-mirror` HelmOps were applied (`seed: "true"`). |
-| `d7y.io/HarborReady` | The Harbor HelmOp was applied or an external `harbor-url` is configured. |
+| `d7y.io/HarborReady` | The shared `d7y-harbor` HelmOp was applied, or an external `harbor-url` is configured. |
 | `d7y.io/RegistryProxyReady` | The independent registry proxy HelmOp was applied. |
 | `d7y.io/AdmissionWebhookReady` | The shared `d7y-admission` HelmOp was applied and Ready. |
 | `d7y.io/HarborDomainMissing` | `harbor: "true"` is set but `harbor-domain` is missing or invalid. |
@@ -532,33 +533,51 @@ recommendation-only VPAs. The operator creates the shared `d7y-extras` HelmOp:
 
 ## Harbor and registry proxy
 
-Harbor is deployed only when the Cluster has the `d7y-operator-cattle: "true"`
-label and `p2p.dragonfly.io/harbor: "true"`. `p2p.dragonfly.io/harbor-domain`
-is required and must be a DNS name (no scheme/port/path); it becomes the Harbor
-`externalURL` and Ingress host. Set the optional
-`p2p.dragonfly.io/harbor-url: https://...` annotation to use an existing or
-external Harbor instead; no Harbor HelmOp is created in that case.
+Harbor is rendered by the shared `d7y-harbor` HelmOp for Clusters with the
+`d7y-operator-cattle: "true"` and `d7y-operator-harbor: "true"` labels.
+`p2p.dragonfly.io/harbor-domain` is required and must be a DNS name (no
+scheme/port/path); the shared values read it from the Cluster annotations, so
+it becomes the Harbor `externalURL` and Ingress host on every target.
+
+The chart `fullnameOverride` is `${ .ClusterName }-harbor`, so the workloads
+and the existing PVCs keep their names (`poligon-harbor-registry`,
+`poligon-harbor-jobservice`, `poligon-harbor-database`). Harbor's immutable
+workload selectors include the Helm release name, so the shared release also
+sets Fleet's Helm `force` option for the one-time adoption: Helm replaces those
+immutable fields instead of failing. The legacy `<cluster>-harbor` HelmOp and
+Bundle are removed only after the shared HelmOp has been applied; PVCs use
+`resourcePolicy: keep` and survive both the adoption and the legacy removal.
+Expect a short Harbor restart during that first adoption.
 
 The Harbor admin Secret is delivered from the local/operator cluster. Put a
 Secret in the operator namespace (default name `harbor-admin`, configurable
 with `proxy.harborAdminSecret`) containing the `HARBOR_ADMIN_PASSWORD` key
-before the Harbor HelmOp is applied. The operator copies it per cluster and
-Fleet `downstreamResources` delivers it to the `harbor` namespace as
+before the shared Harbor HelmOp is applied. The operator copies it into the
+HelmOp namespace as the fixed `d7y-harbor-admin` and Fleet
+`downstreamResources` delivers it to the `harbor` namespace as
 `existingSecretAdminPassword`; values are never written to HelmOp values,
-logs, or events. The operator also generates per-cluster `<cluster>-harbor-db`
-and `<cluster>-harbor-secret` Secrets once for the internal DB password and
-Harbor secret key, and delivers them with `existingSecret`/`existingSecretSecretKey`.
-The ingress TLS Secret `<cluster>-harbor-tls` must also exist
-(cert-manager or manual) before Harbor starts.
+logs, or events. The operator also generates the fixed `d7y-harbor-db` and
+`d7y-harbor-secret` Secrets once for the internal DB password and Harbor
+secret key, and delivers the latter with `existingSecretSecretKey` (the DB
+password is passed in the chart values).
+
+The Harbor ingress TLS Secret is the fixed `d7y-harbor-tls` unless the Cluster
+pins a per-cluster name with `p2p.dragonfly.io/harbor-tls-secret`. The Secret
+must exist in the `harbor` namespace (cert-manager or manual) before Harbor
+starts; set the annotation to keep `poligon-harbor-tls`.
 
 Harbor values use the `<cluster>-keydb` Service rendered by the shared
 `d7y-keydb` release, as `<cluster>-keydb.dragonfly-system.svc:6379`
-(`redis.type=external`), and create no Redis PVC. Registry, jobservice, and database PVCs are 50Gi/5Gi/10Gi on the
-`longhorn` storage class with `resourcePolicy: keep`. Internal database,
-`trivy.enabled=false`, and ingress TLS Secret `<cluster>-harbor-tls` are the v1
-defaults. The generated `<cluster>-harbor-secret` `secretKey` is 16 random
-bytes encoded as 32 hex characters (AES-256); the DB password remains 32 bytes
-encoded as 64 hex characters.
+(`redis.type=external`), and create no Redis PVC. Registry, jobservice, and
+database PVCs are 50Gi/5Gi/10Gi on the `longhorn` storage class with
+`resourcePolicy: keep`. Internal database, `trivy.enabled=false`, and ingress
+TLS Secret `d7y-harbor-tls` are the v1 defaults. The generated
+`d7y-harbor-secret` `secretKey` is 16 random bytes encoded as 32 hex characters
+(AES-256); the DB password remains 32 bytes encoded as 64 hex characters.
+
+An external `p2p.dragonfly.io/harbor-url` skips the managed Harbor release.
+Because the Fleet selector is label-based, an external-Harbor Cluster must not
+carry the `d7y-operator-harbor` label.
 
 ### Harbor Dragonfly distribution
 
@@ -611,7 +630,7 @@ overwrites a pinned value.
 The operator provisions the Harbor system robot and writes its Secret in the
 HelmOp namespace. The robot and webhook Secrets are now fleet-wide fixed names,
 `d7y-registry-proxy-robot` and `d7y-registry-proxy-webhook`, and the Harbor admin
-Secret is the fixed `harbor-admin`; all three are listed in
+Secret is the fixed `d7y-harbor-admin`; all three are listed in
 `spec.downstreamResources` so Fleet copies them to `dragonfly-system`. The same
 robot/admin credentials are therefore shared by every proxy target. The proxy
 only reads the mounted `username`/`password` and never creates, updates, or
@@ -771,7 +790,8 @@ The operator only acts on Clusters labeled `d7y-operator-cattle: "true"`.
 | `p2p.dragonfly.io/monitoring` | label selector, `true`, or `enabled` | Enable metrics and ServiceMonitors for manager/scheduler/seedClient/client when the selector matches the Cluster labels; empty, invalid, or non-matching disables. Requires the Prometheus Operator ServiceMonitor CRD. |
 | `p2p.dragonfly.io/harbor` | `"true"` | Deploy Harbor (requires `harbor-domain`) |
 | `p2p.dragonfly.io/harbor-domain` | DNS name | Harbor Ingress host / `externalURL` |
-| `p2p.dragonfly.io/harbor-url` | HTTPS URL | Use an existing/external Harbor; no Harbor HelmOp |
+| `p2p.dragonfly.io/harbor-url` | HTTPS URL | Use an existing/external Harbor; no managed Harbor release |
+| `p2p.dragonfly.io/harbor-tls-secret` | Secret name | Per-cluster Harbor ingress TLS Secret; empty keeps the fixed `d7y-harbor-tls` |
 | `p2p.dragonfly.io/proxy` | `"true"` | Deploy the shared registry proxy HelmOp |
 | `p2p.dragonfly.io/proxy-tls-secret` | Secret name | Per-cluster proxy ingress TLS Secret; stamped from `proxy.tlsSecret` only when absent and never overwritten |
 | `p2p.dragonfly.io/mutate-exclure` | comma-separated namespaces | Extra namespaces the admission webhook skips (added to the system and release-namespace exclusions); invalid DNS-1123 labels are logged and skipped |

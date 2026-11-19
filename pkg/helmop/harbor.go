@@ -6,11 +6,67 @@ import (
 	fleetv1alpha1 "github.com/rancher/fleet/pkg/apis/fleet.cattle.io/v1alpha1"
 )
 
-// Harbor returns the Harbor HelmOp for a cluster that owns its Harbor.
-// Redis is the existing KeyDB HelmOp; registry, jobservice, and database use
-// Longhorn PVCs. There is deliberately no Redis PVC.
+// Harbor returns the per-cluster Harbor HelmOp. It is retained for back-compat
+// and tests; the controller reconciles the shared Harbor.
 func Harbor(c Cluster) *fleetv1alpha1.HelmOp {
-	domain := c.HarborDomain
+	values := harborValues(c, harborOptions{
+		domain:      c.HarborDomain,
+		tlsSecret:   HarborTLSSecretName(c.Name),
+		adminSecret: c.HarborAdminSecret,
+		secretKey:   c.HarborSecretKey,
+		dbPassword:  c.HarborDBPassword,
+		redisAddr:   fmt.Sprintf("%s.%s.svc:6379", KeyDBName(c.Name), TargetNamespace),
+	})
+	op := newHelmOpInNamespace(HarborName(c.Name), HarborTargetNamespace, c, c.HarborChart, "harbor", values, []string{KeyDBName(c.Name)})
+	op.Spec.DownstreamResources = harborDownstreamResources(c.HarborAdminSecret, c.HarborSecretKey)
+	return op
+}
+
+// SharedHarbor returns the shared Harbor HelmOp. The chart fullname is the
+// Fleet template ${ .ClusterName }-harbor, so the per-target workloads and the
+// existing PVCs (registry, jobservice, database) keep their names. The admin,
+// database-password and secret-key Secrets are fleet-wide fixed names.
+func SharedHarbor(c Cluster) *fleetv1alpha1.HelmOp {
+	c = sharedCluster(c)
+	values := harborValues(c, harborOptions{
+		fullnameOverride: SharedHarborFullnameTemplate,
+		domain:           SharedHarborDomainTemplate,
+		tlsSecret:        SharedHarborTLSSecretTemplate,
+		adminSecret:      SharedHarborAdminSecretName(),
+		secretKey:        SharedHarborSecretKeyName(),
+		dbPassword:       c.HarborDBPassword,
+		redisAddr:        SharedClusterNameTemplate + "-keydb." + TargetNamespace + ".svc:6379",
+	})
+	op := newSharedHelmOp(SharedHarborName(), HarborTargetNamespace, c, c.HarborChart, "harbor",
+		values, []string{SharedKeyDBName()}, HarborSelector())
+	// Harbor's immutable workload selectors include .Release.Name, which
+	// changes from <cluster>-harbor to d7y-harbor. Force lets Helm replace those
+	// immutable fields during the one-time adoption; PVCs use resourcePolicy
+	// keep and are preserved.
+	op.Spec.Helm.Force = true
+	op.Spec.DownstreamResources = harborDownstreamResources(
+		SharedHarborAdminSecretName(), SharedHarborSecretKeyName())
+	return op
+}
+
+func harborDownstreamResources(adminSecret, secretKey string) []fleetv1alpha1.DownstreamResource {
+	return []fleetv1alpha1.DownstreamResource{
+		{Kind: "Secret", Name: adminSecret},
+		{Kind: "Secret", Name: secretKey},
+	}
+}
+
+type harborOptions struct {
+	fullnameOverride string
+	domain           string
+	tlsSecret        string
+	adminSecret      string
+	secretKey        string
+	dbPassword       string
+	redisAddr        string
+}
+
+func harborValues(c Cluster, opts harborOptions) map[string]any {
 	ingressClass := c.HarborIngressClass
 	if ingressClass == "" {
 		ingressClass = "traefik"
@@ -22,17 +78,17 @@ func Harbor(c Cluster) *fleetv1alpha1.HelmOp {
 				"enabled":    true,
 				"certSource": "secret",
 				"secret": map[string]any{
-					"secretName": HarborTLSSecretName(c.Name),
+					"secretName": opts.tlsSecret,
 				},
 			},
 			"ingress": map[string]any{
 				"className": ingressClass,
 				"hosts": map[string]any{
-					"core": domain,
+					"core": opts.domain,
 				},
 			},
 		},
-		"externalURL": fmt.Sprintf("https://%s", domain),
+		"externalURL": fmt.Sprintf("https://%s", opts.domain),
 		"persistence": map[string]any{
 			"enabled":        true,
 			"resourcePolicy": "keep",
@@ -48,25 +104,23 @@ func Harbor(c Cluster) *fleetv1alpha1.HelmOp {
 		"database": map[string]any{
 			"type": "internal",
 			"internal": map[string]any{
-				"password": c.HarborDBPassword,
+				"password": opts.dbPassword,
 			},
 		},
 		"redis": map[string]any{
 			"type": "external",
 			"external": map[string]any{
-				"addr": fmt.Sprintf("%s.%s.svc:6379", KeyDBName(c.Name), TargetNamespace),
+				"addr": opts.redisAddr,
 			},
 		},
-		"existingSecretAdminPassword": c.HarborAdminSecret,
-		"existingSecretSecretKey":     c.HarborSecretKey,
+		"existingSecretAdminPassword": opts.adminSecret,
+		"existingSecretSecretKey":     opts.secretKey,
 		"updateStrategy":              map[string]any{"type": "Recreate"},
 	}
-	op := newHelmOpInNamespace(HarborName(c.Name), HarborTargetNamespace, c, c.HarborChart, "harbor", values, []string{KeyDBName(c.Name)})
-	op.Spec.DownstreamResources = []fleetv1alpha1.DownstreamResource{
-		{Kind: "Secret", Name: c.HarborAdminSecret},
-		{Kind: "Secret", Name: c.HarborSecretKey},
+	if opts.fullnameOverride != "" {
+		values["fullnameOverride"] = opts.fullnameOverride
 	}
-	return op
+	return values
 }
 
 func harborPVC(size string) map[string]any {
