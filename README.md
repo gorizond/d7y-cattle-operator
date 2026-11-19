@@ -362,22 +362,22 @@ The per-cluster DNS alias is
 `d7y-scheduler.<fleet-cluster-id>.<scheduler.domain>`, where the cluster ID
 comes from provisioning Cluster `status.clusterName` (with
 `scheduler.clusterID`/`P2P_CLUSTER_ID` as an explicit fallback). The operator
-resolves the alias at reconcile time with `net.LookupHost`; the resolved
-address(es) become P2P leaf IP SANs and the first IPv4 address becomes the
-scheduler `advertiseIP` and the extras external-dns target. The extras chart
-adds `external-dns.alpha.kubernetes.io/hostname` and
+resolves the alias at reconcile time with `net.LookupHost`; the first IPv4
+address becomes the scheduler `advertiseIP` and the extras external-dns
+target. The extras chart adds `external-dns.alpha.kubernetes.io/hostname` and
 `external-dns.alpha.kubernetes.io/target` to the `IngressRouteTCP` so an
 external-dns Traefik source can publish it; a deployment zone wildcard can
 also resolve it.
-The alias is deliberately **not** a certificate identity: Dragonfly client
-1.5.14 verifies the resolved IP, so the P2P leaf contains the resolved public
-IP(s) plus the manager DNS names. It contains no ClusterIP and no node IPs.
+The alias **is** the certificate identity: the shared P2P leaf is DNS-only and
+contains the scheduler hostname plus the manager DNS names. It contains no IP
+SANs, ClusterIPs, or node IPs, so validation matches what clients dial and
+cannot carry another cluster's stale address.
 
 If DNS resolution fails or returns no addresses, the operator emits a
-`SchedulerDNSResolutionFailed` event and retries; it does not rewrite the
-existing certificate to an empty IP set. Existing public IP SANs are
-preserved when a new answer arrives, so a DNS/IP rotation keeps the old and new
-addresses valid during propagation. `scheduler.config.server.advertiseIP` and
+`SchedulerDNSResolutionFailed` event and retries; it leaves the existing
+certificate untouched. The first seed reconcile after upgrading from an
+IP-SAN certificate rotates the CA and leaf once to the DNS-only set; later
+reconciles keep it stable. `scheduler.config.server.advertiseIP` and
 `advertisePort=443` use the public front; DaemonSets use the same public host
 from their local dynconfig.
 
