@@ -236,12 +236,6 @@ type Chart struct {
 	Version string
 }
 
-// HostAlias is a pod /etc/hosts entry, rendered as a Kubernetes HostAlias.
-type HostAlias struct {
-	IP        string   `json:"ip"`
-	Hostnames []string `json:"hostnames"`
-}
-
 // Cluster carries the per-cluster inputs shared by the HelmOp builders.
 type Cluster struct {
 	Name               string
@@ -272,7 +266,6 @@ type Cluster struct {
 	ProxyPublicURL         string
 	ProxyBasePath          string
 	ProxyTLSSecret         string
-	ProxyHostAliases       []HostAlias
 	ProxyRegistries        []string
 	ProxyWebhookSecretName string
 	ProxyRobotSecretName   string

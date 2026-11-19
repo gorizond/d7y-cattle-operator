@@ -9,8 +9,6 @@ import (
 	corev1 "k8s.io/api/core/v1"
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
 	"k8s.io/apimachinery/pkg/apis/meta/v1/unstructured"
-
-	"github.com/gorizond/d7y-cattle-operator/pkg/helmop"
 )
 
 func TestEnsureGeneratedSecretHonorsKeyLength(t *testing.T) {
@@ -312,10 +310,6 @@ func testHarborCluster() *provv1.Cluster {
 // same-cluster webhook address into the registry-proxy Helm values.
 func TestReconcileRegistryProxyIngressAndWebhook(t *testing.T) {
 	controller, store, _ := newTestController(t)
-	controller.opts.ProxyHostAliases = []helmop.HostAlias{{
-		IP:        "10.43.0.10",
-		Hostnames: []string{"harbor.example.test"},
-	}}
 	cluster := testHarborCluster()
 	controller.clusters.(*fakeClusterStore).set(cluster)
 
@@ -339,10 +333,6 @@ func TestReconcileRegistryProxyIngressAndWebhook(t *testing.T) {
 		if got := valueAtPath(t, values, tc.path...); got != tc.want {
 			t.Errorf("%v = %v, want %v", tc.path, got, tc.want)
 		}
-	}
-	aliases, ok := valueAtPath(t, values, "proxy", "hostAliases").([]any)
-	if !ok || len(aliases) != 1 {
-		t.Fatalf("proxy.hostAliases = %v", valueAtPath(t, values, "proxy", "hostAliases"))
 	}
 }
 

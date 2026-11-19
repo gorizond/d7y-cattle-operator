@@ -126,12 +126,6 @@ proxy:
   basePath: ""
   # Reuse the Harbor cert-manager Secret; empty uses the ingress default.
   tlsSecret: ""
-  # Optional /etc/hosts entries for the registry proxy pod, e.g. a
-  # same-cluster Harbor reached through the Traefik ClusterIP.
-  hostAliases: []
-  # - ip: 10.43.0.10
-  #   hostnames:
-  #     - harbor.example.test
 
 # Strict node-local containerd registry mirror for seed/data clusters.
 containerdMirror:
