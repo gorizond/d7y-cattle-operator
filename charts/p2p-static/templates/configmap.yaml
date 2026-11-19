@@ -45,4 +45,4 @@ data:
         }
     }
   p2p-install.sh.tmpl: |-
-{{ .Files.Get "files/p2p-install.sh" | nindent 4 }}
+{{ .Files.Get "files/p2p-install.sh" | replace "__NYDUS_CLUSTER_ID__" (default "" .Values.nydus.clusterId) | nindent 4 }}
