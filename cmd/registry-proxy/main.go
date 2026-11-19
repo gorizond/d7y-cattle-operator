@@ -22,6 +22,7 @@ const (
 	configPath       = "/etc/registry-proxy/config.yaml"
 	adminPasswordKey = "HARBOR_ADMIN_PASSWORD"
 	adminSecretDir   = "/etc/registry-proxy/secrets/admin"
+	robotSecretDir   = "/etc/registry-proxy/secrets/robot"
 	webhookSecretDir = "/etc/registry-proxy/secrets/webhook"
 	bootstrapRetry   = 15 * time.Second
 	bootstrapTimeout = 2 * time.Minute
@@ -143,36 +144,27 @@ func initialize(ctx context.Context, cfg *registryproxy.Config, bootstrap *boots
 	}
 	base := cfg.RegistryURL()
 	harbor := &registryproxy.HarborClient{BaseURL: base, Username: adminUsername, Password: adminPassword, Credentials: credentials}
-	namespace := os.Getenv("POD_NAMESPACE")
-	if namespace == "" {
-		namespace = "dragonfly-system"
-	}
-	secretStore, err := registryproxy.NewKubeSecrets(namespace)
-	if err != nil {
-		return err
-	}
 	provisioner := &registryproxy.Provisioner{
 		Harbor:         harbor,
 		MirrorProject:  cfg.Mirror.Project,
 		WebhookAddress: cfg.Webhook.Address,
 		WebhookSecret:  webhookSecret,
 	}
-	sourceProjects := make([]string, 0, len(cfg.Registry.Allowlist))
 	for _, registry := range cfg.Registry.Allowlist {
 		if registry == "*" {
 			// Harbor's system robot wildcard grants pull across all current
 			// and future source projects; provisioning stays request-scoped.
-			sourceProjects = append(sourceProjects, "*")
 			continue
 		}
-		sourceProjects = append(sourceProjects, cfg.ProjectName(registry))
-		// Pre-provision only an explicit allowlist so the system robot can be
-		// granted per-project permissions. Read-path Ensure stays lazy/cached.
+		// Pre-provision only an explicit allowlist. Read-path Ensure stays
+		// lazy/cached.
 		if err := provisioner.Ensure(bootstrapCtx, registry); err != nil {
 			return fmt.Errorf("provision Harbor for %s: %w", registry, err)
 		}
 	}
-	robot, err := registryproxy.EnsureRobotSecret(bootstrapCtx, harbor, cfg.Harbor.RobotSecret, cfg.Mirror.Project, sourceProjects, secretStore)
+	// The operator provisions the Harbor robot and Fleet copies its Secret
+	// downstream. The proxy only reads the mounted credentials.
+	robot, err := readRobotCredentials(robotSecretDir)
 	if err != nil {
 		return err
 	}
@@ -234,4 +226,18 @@ func readOptional(dir, key string) string {
 		return ""
 	}
 	return strings.TrimSpace(string(raw))
+}
+
+// readRobotCredentials reads the operator-provisioned Harbor robot Secret
+// mounted by the kubelet. Values are never logged.
+func readRobotCredentials(dir string) (registryproxy.HarborRobot, error) {
+	username, err := readSecret(dir, "username")
+	if err != nil {
+		return registryproxy.HarborRobot{}, fmt.Errorf("read Harbor robot username: %w", err)
+	}
+	password, err := readSecret(dir, "password")
+	if err != nil {
+		return registryproxy.HarborRobot{}, fmt.Errorf("read Harbor robot password: %w", err)
+	}
+	return registryproxy.HarborRobot{Name: username, Secret: password}, nil
 }

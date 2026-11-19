@@ -143,6 +143,7 @@ func TestConverterCommandBuildsNydusifyArgs(t *testing.T) {
 		"--platform linux/amd64",
 		"--merge-platform",
 		"--oci",
+		"--fs-version 6",
 		"--nydus-image /usr/local/bin/nydus-image",
 	} {
 		if !strings.Contains(joined, want) {

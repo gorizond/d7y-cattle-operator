@@ -454,14 +454,20 @@ The registry proxy is independent of Harbor and the seed role:
 `proxy.domain` (`https://<proxy.domain>`). It has no PVC and no in-cluster
 mirror; removing the annotation deletes the HelmOp. Its Harbor URL comes from
 `p2p.dragonfly.io/harbor-url` or the operator value `proxy.harborURL`.
-On the first pull, the proxy creates the Harbor registry endpoint, the
-read-only proxy project (`docker.io` → `dockerio`), the writable `mirror`
-project, and the `PUSH_ARTIFACT` webhook policy; no manual Harbor project is
-needed. The source proxy project is never mutated. The proxy copies source
-manifests/blobs into `mirror/<registry>/<repo>`, runs `nydusify convert
---merge-platform --oci` to `:<tag>-merged`, verifies the OCI-first/nydus-second
-index, and moves that index to `<tag>`. `/api/convert` is a Harbor-reachable
-shared-secret endpoint and returns 202 before the asynchronous copy/conversion.
+The operator provisions the Harbor system robot and writes its Secret in the
+HelmOp namespace; the registry-proxy HelmOp lists that Secret in
+`spec.downstreamResources`, so Fleet copies it to `dragonfly-system`. The proxy
+only reads the mounted `username`/`password` and never creates, updates, or
+deletes the Secret. The operator pre-creates the explicit allowlist proxy
+projects and the writable `mirror` project before provisioning the robot; the
+proxy still idempotently ensures the Harbor registry endpoints, request-scoped
+projects for a `*` allowlist, and the `PUSH_ARTIFACT` webhook policy. No manual
+Harbor project is needed. The source proxy project is never mutated. The proxy
+copies source manifests/blobs into `mirror/<registry>/<repo>`, runs `nydusify
+convert --merge-platform --oci --fs-version 6` to `:<tag>-merged` (RAFS v6 is
+required by fscache), verifies the OCI-first/nydus-second index, and moves that
+index to `<tag>`. `/api/convert` is a Harbor-reachable shared-secret endpoint
+and returns 202 before the asynchronous copy/conversion.
 
 The proxy Manager is intentionally in-memory. After a proxy restart, in-flight
 jobs are not automatically restored; the next Harbor `PUSH_ARTIFACT` webhook or

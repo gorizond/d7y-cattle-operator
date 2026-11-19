@@ -1,6 +1,8 @@
 package cluster
 
 import (
+	"errors"
+	"reflect"
 	"testing"
 
 	provv1 "github.com/rancher/rancher/pkg/apis/provisioning.cattle.io/v1"
@@ -59,6 +61,122 @@ func TestReconcileHarborAndProxy(t *testing.T) {
 	}
 	if got := clusterStore.condition(string(conditionRegistryProxyReady)); got == nil || got.Status != corev1.ConditionTrue || got.Reason != "Ready" {
 		t.Errorf("RegistryProxyReady after HelmOp Ready = %+v, want True/Ready", got)
+	}
+}
+
+func TestReconcileCreatesRegistryProxyRobotSecret(t *testing.T) {
+	controller, store, events := newTestController(t)
+	controller.opts.ProxyRegistries = []string{"docker.io", "ghcr.io", "*"}
+	cluster := testHarborCluster()
+	controller.clusters.(*fakeClusterStore).set(cluster)
+
+	if _, err := controller.reconcile("", cluster); err != nil {
+		t.Fatalf("reconcile() error = %v", err)
+	}
+	if len(events.events) != 0 {
+		t.Errorf("events = %+v, want none", events.events)
+	}
+
+	ensurer := controller.robotEnsurer.(*fakeRobotEnsurer)
+	if len(ensurer.calls) != 1 {
+		t.Fatalf("robot ensure calls = %d, want 1", len(ensurer.calls))
+	}
+	call := ensurer.calls[0]
+	if call.HarborURL != "https://harbor.example.com" {
+		t.Errorf("harbor URL = %q", call.HarborURL)
+	}
+	if call.Username != "admin" || call.Password != "admin-password" {
+		t.Error("robot ensurer did not receive the Harbor admin credentials")
+	}
+	if call.SecretName != "c1-registry-proxy-robot" || call.MirrorProject != "mirror" {
+		t.Errorf("robot Secret/mirror = %q/%q", call.SecretName, call.MirrorProject)
+	}
+	if want := []string{"docker.io", "ghcr.io", "*"}; !reflect.DeepEqual(call.Registries, want) {
+		t.Errorf("registries = %v, want %v", call.Registries, want)
+	}
+
+	robot, err := controller.secrets.(*fakeSecretStore).Get("fleet-default", "c1-registry-proxy-robot", metav1.GetOptions{})
+	if err != nil {
+		t.Fatalf("robot Secret was not created: %v", err)
+	}
+	for _, key := range []string{"username", "password", "permissions-fingerprint"} {
+		if len(robot.Data[key]) == 0 {
+			t.Errorf("robot Secret is missing key %q", key)
+		}
+	}
+
+	proxy := store.object("fleet-default/c1-registry-proxy")
+	if proxy == nil {
+		t.Fatal("registry proxy HelmOp is missing")
+	}
+	spec, _ := proxy.Object["spec"].(map[string]any)
+	raw, _ := spec["downstreamResources"].([]any)
+	names := make([]string, 0, len(raw))
+	for _, item := range raw {
+		resource, _ := item.(map[string]any)
+		names = append(names, resource["name"].(string))
+	}
+	want := []string{"c1-harbor-admin", "c1-registry-proxy-webhook", "c1-registry-proxy-robot"}
+	if !reflect.DeepEqual(names, want) {
+		t.Errorf("downstreamResources = %v, want %v", names, want)
+	}
+
+	firstRevision := proxyRobotRevision(t, store)
+	if firstRevision == "" {
+		t.Fatal("proxy robot Secret revision annotation is empty")
+	}
+	// A rotated robot password must change the pod-template annotation so the
+	// proxy re-reads the mounted Secret.
+	ensurer.password = "rotated-robot-password"
+	if _, err := controller.reconcile("", cluster); err != nil {
+		t.Fatalf("reconcile(rotation) error = %v", err)
+	}
+	if got := proxyRobotRevision(t, store); got == firstRevision {
+		t.Error("proxy robot Secret revision did not change after rotation")
+	}
+}
+
+func proxyRobotRevision(t *testing.T, store *fakeHelmOpStore) string {
+	t.Helper()
+	op := store.object("fleet-default/c1-registry-proxy")
+	if op == nil {
+		t.Fatal("registry proxy HelmOp is missing")
+	}
+	annotations, ok := valueAtPath(t, helmValues(t, op), "podAnnotations").(map[string]any)
+	if !ok {
+		t.Fatal("proxy podAnnotations are missing")
+	}
+	revision, _ := annotations["p2p.dragonfly.io/robot-secret-revision"].(string)
+	return revision
+}
+
+func TestRegistryProxySourceProjects(t *testing.T) {
+	want := []string{"dockerio", "ghcrio", "*"}
+	if got := registryProxySourceProjects([]string{"docker.io", " ghcr.io ", "", "*"}); !reflect.DeepEqual(got, want) {
+		t.Errorf("source projects = %v, want %v", got, want)
+	}
+}
+
+func TestReconcileRegistryProxyRobotFailureSkipsHelmOp(t *testing.T) {
+	controller, store, events := newTestController(t)
+	controller.robotEnsurer.(*fakeRobotEnsurer).err = errors.New("harbor unavailable")
+	cluster := testHarborCluster()
+	controller.clusters.(*fakeClusterStore).set(cluster)
+
+	if _, err := controller.reconcile("", cluster); err == nil {
+		t.Fatal("reconcile() error = nil, want robot provisioning failure")
+	}
+	if store.has("fleet-default/c1-registry-proxy") {
+		t.Error("registry proxy HelmOp was applied without the robot Secret")
+	}
+	found := false
+	for _, event := range events.events {
+		if event.Reason == "RegistryProxyRobotFailed" {
+			found = true
+		}
+	}
+	if !found {
+		t.Errorf("events = %+v, want RegistryProxyRobotFailed", events.events)
 	}
 }
 

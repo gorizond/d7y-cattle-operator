@@ -15,6 +15,14 @@ import (
 // systemRobotName is the Harbor system robot used by the proxy data plane.
 const systemRobotName = "d7y-registry-proxy"
 
+// SecretStore is the small Secret surface used by the operator to persist
+// Harbor robot credentials. The proxy itself only reads the mounted Secret and
+// never writes Kubernetes resources.
+type SecretStore interface {
+	Get(ctx context.Context, name string) (map[string][]byte, bool, error)
+	Put(ctx context.Context, name string, data map[string][]byte) error
+}
+
 // robotFingerprint identifies the desired robot permission set. The Secret
 // stores it so a restart can detect stale grants (for example a source project
 // added to the allowlist) and recreate the robot once.
@@ -60,11 +68,12 @@ func (h *HarborClient) DeleteRobot(ctx context.Context, name string) error {
 	return nil
 }
 
-// EnsureRobotSecret returns robot credentials for the data plane. It reads an
-// existing Secret first when its permission fingerprint matches, otherwise it
-// deletes the stale robot, creates a system robot through the Harbor admin API,
-// and persists the new credentials and fingerprint in the configured Secret.
-// Secret values are never logged.
+// EnsureRobotSecret provisions the Harbor system robot from the operator and
+// persists its credentials in the upstream Secret that Fleet copies downstream.
+// It reads an existing Secret first when its permission fingerprint matches,
+// otherwise it deletes the stale robot, creates a system robot through the
+// Harbor admin API, and writes the new credentials and fingerprint. Secret
+// values are never logged.
 func EnsureRobotSecret(ctx context.Context, harbor *HarborClient, name, mirrorProject string, sourceProjects []string, store SecretStore) (HarborRobot, error) {
 	fingerprint := robotFingerprint(systemRobotName, mirrorProject, sourceProjects)
 	if store != nil {

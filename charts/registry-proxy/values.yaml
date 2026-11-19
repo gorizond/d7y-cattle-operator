@@ -7,7 +7,7 @@ serviceAccount:
 image:
   # Same image as the operator: it contains /registry-proxy.
   repository: ghcr.io/gorizond/d7y-cattle-operator
-  tag: v0.1.37
+  tag: v0.1.38
   pullPolicy: IfNotPresent
 
 command:
@@ -20,6 +20,8 @@ args:
 harbor:
   url: ""
   adminSecret: harbor-admin
+  # Created by the operator in the HelmOp namespace and copied by Fleet; the
+  # chart only mounts it and grants get on this one name.
   robotSecret: registry-proxy-robot
 
 mirror:

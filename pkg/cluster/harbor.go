@@ -1,9 +1,12 @@
 package cluster
 
 import (
+	"context"
 	"crypto/rand"
+	"crypto/sha256"
 	"encoding/hex"
 	"fmt"
+	"strings"
 
 	provv1 "github.com/rancher/rancher/pkg/apis/provisioning.cattle.io/v1"
 	corev1 "k8s.io/api/core/v1"
@@ -12,6 +15,7 @@ import (
 
 	"github.com/gorizond/d7y-cattle-operator/pkg/apply"
 	"github.com/gorizond/d7y-cattle-operator/pkg/helmop"
+	"github.com/gorizond/d7y-cattle-operator/pkg/registryproxy"
 )
 
 // ensureHarbor reconciles the owned Harbor HelmOp. An external Harbor
@@ -100,7 +104,175 @@ func (c *Controller) ensureRegistryProxy(cluster *provv1.Cluster, hc helmop.Clus
 	if err := c.ensureGeneratedSecret(cluster, hc.ProxyWebhookSecretName, "secret"); err != nil {
 		return err
 	}
+	if err := c.ensureRegistryProxyRobotSecret(cluster, hc); err != nil {
+		return err
+	}
+	// A rotated robot Secret must roll the proxy pods, which read the mounted
+	// credentials only at bootstrap.
+	hc.ProxyRobotSecretRevision = c.robotSecretRevision(cluster, hc.ProxyRobotSecretName)
 	return c.applyHelmOp(cluster, helmop.RegistryProxy(hc))
+}
+
+// ensureRegistryProxyRobotSecret creates or refreshes the Harbor robot Secret
+// in the Cluster (HelmOp) namespace. The proxy only reads the Secret that
+// Fleet copies downstream; it never creates or deletes it.
+func (c *Controller) ensureRegistryProxyRobotSecret(cluster *provv1.Cluster, hc helmop.Cluster) error {
+	admin, err := c.secrets.Get(cluster.Namespace, hc.HarborAdminSecret, metav1.GetOptions{})
+	if err != nil {
+		message := fmt.Sprintf("read Harbor admin Secret %s/%s: %v", cluster.Namespace, hc.HarborAdminSecret, err)
+		c.event(cluster, corev1.EventTypeWarning, "RegistryProxyRobotFailed", message)
+		return fmt.Errorf("read Harbor admin Secret for robot provisioning: %w", err)
+	}
+	password := strings.TrimSpace(string(admin.Data["HARBOR_ADMIN_PASSWORD"]))
+	if password == "" {
+		err := fmt.Errorf("Harbor admin Secret %s/%s has no HARBOR_ADMIN_PASSWORD", cluster.Namespace, hc.HarborAdminSecret)
+		c.event(cluster, corev1.EventTypeWarning, "RegistryProxyRobotFailed", err.Error())
+		return err
+	}
+	username := strings.TrimSpace(string(admin.Data["username"]))
+	if username == "" {
+		username = "admin"
+	}
+	store := &namespaceSecretStore{
+		secrets:   c.secrets,
+		namespace: cluster.Namespace,
+		labels:    apply.Labels(cluster.Namespace, cluster.Name),
+	}
+	ensurer := c.robotEnsurer
+	if ensurer == nil {
+		ensurer = harborRobotEnsurer{}
+	}
+	if err := ensurer.Ensure(c.ctx, hc.HarborURL, username, password, hc.ProxyRobotSecretName,
+		helmop.RegistryProxyMirrorProject, hc.ProxyRegistries, store); err != nil {
+		message := fmt.Sprintf("ensure Harbor robot Secret %s/%s: %v", cluster.Namespace, hc.ProxyRobotSecretName, err)
+		c.event(cluster, corev1.EventTypeWarning, "RegistryProxyRobotFailed", message)
+		return fmt.Errorf("ensure Harbor robot Secret %s/%s: %w", cluster.Namespace, hc.ProxyRobotSecretName, err)
+	}
+	return nil
+}
+
+// robotSecretRevision returns a short hash of the robot Secret values. It is
+// only used as a pod-template annotation to roll the proxy after a credential
+// rotation; the hash is never logged and carries no Secret data.
+func (c *Controller) robotSecretRevision(cluster *provv1.Cluster, name string) string {
+	secret, err := c.secrets.Get(cluster.Namespace, name, metav1.GetOptions{})
+	if err != nil {
+		return ""
+	}
+	digest := sha256.New()
+	for _, key := range []string{"username", "password", "permissions-fingerprint"} {
+		digest.Write([]byte(key))
+		digest.Write([]byte{0})
+		digest.Write(secret.Data[key])
+		digest.Write([]byte{0})
+	}
+	return hex.EncodeToString(digest.Sum(nil))[:16]
+}
+
+// registryProxySourceProjects maps the proxy registry allowlist to Harbor
+// project names. "*" is preserved because Harbor grants a wildcard pull.
+func registryProxySourceProjects(registries []string) []string {
+	projects := make([]string, 0, len(registries))
+	for _, registry := range registries {
+		registry = strings.TrimSpace(registry)
+		if registry == "" {
+			continue
+		}
+		if registry == "*" {
+			projects = append(projects, "*")
+			continue
+		}
+		projects = append(projects, registryproxy.ProjectName(registry))
+	}
+	return projects
+}
+
+// robotEnsurer is the Harbor robot provisioning surface, injectable in tests.
+type robotEnsurer interface {
+	Ensure(ctx context.Context, harborURL, username, password, secretName, mirrorProject string, registries []string, store registryproxy.SecretStore) error
+}
+
+type harborRobotEnsurer struct{}
+
+// Ensure creates the Harbor projects the robot references, then provisions the
+// system robot and writes its credentials to store. Project creation is a
+// prerequisite: the robot grants project-scoped permissions.
+func (harborRobotEnsurer) Ensure(ctx context.Context, harborURL, username, password, secretName, mirrorProject string, registries []string, store registryproxy.SecretStore) error {
+	harbor := &registryproxy.HarborClient{BaseURL: harborURL, Username: username, Password: password}
+	if _, err := harbor.EnsureProject(ctx, mirrorProject, 0); err != nil {
+		return fmt.Errorf("ensure Harbor mirror project %q: %w", mirrorProject, err)
+	}
+	provisioner := &registryproxy.Provisioner{Harbor: harbor, MirrorProject: mirrorProject}
+	for _, registry := range registries {
+		registry = strings.TrimSpace(registry)
+		if registry == "" || registry == "*" {
+			continue
+		}
+		if err := provisioner.Ensure(ctx, registry); err != nil {
+			return err
+		}
+	}
+	_, err := registryproxy.EnsureRobotSecret(ctx, harbor, secretName, mirrorProject, registryProxySourceProjects(registries), store)
+	return err
+}
+
+// namespaceSecretStore writes the robot Secret into one namespace through the
+// operator's typed Secret client. It never logs Secret data.
+type namespaceSecretStore struct {
+	secrets   apply.SecretStore
+	namespace string
+	labels    map[string]string
+}
+
+func (s *namespaceSecretStore) Get(_ context.Context, name string) (map[string][]byte, bool, error) {
+	secret, err := s.secrets.Get(s.namespace, name, metav1.GetOptions{})
+	if apierrors.IsNotFound(err) {
+		return nil, false, nil
+	}
+	if err != nil {
+		return nil, false, err
+	}
+	return secret.Data, true, nil
+}
+
+func (s *namespaceSecretStore) Put(_ context.Context, name string, data map[string][]byte) error {
+	current, err := s.secrets.Get(s.namespace, name, metav1.GetOptions{})
+	if apierrors.IsNotFound(err) {
+		_, err = s.secrets.Create(&corev1.Secret{
+			ObjectMeta: metav1.ObjectMeta{Name: name, Namespace: s.namespace, Labels: cloneLabels(s.labels)},
+			Type:       corev1.SecretTypeOpaque,
+			Data:       cloneSecretData(data),
+		})
+		return err
+	}
+	if err != nil {
+		return err
+	}
+	current.Data = cloneSecretData(data)
+	if current.Labels == nil {
+		current.Labels = map[string]string{}
+	}
+	for key, value := range s.labels {
+		current.Labels[key] = value
+	}
+	_, err = s.secrets.Update(current)
+	return err
+}
+
+func cloneLabels(labels map[string]string) map[string]string {
+	copied := make(map[string]string, len(labels))
+	for key, value := range labels {
+		copied[key] = value
+	}
+	return copied
+}
+
+func cloneSecretData(data map[string][]byte) map[string][]byte {
+	copied := make(map[string][]byte, len(data))
+	for key, value := range data {
+		copied[key] = append([]byte(nil), value...)
+	}
+	return copied
 }
 
 // ensureGeneratedSecret creates a per-cluster random Secret once and preserves

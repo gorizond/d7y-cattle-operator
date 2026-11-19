@@ -13,7 +13,6 @@ listen_addr: ":8080"
 harbor:
   url: https://harbor.example.com
   admin_secret: harbor-admin
-  robot_secret: registry-proxy-robot
 mirror:
   project: mirror
 registry:

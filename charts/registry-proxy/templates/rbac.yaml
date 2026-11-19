@@ -7,10 +7,13 @@ metadata:
   labels:
     {{- include "registry-proxy.labels" . | nindent 4 }}
 rules:
+  # The robot Secret is provisioned by the operator and mounted read-only by
+  # the kubelet. This rule is the only API permission retained: read the one
+  # Secret, never create, update, or delete.
   - apiGroups: [""]
     resources: ["secrets"]
     resourceNames: [{{ .Values.harbor.robotSecret | quote }}]
-    verbs: ["get", "create", "update"]
+    verbs: ["get"]
 ---
 apiVersion: rbac.authorization.k8s.io/v1
 kind: RoleBinding

@@ -13,6 +13,7 @@ import (
 	"k8s.io/apimachinery/pkg/runtime/schema"
 
 	"github.com/gorizond/d7y-cattle-operator/pkg/helmop"
+	"github.com/gorizond/d7y-cattle-operator/pkg/registryproxy"
 )
 
 func TestReconcileSeedCreatesHelmOps(t *testing.T) {
@@ -158,14 +159,15 @@ func newTestController(t *testing.T) (*Controller, *fakeHelmOpStore, *fakeEventS
 	bundles := newFakeHelmOpStore()
 	events := &fakeEventStore{}
 	controller := &Controller{
-		ctx:       context.Background(),
-		secrets:   secrets,
-		events:    events,
-		helmops:   store,
-		bundles:   bundles,
-		clusters:  newFakeClusterStore(),
-		registrar: newFakeRegistrar(),
-		allocator: newFakeAllocator(),
+		ctx:          context.Background(),
+		secrets:      secrets,
+		events:       events,
+		helmops:      store,
+		bundles:      bundles,
+		clusters:     newFakeClusterStore(),
+		robotEnsurer: &fakeRobotEnsurer{},
+		registrar:    newFakeRegistrar(),
+		allocator:    newFakeAllocator(),
 		opts: Options{
 			OperatorNamespace:        "dragonfly-system",
 			MTLSSecretName:           "dragonfly-p2p-mtls",
@@ -305,6 +307,44 @@ func (f *fakeHelmOpStore) Update(_ context.Context, namespace string, obj, resul
 func (f *fakeHelmOpStore) Delete(_ context.Context, namespace, name string, _ metav1.DeleteOptions) error {
 	delete(f.objects, namespace+"/"+name)
 	return nil
+}
+
+type robotEnsureCall struct {
+	HarborURL     string
+	Username      string
+	Password      string
+	SecretName    string
+	MirrorProject string
+	Registries    []string
+}
+
+type fakeRobotEnsurer struct {
+	calls    []robotEnsureCall
+	err      error
+	password string
+}
+
+func (f *fakeRobotEnsurer) Ensure(ctx context.Context, harborURL, username, password, secretName, mirrorProject string, registries []string, store registryproxy.SecretStore) error {
+	f.calls = append(f.calls, robotEnsureCall{
+		HarborURL:     harborURL,
+		Username:      username,
+		Password:      password,
+		SecretName:    secretName,
+		MirrorProject: mirrorProject,
+		Registries:    append([]string(nil), registries...),
+	})
+	if f.err != nil {
+		return f.err
+	}
+	secretPassword := f.password
+	if secretPassword == "" {
+		secretPassword = "fixture-robot-password"
+	}
+	return store.Put(ctx, secretName, map[string][]byte{
+		"username":                []byte("robot$d7y-registry-proxy"),
+		"password":                []byte(secretPassword),
+		"permissions-fingerprint": []byte("v1:sha256:fixture"),
+	})
 }
 
 type fakeSecretStore struct {

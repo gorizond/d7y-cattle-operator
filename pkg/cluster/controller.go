@@ -85,6 +85,7 @@ type Controller struct {
 
 	clusters clusterStore
 
+	robotEnsurer      robotEnsurer
 	managerMu         sync.Mutex
 	managerHTTPClient *http.Client
 	registrar         managerRegistrar
@@ -95,13 +96,14 @@ type Controller struct {
 // the factories are started.
 func Register(ctx context.Context, clusters provctl.ClusterController, secrets corectl.SecretController, events corectl.EventController, helmops, bundles apply.Store, opts Options) {
 	c := &Controller{
-		ctx:      ctx,
-		secrets:  secrets,
-		events:   events,
-		helmops:  helmops,
-		bundles:  bundles,
-		clusters: clusters,
-		opts:     opts,
+		ctx:          ctx,
+		secrets:      secrets,
+		events:       events,
+		helmops:      helmops,
+		bundles:      bundles,
+		clusters:     clusters,
+		robotEnsurer: harborRobotEnsurer{},
+		opts:         opts,
 	}
 	clusters.OnChange(ctx, controllerName, c.reconcile)
 }

@@ -55,7 +55,11 @@ const (
 
 	RegistryProxyChartRepo    = "https://gorizond.github.io/d7y-cattle-operator"
 	RegistryProxyChartName    = "registry-proxy"
-	RegistryProxyChartVersion = "0.1.14"
+	RegistryProxyChartVersion = "0.1.15"
+
+	// RegistryProxyMirrorProject is the Harbor project that stores converted
+	// images and receives the robot's push/grant permissions.
+	RegistryProxyMirrorProject = "mirror"
 
 	AdmissionChartRepo    = "https://gorizond.github.io/d7y-cattle-operator"
 	AdmissionChartName    = "admission-webhook"
@@ -122,6 +126,8 @@ type Cluster struct {
 	ProxyRegistries        []string
 	ProxyWebhookSecretName string
 	ProxyRobotSecretName   string
+	// ProxyRobotSecretRevision rolls proxy pods when robot credentials rotate.
+	ProxyRobotSecretRevision string
 	// AdmissionEnabled is the independent p2p.dragonfly.io/admission role.
 	AdmissionEnabled         bool
 	AdmissionImagePullSecret string
