@@ -356,6 +356,40 @@ func TestEnsureSystemRobotUsesWildcardPull(t *testing.T) {
 	}
 }
 
+func TestEnsureSystemRobotGrantMatrix(t *testing.T) {
+	fake := &fakeHarbor{}
+	server := httptest.NewServer(fake.handler())
+	defer server.Close()
+	if _, err := (&HarborClient{BaseURL: server.URL}).EnsureSystemRobot(
+		context.Background(), "d7y-registry-proxy", []string{"dockerio"}, "mirror"); err != nil {
+		t.Fatalf("EnsureSystemRobot() error = %v", err)
+	}
+	fake.mu.Lock()
+	defer fake.mu.Unlock()
+	permissions, _ := fake.lastRobotBody["permissions"].([]any)
+	grants := map[string]map[string]bool{}
+	for _, raw := range permissions {
+		permission, _ := raw.(map[string]any)
+		namespace, _ := permission["namespace"].(string)
+		if grants[namespace] == nil {
+			grants[namespace] = map[string]bool{}
+		}
+		access, _ := permission["access"].([]any)
+		for _, entry := range access {
+			item, _ := entry.(map[string]any)
+			resource, _ := item["resource"].(string)
+			action, _ := item["action"].(string)
+			grants[namespace][resource+":"+action] = true
+		}
+	}
+	if !grants["dockerio"]["repository:pull"] || grants["dockerio"]["repository:push"] {
+		t.Errorf("source project grants = %v, want pull only", grants["dockerio"])
+	}
+	if !grants["mirror"]["repository:pull"] || !grants["mirror"]["repository:push"] || !grants["mirror"]["tag:create"] {
+		t.Errorf("mirror grants = %v, want repository pull/push and tag create", grants["mirror"])
+	}
+}
+
 func TestEnsureRobotSecretRecreatesOnPermissionChange(t *testing.T) {
 	fake := &fakeHarbor{}
 	server := httptest.NewServer(fake.handler())

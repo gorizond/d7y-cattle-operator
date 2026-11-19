@@ -55,11 +55,6 @@ spec:
             {{- toYaml .Values.command | nindent 12 }}
           args:
             {{- toYaml .Values.args | nindent 12 }}
-          env:
-            - name: POD_NAMESPACE
-              valueFrom:
-                fieldRef:
-                  fieldPath: metadata.namespace
           ports:
             - name: http
               containerPort: {{ .Values.service.port }}

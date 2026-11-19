@@ -18,7 +18,6 @@ type Config struct {
 	Harbor     struct {
 		URL         string `yaml:"url"`
 		AdminSecret string `yaml:"admin_secret"`
-		RobotSecret string `yaml:"robot_secret"`
 	} `yaml:"harbor"`
 	Mirror struct {
 		Project string `yaml:"project"`

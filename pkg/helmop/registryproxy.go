@@ -49,7 +49,7 @@ func RegistryProxy(c Cluster) *fleetv1alpha1.HelmOp {
 			"adminSecret": c.HarborAdminSecret,
 			"robotSecret": c.ProxyRobotSecretName,
 		},
-		"mirror": map[string]any{"project": "mirror"},
+		"mirror": map[string]any{"project": RegistryProxyMirrorProject},
 		"registry": map[string]any{
 			"allowlist": c.ProxyRegistries,
 		},
@@ -72,15 +72,24 @@ func RegistryProxy(c Cluster) *fleetv1alpha1.HelmOp {
 		},
 		"service": map[string]any{"port": RegistryProxyPort},
 	}
+	if c.ProxyRobotSecretRevision != "" {
+		values["podAnnotations"] = map[string]any{
+			"p2p.dragonfly.io/robot-secret-revision": c.ProxyRobotSecretRevision,
+		}
+	}
 	if strings.TrimSpace(c.ProxyPublicURL) == "" {
 		values["ingress"].(map[string]any)["enabled"] = false
 	}
 	// Harbor is an independent, replaceable component: the proxy HelmOp has
 	// no dependsOn on it. Use harbor-url/proxy.domain for external endpoints.
 	op := newHelmOp(RegistryProxyName(c.Name), c, c.RegistryProxyChart, "registry-proxy", values, nil)
+	// The robot Secret is Harbor auth data provisioned by the operator; Fleet
+	// copies all three Secrets from the HelmOp namespace to the target
+	// namespace. The proxy itself is read-only.
 	op.Spec.DownstreamResources = []fleetv1alpha1.DownstreamResource{
 		{Kind: "Secret", Name: c.HarborAdminSecret},
 		{Kind: "Secret", Name: c.ProxyWebhookSecretName},
+		{Kind: "Secret", Name: c.ProxyRobotSecretName},
 	}
 	return op
 }

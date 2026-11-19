@@ -84,10 +84,35 @@ grep -q 'name: harbor-robot' "$tmp/proxy.yaml" || fail "proxy robot Secret mount
 grep -q 'kind: Role' "$tmp/proxy.yaml" || fail "proxy robot Secret Role is missing"
 grep -q 'kind: RoleBinding' "$tmp/proxy.yaml" || fail "proxy robot Secret RoleBinding is missing"
 grep -q 'serviceAccountName:' "$tmp/proxy.yaml" || fail "proxy ServiceAccount is missing"
-grep -q 'name: POD_NAMESPACE' "$tmp/proxy.yaml" || fail "proxy POD_NAMESPACE env is missing"
+if grep -q 'name: POD_NAMESPACE' "$tmp/proxy.yaml"; then
+  fail "proxy must not need Kubernetes API access for the robot Secret"
+fi
 grep -q 'optional: true' "$tmp/proxy.yaml" || fail "proxy robot/webhook Secrets must be optional"
 grep -q '/usr/local/bin/nydus-image' "$tmp/proxy.yaml" || fail "conversion nydus image path is missing"
 grep -q -- '- "*"' "$tmp/proxy.yaml" || fail "proxy allow-any allowlist is missing"
+
+# Robot auth data is provisioned by the operator and copied by Fleet; the
+# proxy only reads the mounted Secret and keeps get as its sole API verb.
+helm template c1-registry-proxy "$chart" --namespace dragonfly-system \
+  --set harbor.robotSecret=c1-registry-proxy-robot \
+  --set webhook.secretName=c1-registry-proxy-webhook >"$tmp/named.yaml"
+grep -q 'secretName: c1-registry-proxy-robot' "$tmp/named.yaml" || \
+  fail "proxy robot Secret mount does not use the configured name"
+grep -q 'name: c1-registry-proxy-robot-secret' "$tmp/named.yaml" || \
+  fail "proxy robot Secret Role name is missing"
+grep -q 'resourceNames: \["c1-registry-proxy-robot"\]' "$tmp/named.yaml" || \
+  fail "RBAC resourceNames does not scope the robot Secret"
+grep -q 'verbs: \["get"\]' "$tmp/named.yaml" || \
+  fail "RBAC does not grant get on the robot Secret"
+if grep -Eq 'verbs: .*"(create|update|patch|delete)' "$tmp/named.yaml"; then
+  fail "RBAC must not grant create/update/patch/delete on secrets"
+fi
+if grep -q 'resourceNames: .*"\*"' "$tmp/named.yaml"; then
+  fail "RBAC must not use a wildcard resourceNames entry"
+fi
+if grep -q 'robot_secret:' "$tmp/named.yaml"; then
+  fail "proxy config must not carry the robot Secret name"
+fi
 
 if grep -q 'kind: PersistentVolumeClaim' "$tmp/proxy.yaml"; then
   fail "registry-proxy must not render a PVC"

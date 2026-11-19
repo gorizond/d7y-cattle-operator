@@ -27,6 +27,9 @@ const (
 	ociManifestType    = "application/vnd.oci.image.manifest.v1+json"
 	ociIndexType       = "application/vnd.oci.image.index.v1+json"
 	defaultPlatform    = "linux/amd64"
+	// nydusFSVersion pins the RAFS format. nydusify v2.4.5 exposes this as
+	// --fs-version (possible values 5 and 6); fscache only supports RAFS v6.
+	nydusFSVersion = "6"
 )
 
 // Converter runs nydusify against the writable mirror copy and verifies the
@@ -135,6 +138,7 @@ func (c *Converter) Convert(ctx context.Context, registry, repo, tag, sourceDige
 		"--platform", platform,
 		"--merge-platform",
 		"--oci",
+		"--fs-version", nydusFSVersion,
 		"--nydus-image", c.NydusImage,
 		"--work-dir", workDir,
 	}

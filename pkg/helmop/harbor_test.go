@@ -82,6 +82,7 @@ func TestRegistryProxyHelmOp(t *testing.T) {
 	c.HarborAdminSecret = "c1-harbor-admin"
 	c.ProxyWebhookSecretName = "c1-registry-proxy-webhook"
 	c.ProxyRobotSecretName = "c1-registry-proxy-robot"
+	c.ProxyRobotSecretRevision = "rev-1"
 	c.ProxyRegistries = []string{"docker.io"}
 	c.ProxyHostAliases = []HostAlias{{IP: "10.0.0.10", Hostnames: []string{"harbor.example.com"}}}
 	op := RegistryProxy(c)
@@ -95,9 +96,10 @@ func TestRegistryProxyHelmOp(t *testing.T) {
 	if len(op.Spec.DependsOn) != 0 {
 		t.Errorf("dependsOn = %+v, want none (independent toggles)", op.Spec.DependsOn)
 	}
-	if len(op.Spec.DownstreamResources) != 2 ||
-		op.Spec.DownstreamResources[0].Name != "c1-harbor-admin" ||
-		op.Spec.DownstreamResources[1].Name != "c1-registry-proxy-webhook" {
+	if len(op.Spec.DownstreamResources) != 3 ||
+		op.Spec.DownstreamResources[0].Kind != "Secret" || op.Spec.DownstreamResources[0].Name != "c1-harbor-admin" ||
+		op.Spec.DownstreamResources[1].Kind != "Secret" || op.Spec.DownstreamResources[1].Name != "c1-registry-proxy-webhook" ||
+		op.Spec.DownstreamResources[2].Kind != "Secret" || op.Spec.DownstreamResources[2].Name != "c1-registry-proxy-robot" {
 		t.Errorf("downstreamResources = %+v", op.Spec.DownstreamResources)
 	}
 	if containsKey(op.Spec.Helm.Values.Data, "persistence") || containsKey(op.Spec.Helm.Values.Data, "persistentVolumeClaim") {
@@ -106,6 +108,12 @@ func TestRegistryProxyHelmOp(t *testing.T) {
 	values := op.Spec.Helm.Values.Data
 	if got := valueAt(t, values, "harbor", "url"); got != "https://harbor.example.com" {
 		t.Errorf("harbor.url = %v", got)
+	}
+	if got := valueAt(t, values, "harbor", "robotSecret"); got != "c1-registry-proxy-robot" {
+		t.Errorf("harbor.robotSecret = %v", got)
+	}
+	if got := valueAt(t, values, "podAnnotations", "p2p.dragonfly.io/robot-secret-revision"); got != "rev-1" {
+		t.Errorf("podAnnotations robot revision = %v", got)
 	}
 	if got := valueAt(t, values, "mirror", "project"); got != "mirror" {
 		t.Errorf("mirror.project = %v", got)

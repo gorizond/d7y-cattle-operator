@@ -183,6 +183,9 @@ func TestForkChartDefaults(t *testing.T) {
 	if DefaultMirrorChartVersion != "0.1.0" {
 		t.Errorf("DefaultMirrorChartVersion = %q", DefaultMirrorChartVersion)
 	}
+	if DefaultRegistryProxyChartVersion != "0.1.15" {
+		t.Errorf("DefaultRegistryProxyChartVersion = %q", DefaultRegistryProxyChartVersion)
+	}
 }
 
 func TestLoadRequiredFlags(t *testing.T) {

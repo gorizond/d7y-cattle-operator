@@ -10,7 +10,6 @@ data:
     harbor:
       url: {{ .Values.harbor.url | quote }}
       admin_secret: {{ .Values.harbor.adminSecret | quote }}
-      robot_secret: {{ .Values.harbor.robotSecret | quote }}
     mirror:
       project: {{ .Values.mirror.project | quote }}
     registry:
