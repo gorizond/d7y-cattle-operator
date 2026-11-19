@@ -505,7 +505,10 @@ FAKEMODPROBE
 cat > "$SYSTEMCTL_FAKE" <<'FAKESYSTEMCTL'
 #!/usr/bin/env bash
 printf '%s\n' "$*" >> "${SYSTEMCTL_LOG:?}"
-exit 0
+case "$1" in
+  is-active) [ "${FAKE_SYSTEMCTL_ACTIVE:-0}" = "1" ] ;;
+  *) : ;;
+esac
 FAKESYSTEMCTL
 chmod 0755 "$MODPROBE_OK" "$MODPROBE_FAIL" "$SYSTEMCTL_FAKE"
 
@@ -530,11 +533,12 @@ assert_not_contains "${ROOT_MOD_OK}/etc/modules-load.d/nydus.conf" 'fscache'
 assert_contains "$SYSTEMCTL_LOG" 'stop cachefilesd.service'
 assert_contains "$SYSTEMCTL_LOG" 'disable cachefilesd.service'
 assert_contains "$SYSTEMCTL_LOG" 'mask cachefilesd.service'
+assert_contains "$SYSTEMCTL_LOG" 'is-active --quiet cachefilesd.service'
 assert_not_contains "$SYSTEMCTL_LOG" 'start cachefilesd.service'
 assert_not_contains "$SYSTEMCTL_LOG" 'enable --now cachefilesd.service'
 assert_contains "${WORK}/mod-ok.log" 'fscache ready: erofs/fscache/cachefiles loaded'
-assert_contains "${WORK}/mod-ok.log" 'cachefilesd stopped, disabled, and masked'
-assert_contains "${WORK}/mod-ok.log" 'rafs_version: 6'
+assert_contains "${WORK}/mod-ok.log" 'cachefilesd stopped, disabled, masked, and inactive'
+assert_contains "${WORK}/mod-ok.log" 'fs_version=6'
 assert_contains "${ROOT_MOD_OK}/etc/nydus/config.toml" 'fs_driver = "fscache"'
 assert_contains "${ROOT_MOD_OK}/etc/nydus/nydusd-config.fscache.json" '"id": "node-a"'
 assert_contains "${ROOT_MOD_OK}/etc/nydus/nydusd-config.fscache.json" '"domain_id": "node-a"'
@@ -545,7 +549,7 @@ MODPROBE="$MODPROBE_FAIL" KERNEL_CONFIG_FILE="$KERNEL_CONFIG" CACHEFILES_DEVICE=
   P2P_ROOT="$ROOT_MOD_FAIL" SKIP_DOWNLOAD=1 SKIP_SYSTEMD=1 SKIP_PREFLIGHT=1 CONTAINERD_MAJOR=1 \
   bash "$INSTALL" "$CFG" > "${WORK}/mod-fail.log" 2>&1
 assert_contains "${WORK}/mod-fail.log" 'ERROR: could not load kernel module cachefiles required by fscache'
-assert_contains "${WORK}/mod-fail.log" 'fscache selected but erofs/fscache/cachefiles are unavailable; falling back to fusedev'
+assert_contains "${WORK}/mod-fail.log" 'fscache selected but its prerequisites are not met; falling back to fusedev'
 assert_contains "${ROOT_MOD_FAIL}/etc/nydus/config.toml" 'fs_driver = "fusedev"'
 assert_contains "${ROOT_MOD_FAIL}/etc/nydus/config.toml" 'nydusd_config = "/etc/nydus/nydusd-config.json"'
 assert_contains "${ROOT_MOD_FAIL}/etc/systemd/system/nydus-snapshotter-bootstrap.service" \
@@ -581,6 +585,45 @@ assert_contains "${WORK}/mod-modcfg.log" 'CONFIG_EROFS_FS_ONDEMAND=y is required
 assert_contains "${WORK}/mod-modcfg.log" 'falling back to fusedev'
 assert_contains "${ROOT_MOD_MODCFG}/etc/nydus/config.toml" 'fs_driver = "fusedev"'
 
+# A cachefilesd that stays active after stop/mask would race nydusd for
+# /dev/cachefiles; fscache must fall back to fusedev.
+ROOT_MOD_CDFAIL="${WORK}/root-mod-cdfail"
+mkdir -p "${ROOT_MOD_CDFAIL}/lib/systemd/system"
+: > "${ROOT_MOD_CDFAIL}/lib/systemd/system/cachefilesd.service"
+: > "${WORK}/systemctl-cdfail.log"
+MODPROBE="$MODPROBE_OK" MODPROBE_CALLS="${WORK}/modprobe-calls-cdfail" FAKE_CACHEFILES_CREATE=1 \
+  KERNEL_CONFIG_FILE="$KERNEL_CONFIG" CACHEFILES_DEVICE="$CACHEFILES_DEVICE" \
+  SYSTEMCTL="$SYSTEMCTL_FAKE" SYSTEMCTL_LOG="${WORK}/systemctl-cdfail.log" FAKE_SYSTEMCTL_ACTIVE=1 \
+  P2P_ROOT="$ROOT_MOD_CDFAIL" SKIP_DOWNLOAD=1 SKIP_PREFLIGHT=1 CONTAINERD_MAJOR=1 \
+  bash "$INSTALL" "$CFG" > "${WORK}/mod-cdfail.log" 2>&1
+assert_contains "${WORK}/mod-cdfail.log" 'cachefilesd.service is still active'
+assert_contains "${WORK}/mod-cdfail.log" 'fscache selected but its prerequisites are not met; falling back to fusedev'
+assert_contains "${ROOT_MOD_CDFAIL}/etc/nydus/config.toml" 'fs_driver = "fusedev"'
+if [ -f "${ROOT_MOD_CDFAIL}/etc/modules-load.d/nydus.conf" ]; then
+  echo "p2p-static self-test: active-cachefilesd fallback left modules-load.d behind" >&2
+  exit 1
+fi
+
+# Stock Ubuntu 24.04 GA/HWE: both CONFIG options are =n, while a stale
+# /dev/cachefiles may still exist from CACHEFILES=m. The device alone must not
+# satisfy the preflight.
+ROOT_MOD_NCFG="${WORK}/root-mod-ncfg"
+N_KERNEL_CONFIG="${WORK}/kernel-config-n"
+printf 'CONFIG_EROFS_FS_ONDEMAND=n\nCONFIG_CACHEFILES_ONDEMAND=n\n' > "$N_KERNEL_CONFIG"
+MODPROBE="$MODPROBE_OK" MODPROBE_CALLS="${WORK}/modprobe-calls-ncfg" FAKE_CACHEFILES_CREATE=1 \
+  KERNEL_CONFIG_FILE="$N_KERNEL_CONFIG" CACHEFILES_DEVICE="$CACHEFILES_DEVICE" \
+  P2P_ROOT="$ROOT_MOD_NCFG" SKIP_DOWNLOAD=1 SKIP_SYSTEMD=1 SKIP_PREFLIGHT=1 CONTAINERD_MAJOR=1 \
+  bash "$INSTALL" "$CFG" > "${WORK}/mod-ncfg.log" 2>&1
+assert_contains "${WORK}/mod-ncfg.log" "CONFIG_EROFS_FS_ONDEMAND=n"
+assert_contains "${WORK}/mod-ncfg.log" 'stock Ubuntu 24.04 GA/HWE has =n'
+assert_contains "${WORK}/mod-ncfg.log" 'falling back to fusedev'
+assert_contains "${ROOT_MOD_NCFG}/etc/nydus/config.toml" 'fs_driver = "fusedev"'
+assert_file "$CACHEFILES_DEVICE"
+if [ -f "${ROOT_MOD_NCFG}/etc/modules-load.d/nydus.conf" ]; then
+  echo "p2p-static self-test: CONFIG=n fallback left modules-load.d behind" >&2
+  exit 1
+fi
+
 ROOT_MOD_NODEV="${WORK}/root-mod-nodev"
 MISSING_DEVICE="${WORK}/missing-device"
 rm -f "$MISSING_DEVICE"
@@ -589,7 +632,7 @@ MODPROBE="$MODPROBE_OK" MODPROBE_CALLS="${WORK}/modprobe-calls-nodev" FAKE_CACHE
   P2P_ROOT="$ROOT_MOD_NODEV" SKIP_DOWNLOAD=1 SKIP_SYSTEMD=1 SKIP_PREFLIGHT=1 CONTAINERD_MAJOR=1 \
   bash "$INSTALL" "$CFG" > "${WORK}/mod-nodev.log" 2>&1
 assert_contains "${WORK}/mod-nodev.log" 'is missing after loading cachefiles'
-assert_contains "${WORK}/mod-nodev.log" 'fscache selected but erofs/fscache/cachefiles are unavailable; falling back to fusedev'
+assert_contains "${WORK}/mod-nodev.log" 'fscache selected but its prerequisites are not met; falling back to fusedev'
 assert_contains "${ROOT_MOD_NODEV}/etc/nydus/config.toml" 'fs_driver = "fusedev"'
 if [ -f "${ROOT_MOD_NODEV}/etc/modules-load.d/nydus.conf" ]; then
   echo "p2p-static self-test: device fallback left modules-load.d behind" >&2
@@ -601,7 +644,9 @@ assert_file "$README"
 assert_contains "$README" 'CONFIG_EROFS_FS_ONDEMAND=y'
 assert_contains "$README" 'CONFIG_CACHEFILES_ONDEMAND=y'
 assert_contains "$README" 'modules-load.d/nydus.conf'
-assert_contains "$README" 'rafs_version: 6'
+assert_contains "$README" 'fs_version=6'
+assert_contains "$README" 'CONFIG_EROFS_FS_ONDEMAND=n'
+assert_contains "$README" 'custom or signed kernel'
 assert_not_contains "$README" 'k3s-gpu-erofs'
 
 if command -v shellcheck >/dev/null 2>&1; then

@@ -123,31 +123,38 @@ deployed, and workloads do not need `runtimeClass: nydus`.
   nydusd schema does not document those keys, and unknown fields can prevent
   nydusd from starting.
 
-### fscache kernel requirements (Ubuntu 24.04 HWE 6.8+)
+### fscache kernel requirements (custom or signed kernel)
 
-The default `fscache` driver requires:
+Stock Ubuntu 24.04 GA/HWE kernels ship both required options as `n`
+(`CONFIG_EROFS_FS_ONDEMAND=n`, `CONFIG_CACHEFILES_ONDEMAND=n`); 6.12 is not a
+noble HWE kernel. The default `fscache` driver therefore requires a custom or
+signed kernel built with:
 
 - `CONFIG_EROFS_FS_ONDEMAND=y` and `CONFIG_CACHEFILES_ONDEMAND=y` in the
   running kernel config (`/boot/config-$(uname -r)`, or `/proc/config.gz`).
-  `p2p-install.sh` verifies both and falls back to `fusedev` with a clear
-  error when either is missing (Ubuntu 24.04 HWE 6.8/6.12 kernels).
+  `p2p-install.sh` requires the literal `=y` and falls back to `fusedev` with
+  a clear error otherwise. `=m` and unset are rejected.
 - The `erofs`, `fscache`, and `cachefiles` modules. The installer loads them
   with `modprobe`, writes `/etc/modules-load.d/nydus.conf` with `erofs` and
   `cachefiles` for the next boot, and verifies `/dev/cachefiles` appears.
-- Exclusive ownership of `/dev/cachefiles`. The installer never starts
-  `cachefilesd`; if the unit exists it runs `systemctl stop`,
-  `systemctl disable`, and `systemctl mask cachefilesd.service`, because
-  cachefilesd monopolizes the device that nydusd fscache must own.
+  A present `/dev/cachefiles` only proves `CONFIG_CACHEFILES` is loaded; it
+  does not prove on-demand support, so the CONFIG check is independent and
+  runs first.
+- Exclusive ownership of `/dev/cachefiles`. `cachefilesd` must not be used:
+  the installer never starts or installs it, and when the unit is present it
+  stops, disables, masks, and verifies it is inactive; if that fails it falls
+  back to `fusedev` instead of racing cachefilesd for the device.
 
 Any missing prerequisite logs an error and falls back to `fusedev` with the
 legacy nydusd config, rather than starting a snapshotter that cannot mount
 images. Set `nydus.fsDriver=fusedev` to skip the fscache probe entirely.
 `SKIP_KERNEL_CHECK=1` bypasses only the kernel config-file check and is meant
-for non-Ubuntu kernels where the on-demand options are known to be built in.
+for kernels where both on-demand options are known to be built in.
 
-Images must be converted to RAFS v6 for EROFS/fscache. The registry-proxy
-nydusify conversion sets `rafs_version: 6` (proxy PR); this chart only
-validates and reports the prerequisite and contains no conversion code.
+Images must be RAFS v6 for EROFS/fscache. The registry-proxy nydusify
+conversion must pass `--fs-version 6` (the proxy PR wires `fs_version=6`);
+this chart only validates and reports the prerequisite and contains no
+conversion code.
 
 ### Nydus mirror config
 
@@ -336,11 +343,12 @@ available, the self-test, and a `helm template` render check.
 
 ## Pilot gaps
 
-- The fscache path is unit- and render-tested only. A live poligon VM must
-  confirm `CONFIG_EROFS_FS_ONDEMAND=y`/`CONFIG_CACHEFILES_ONDEMAND=y` on the
-  running kernel, `/dev/cachefiles` creation, cachefilesd disable/mask, and
-  the pinned snapshotter's support for `threads_number`/
-  `enable_kubeconfig_keychain` before rollout.
+- The fscache path is unit- and render-tested only. Stock Ubuntu 24.04
+  GA/HWE kernels report both CONFIG options as `n`; a live poligon VM with a
+  custom or signed kernel must confirm both are `=y`, `/dev/cachefiles` is
+  created, cachefilesd is absent/stopped/disabled/masked, and the pinned
+  snapshotter supports `threads_number`/`enable_kubeconfig_keychain` before
+  rollout.
 - Base-template merge and drop-in import behaviour need a live pilot, including
   `containerd config dump` after a manual `rke2-agent`/`rke2-server` restart.
 - The static `/bin` (or `/nydus/<version>`) volume must be populated externally

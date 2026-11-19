@@ -382,9 +382,13 @@ SYSTEMCTL_BIN="${SYSTEMCTL:-systemctl}"
 CACHEFILES_DEVICE="${CACHEFILES_DEVICE:-/dev/cachefiles}"
 KERNEL_CONFIG_FILE="${KERNEL_CONFIG_FILE:-}"
 
-# Ubuntu 24.04 HWE 6.8/6.12 exposes the config at /boot/config-$(uname -r);
-# /proc/config.gz is the fallback. EROFS on-demand read is what lets the
-# fscache driver serve RAFS v6 blobs.
+# The running kernel config is at /boot/config-$(uname -r); /proc/config.gz
+# is the fallback. EROFS on-demand read is what lets the fscache driver serve
+# RAFS v6 blobs. Stock Ubuntu 24.04 GA/HWE kernels ship both on-demand options
+# as =n, and 6.12 is not a noble HWE kernel, so fscache requires a custom or
+# signed kernel built with CONFIG_EROFS_FS_ONDEMAND=y and
+# CONFIG_CACHEFILES_ONDEMAND=y. A present /dev/cachefiles only proves that
+# CONFIG_CACHEFILES is loaded; it does not prove on-demand support.
 kernel_config_file() {
   local candidate
   if [ -n "$KERNEL_CONFIG_FILE" ]; then
@@ -418,7 +422,7 @@ check_fscache_kernel_config() {
   for key in CONFIG_EROFS_FS_ONDEMAND CONFIG_CACHEFILES_ONDEMAND; do
     found="$(grep -m1 "^${key}=" "$cfg" 2>/dev/null || true)"
     if [ "$found" != "${key}=y" ]; then
-      log "ERROR: ${key}=y is required for EROFS over fscache (${cfg} has '${found:-unset}')"
+      log "ERROR: ${key}=y is required for EROFS over fscache (${cfg} has '${found:-unset}'); stock Ubuntu 24.04 GA/HWE has =n, use a custom or signed kernel"
       return 1
     fi
   done
@@ -436,11 +440,15 @@ disable_system_cachefilesd() {
     if [ -e "$unit" ]; then
       "$SYSTEMCTL_BIN" stop cachefilesd.service >/dev/null 2>&1 || true
       "$SYSTEMCTL_BIN" disable cachefilesd.service >/dev/null 2>&1 || true
-      if "$SYSTEMCTL_BIN" mask cachefilesd.service >/dev/null 2>&1; then
-        log "cachefilesd stopped, disabled, and masked; nydusd fscache owns ${CACHEFILES_DEVICE}"
-      else
-        log "warning: could not mask cachefilesd.service; verify ${CACHEFILES_DEVICE} is not held by cachefilesd"
+      if ! "$SYSTEMCTL_BIN" mask cachefilesd.service >/dev/null 2>&1; then
+        log "ERROR: could not mask cachefilesd.service; nydusd cannot guarantee ownership of ${CACHEFILES_DEVICE}"
+        return 1
       fi
+      if "$SYSTEMCTL_BIN" is-active --quiet cachefilesd.service >/dev/null 2>&1; then
+        log "ERROR: cachefilesd.service is still active; nydusd cannot own ${CACHEFILES_DEVICE}"
+        return 1
+      fi
+      log "cachefilesd stopped, disabled, masked, and inactive; nydusd fscache owns ${CACHEFILES_DEVICE}"
       return 0
     fi
   done
@@ -455,12 +463,16 @@ prepare_fscache() {
       return 1
     fi
   done
+  # /dev/cachefiles only proves CONFIG_CACHEFILES is loaded; the config
+  # preflight above is what proves the on-demand path. Check both.
   if [ ! -e "$CACHEFILES_DEVICE" ]; then
     log "ERROR: ${CACHEFILES_DEVICE} is missing after loading cachefiles; nydusd fscache needs it"
     return 1
   fi
   if [ "${SKIP_SYSTEMD:-0}" != "1" ] && { [ "$REAL_ROOT" = "1" ] || [ -n "${SYSTEMCTL:-}" ]; }; then
-    disable_system_cachefilesd
+    if ! disable_system_cachefilesd; then
+      return 1
+    fi
   fi
   log "fscache ready: erofs/fscache/cachefiles loaded, ${CACHEFILES_DEVICE} present"
 }
@@ -473,7 +485,7 @@ load_fusedev_modules() {
 }
 
 # On-demand support is a kernel build option, not a loadable module: verify it
-# before touching modules so a 24.04 GA/HWE kernel mismatch fails clearly.
+# before touching modules so stock Ubuntu 24.04 GA/HWE kernels (=n) fail clearly.
 if [ "$NYDUS_FS_DRIVER" = "fscache" ] && [ "${SKIP_KERNEL_CHECK:-0}" != "1" ] &&
   { [ "$REAL_ROOT" = "1" ] || [ -n "$KERNEL_CONFIG_FILE" ]; }; then
   if ! check_fscache_kernel_config; then
@@ -486,7 +498,7 @@ if [ "${SKIP_MODULES:-0}" != "1" ] && { [ "$REAL_ROOT" = "1" ] || [ -n "${MODPRO
   if command -v "$MODPROBE_BIN" >/dev/null 2>&1; then
     if [ "$NYDUS_FS_DRIVER" = "fscache" ]; then
       if ! prepare_fscache; then
-        log "ERROR: fscache selected but erofs/fscache/cachefiles are unavailable; falling back to fusedev"
+        log "ERROR: fscache selected but its prerequisites are not met; falling back to fusedev"
         NYDUS_FS_DRIVER="fusedev"
       fi
     else
@@ -610,7 +622,7 @@ TOML
   if [ -n "${NYDUS_MIRROR_URL:-}" ]; then
     log "warning: NYDUS_MIRROR_URL is only applied with fs_driver=fusedev; the fscache nydusd config keeps the dfdaemon proxy"
   fi
-  log "fscache requires RAFS v6 images; Harbor conversions must set rafs_version: 6 (owned by the registry proxy, not this chart)"
+  log "fscache requires RAFS v6 images; the registry-proxy nydusify conversion must pass --fs-version 6 (fs_version=6; proxy-owned, not this chart)"
 else
   {
     cat <<'TOML'

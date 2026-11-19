@@ -55,7 +55,7 @@ grep -q 'cachefilesd.service' "$tmp/p2p-static.yaml" || fail "p2p-static script 
 grep -q 'stop cachefilesd.service' "$tmp/p2p-static.yaml" || fail "p2p-static script is missing the cachefilesd stop"
 grep -q 'mask cachefilesd.service' "$tmp/p2p-static.yaml" || fail "p2p-static script is missing the cachefilesd mask call"
 grep -q 'falling back to fusedev' "$tmp/p2p-static.yaml" || fail "p2p-static script is missing the fscache fallback"
-grep -q 'rafs_version: 6' "$tmp/p2p-static.yaml" || fail "p2p-static script is missing the RAFS v6 prerequisite note"
+grep -q 'fs_version=6' "$tmp/p2p-static.yaml" || fail "p2p-static script is missing the RAFS v6 prerequisite note"
 grep -q 'NYDUS_FS_DRIVER="${NYDUS_FS_DRIVER:-fscache}"' "$tmp/p2p-static.yaml" || fail "p2p-static chart value nydus.fsDriver did not render"
 if grep -q '__NYDUS_FS_DRIVER__' "$tmp/p2p-static.yaml" || grep -q '__NYDUS_CLUSTER_ID__' "$tmp/p2p-static.yaml"; then
   fail "p2p-static script still contains unrendered nydus placeholders"
