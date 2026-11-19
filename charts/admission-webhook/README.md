@@ -20,8 +20,12 @@ proxy, or the seed role.
 already-rewritten pod is a no-op. `kube-system`, `fleet-system`, `cattle-*`,
 `kube-node-lease`, and `kube-public` are excluded via `namespaceSelector` and
 the handler. The Helm release namespace is always appended to the selector from
-`.Release.Namespace`, so the webhook cannot block its own Deployment.
-`failurePolicy` defaults to `Fail`; the chart runs two replicas.
+`.Release.Namespace`, so the webhook cannot block its own Deployment. Extra
+namespaces come from the Cluster annotation
+`p2p.dragonfly.io/mutate-exclure` (comma-separated); the operator resolves it
+into `namespaceSelector.excludedNamespaces` and no custom expression is
+rendered when the list is empty. `failurePolicy` defaults to `Fail`; the chart
+runs two replicas.
 
 ## Credentials (proxy pull path)
 
@@ -65,5 +69,6 @@ alias Service is created. With an external `tls.secretName`, set
 | `inject.serviceAccountName` | `""` | serviceAccountName injected for proxy pulls |
 | `failurePolicy` | `Fail` | webhook failure policy |
 | `timeoutSeconds` | `5` | admission timeout |
+| `namespaceSelector.excludedNamespaces` | `[]` | extra namespaces from `p2p.dragonfly.io/mutate-exclure`; empty renders no custom `NotIn` |
 | `namespaceSelector` | excludes system namespaces | extend with opt-in matchLabels/expressions; the release namespace is always excluded |
 | `tls.secretName` / `tls.caBundle` | `""` | external TLS Secret and CA |

@@ -73,6 +73,7 @@ func TestAdmissionWebhookChartContract(t *testing.T) {
 		`(printf "%s.%s.svc.cluster.local" $serviceName .Release.Namespace)`,
 		`d7y.gorizond.io/tls-sans`,
 		`- key: kubernetes.io/metadata.name`,
+		`with .Values.namespaceSelector.excludedNamespaces`,
 		`- {{ .Release.Namespace | quote }}`,
 		`name: {{ .Release.Name }}`,
 	} {
@@ -87,5 +88,10 @@ func TestAdmissionWebhookChartContract(t *testing.T) {
 	}
 	if strings.Contains(service, "-tls") {
 		t.Error("admission chart must not render an alias TLS Service")
+	}
+
+	values := read("values.yaml")
+	if !strings.Contains(values, "excludedNamespaces: []") {
+		t.Error("admission chart values lack the empty excludedNamespaces default")
 	}
 }

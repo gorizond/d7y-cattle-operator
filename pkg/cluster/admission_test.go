@@ -266,3 +266,20 @@ func TestReconcileAdmissionDisableLeavesUnlabeledBundle(t *testing.T) {
 		t.Error("same-named Bundle without the HelmOp label was deleted")
 	}
 }
+
+func TestReconcileAdmissionExcludeNamespaces(t *testing.T) {
+	controller, store, _ := newTestController(t)
+	cluster := admissionCluster()
+	cluster.Annotations[AnnotationAdmissionExclude] = " ns-a, ns-b, ns-a, Bad_NS "
+	if _, err := controller.reconcile("", cluster); err != nil {
+		t.Fatalf("reconcile() error = %v", err)
+	}
+	op := store.object("fleet-default/c1-admission-webhook")
+	raw, ok := valueAtPath(t, helmValues(t, op), "namespaceSelector", "excludedNamespaces").([]any)
+	if !ok {
+		t.Fatalf("namespaceSelector.excludedNamespaces = %T, want []any", valueAtPath(t, helmValues(t, op), "namespaceSelector", "excludedNamespaces"))
+	}
+	if len(raw) != 2 || raw[0] != "ns-a" || raw[1] != "ns-b" {
+		t.Errorf("namespaceSelector.excludedNamespaces = %v, want [ns-a ns-b]", raw)
+	}
+}

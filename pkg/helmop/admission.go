@@ -9,6 +9,10 @@ import (
 // operator-wide proxy domain (plus optional credential injection), and there
 // is no dependsOn.
 func Admission(c Cluster) *fleetv1alpha1.HelmOp {
+	excludedNamespaces := c.AdmissionExcludeNamespaces
+	if excludedNamespaces == nil {
+		excludedNamespaces = []string{}
+	}
 	values := map[string]any{
 		"proxy": map[string]any{"domain": c.ProxyDomain},
 		"inject": map[string]any{
@@ -16,6 +20,9 @@ func Admission(c Cluster) *fleetv1alpha1.HelmOp {
 			"serviceAccountName": c.AdmissionServiceAccount,
 		},
 		"networkOnly": c.AdmissionNetworkOnly,
+		"namespaceSelector": map[string]any{
+			"excludedNamespaces": excludedNamespaces,
+		},
 	}
 	op := newHelmOp(AdmissionName(c.Name), c, c.AdmissionChart, "admission-webhook", values, nil)
 	// The chart ships a cluster-scoped MutatingWebhookConfiguration, which

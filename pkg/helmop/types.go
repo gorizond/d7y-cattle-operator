@@ -63,7 +63,7 @@ const (
 
 	AdmissionChartRepo    = "https://gorizond.github.io/d7y-cattle-operator"
 	AdmissionChartName    = "admission-webhook"
-	AdmissionChartVersion = "0.1.1"
+	AdmissionChartVersion = "0.1.2"
 )
 
 // HelmOpGVR identifies Fleet HelmOps for the resource client.
@@ -133,6 +133,8 @@ type Cluster struct {
 	AdmissionImagePullSecret string
 	AdmissionServiceAccount  string
 	AdmissionNetworkOnly     bool
+	// AdmissionExcludeNamespaces are extra namespaces the webhook must skip.
+	AdmissionExcludeNamespaces []string
 
 	ManagerGRPCDomain  string
 	ManagerGRPCPort    int
