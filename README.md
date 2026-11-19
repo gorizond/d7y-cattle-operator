@@ -470,27 +470,38 @@ bootstrap layer rather than descriptor position, and moves that index to
 `<tag>`. A multiarch tag is converted through its target-platform child digest;
 the published index keeps only that child plus the nydus artifact, because
 nydusify copies only the converted child and Harbor rejects an index whose
-descriptors are absent from the target repository. A digest reference is copied
-byte-for-byte (attestation descriptors included) so its content-addressed
-identity stays valid; before publishing, the proxy also copies a missing
-target-platform source child manifest and its blobs into the target repository,
-then publishes only descriptors that resolve there. A digest-triggered
-conversion publishes its nydus index under a short `nd-<digest12>` tag; the
-digest reference itself still resolves to the source OCI manifest. Tag copies
-and conversions are unchanged. Harbor registry endpoints are
-reconciled without changing an existing type: Docker Hub keeps the
-`docker-hub` adapter, every other host uses the generic `docker-registry`
-adapter (the typed GitHub/GitLab/Quay adapters embed it), and a stale-type
-endpoint is kept while a deterministic `<host>-generic` endpoint is created.
-A same-type URL drift is updated in place. When a source project still
-points at the old endpoint, the proxy re-points the project `registry_id` if Harbor
-allows, otherwise it creates and uses a deterministic `<project>-generic`
-project. After the re-point, an explicit bounded cleanup deletes the old
-exact-name stale endpoint when nothing references it; Harbor's 412 response
-means a project still references it and the endpoint is left alone. Cleanup
-never touches a `-generic` endpoint and never scans the endpoint list.
-`/api/convert` is a Harbor-reachable shared-secret endpoint
-and returns 202 before the asynchronous copy/conversion.
+descriptors are absent from the target repository. A single-manifest source
+gets its `os`/`architecture` from the image config blob. If that platform is
+not the configured conversion platform (default `linux/amd64`), the job fails
+with a clear non-convertible result and publishes no nydus index: the source
+manifest stays available and digest pulls keep working. Digest refs for amd64
+single manifests and multiarch index refs still convert. A digest reference is
+copied byte-for-byte (attestation descriptors included) so its
+content-addressed identity stays valid; before publishing, the proxy also
+copies a missing target-platform source child manifest and its blobs into the
+target repository, then publishes only descriptors that resolve there. A
+digest-triggered conversion publishes its nydus index under a short
+`nd-<digest12>` tag; the digest reference itself still resolves to the source
+OCI manifest. Tag copies and conversions are otherwise unchanged. Harbor
+registry endpoints are reconciled without changing an existing type: Docker Hub
+keeps the `docker-hub` adapter, every other host uses the generic
+`docker-registry` adapter (the typed GitHub/GitLab/Quay adapters embed it), and
+a stale-type endpoint is kept while a deterministic `<host>-generic` endpoint
+is created. An existing `github-ghcr` endpoint is accepted for `ghcr.io` and
+kept: the working project is not moved to a generic endpoint, and an unused
+`ghcr.io-generic` left by an earlier rollout is removed. A generic endpoint is
+reused when the canonical name is absent, so hosts that already work through
+`<host>-generic` (quay.io and other stale-type cases) keep it. A same-type URL
+drift is updated in place. When a source project still points at the old
+endpoint, the proxy re-points the project `registry_id` if Harbor allows,
+otherwise it creates and uses a deterministic `<project>-generic` project.
+After the re-point, an explicit bounded cleanup deletes the old exact-name
+stale endpoint when nothing references it; Harbor's 412 response means a
+project still references it and the endpoint is left alone. Generic cleanup
+removes only an unreferenced `<host>-generic` that is not in use; a referenced
+generic answers 412 and stays. Neither cleanup scans the endpoint list.
+`/api/convert` is a Harbor-reachable shared-secret endpoint and returns 202
+before the asynchronous copy/conversion.
 
 The proxy Manager is intentionally in-memory. After a proxy restart, in-flight
 jobs are not automatically restored; the next Harbor `PUSH_ARTIFACT` webhook or

@@ -6,7 +6,9 @@ import (
 	"encoding/base64"
 	"encoding/hex"
 	"encoding/json"
+	"errors"
 	"fmt"
+	"io"
 	"log/slog"
 	"net/url"
 	"os"
@@ -32,6 +34,12 @@ const (
 	// --fs-version (possible values 5 and 6); fscache only supports RAFS v6.
 	nydusFSVersion = "6"
 )
+
+// ErrNonConvertible reports a source image that cannot be converted to the
+// configured platform (for example a single linux/arm64 manifest on an
+// amd64-only proxy). The caller serves the source manifest and must not
+// publish a mislabeled nydus index; the manager treats it as permanent.
+var ErrNonConvertible = errors.New("source image is not convertible")
 
 // Converter runs nydusify against the writable mirror copy and verifies the
 // resulting OCI index before moving it to the user-visible tag.
@@ -117,16 +125,30 @@ func (c *Converter) Convert(ctx context.Context, registry, repo, tag, sourceDige
 	if err != nil {
 		return ConversionResult{}, fmt.Errorf("read conversion source: %w", err)
 	}
-	sourceDescriptors, err := publishedSourceDescriptors(sourceManifest, platformOS, platformArch)
-	if err != nil {
-		return ConversionResult{}, err
-	}
+	sourcePlatform := indexPlatform{OS: platformOS, Architecture: platformArch}
 	if isIndexMediaType(sourceManifest.MediaType) {
 		child, ok := platformDescriptor(sourceManifest.Body, platformOS, platformArch)
 		if !ok {
 			return ConversionResult{}, fmt.Errorf("source index has no %s image manifest", platform)
 		}
 		source = host + "/" + repoPath + "@" + child.Digest
+	} else {
+		// A single manifest carries its real platform in the image config.
+		// Publishing it with the proxy's default platform would label an
+		// arm64/ppc64le/s390x image as amd64 and Harbor rejects the index.
+		detected, err := c.singleManifestPlatform(ctx, repoPath, sourceManifest)
+		if err != nil {
+			return ConversionResult{}, err
+		}
+		if detected.OS != platformOS || detected.Architecture != platformArch {
+			return ConversionResult{}, fmt.Errorf("%w: source is %s/%s, conversion platform is %s/%s",
+				ErrNonConvertible, detected.OS, detected.Architecture, platformOS, platformArch)
+		}
+		sourcePlatform = detected
+	}
+	sourceDescriptors, err := publishedSourceDescriptors(sourceManifest, sourcePlatform)
+	if err != nil {
+		return ConversionResult{}, err
 	}
 	// A digest reference is converted without a tag copy that could have
 	// carried every child. Make the source descriptor resolvable in the target
@@ -267,11 +289,11 @@ func (c *Converter) ensureSourceDescriptors(ctx context.Context, registry, repo,
 // repository and rejects an index whose manifests are missing; nydusify copies
 // only the target-platform child (or the single source manifest), so that is
 // the only source descriptor we publish alongside the nydus artifact.
-func publishedSourceDescriptors(manifest Manifest, platformOS, platformArch string) ([]indexDescriptor, error) {
+func publishedSourceDescriptors(manifest Manifest, platform indexPlatform) ([]indexDescriptor, error) {
 	if isIndexMediaType(manifest.MediaType) {
-		descriptor, ok := platformDescriptor(manifest.Body, platformOS, platformArch)
+		descriptor, ok := platformDescriptor(manifest.Body, platform.OS, platform.Architecture)
 		if !ok {
-			return nil, fmt.Errorf("source index has no %s/%s image manifest", platformOS, platformArch)
+			return nil, fmt.Errorf("source index has no %s/%s image manifest", platform.OS, platform.Architecture)
 		}
 		return []indexDescriptor{descriptor}, nil
 	}
@@ -283,8 +305,46 @@ func publishedSourceDescriptors(manifest Manifest, platformOS, platformArch stri
 		MediaType: mediaType,
 		Digest:    manifest.Digest,
 		Size:      int64(len(manifest.Body)),
-		Platform:  &indexPlatform{OS: platformOS, Architecture: platformArch},
+		Platform:  &platform,
 	}}, nil
+}
+
+// singleManifestPlatform reads os/architecture from the image config blob.
+// A single manifest does not carry a platform descriptor; labelling it with
+// the configured conversion platform breaks non-amd64 sources.
+func (c *Converter) singleManifestPlatform(ctx context.Context, repoPath string, manifest Manifest) (indexPlatform, error) {
+	var doc struct {
+		Config struct {
+			Digest string `json:"digest"`
+		} `json:"config"`
+	}
+	if err := json.Unmarshal(manifest.Body, &doc); err != nil {
+		return indexPlatform{}, fmt.Errorf("parse source manifest platform: %w", err)
+	}
+	if doc.Config.Digest == "" {
+		return indexPlatform{}, fmt.Errorf("%w: source manifest has no image config", ErrNonConvertible)
+	}
+	body, _, _, err := c.Registry.GetBlob(ctx, repoPath, doc.Config.Digest, "")
+	if err != nil {
+		return indexPlatform{}, fmt.Errorf("read source image config %s: %w", doc.Config.Digest, err)
+	}
+	defer body.Close()
+	raw, err := io.ReadAll(io.LimitReader(body, 1<<20))
+	if err != nil {
+		return indexPlatform{}, fmt.Errorf("read source image config: %w", err)
+	}
+	var config struct {
+		Architecture string `json:"architecture"`
+		OS           string `json:"os"`
+		Variant      string `json:"variant"`
+	}
+	if err := json.Unmarshal(raw, &config); err != nil {
+		return indexPlatform{}, fmt.Errorf("parse source image config: %w", err)
+	}
+	if config.OS == "" || config.Architecture == "" {
+		return indexPlatform{}, fmt.Errorf("%w: source image config has no os/architecture", ErrNonConvertible)
+	}
+	return indexPlatform{OS: config.OS, Architecture: config.Architecture, Variant: config.Variant}, nil
 }
 
 // platformDescriptor finds the runnable image descriptor for the requested

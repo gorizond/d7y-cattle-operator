@@ -968,3 +968,153 @@ func TestCleanupStaleRegistryIgnoresMatchingAndGenericEndpoints(t *testing.T) {
 		t.Errorf("registry DELETE = %d, want 0 for matching/generic endpoints", fake.posts["registry_delete"])
 	}
 }
+
+func TestEnsureRegistryKeepsCompatibleGitHubEndpoint(t *testing.T) {
+	fake := &fakeHarbor{
+		registries: []HarborRegistry{{ID: 3, Name: "ghcr.io", Type: "github-ghcr", URL: "https://ghcr.io"}},
+		projects:   []HarborProject{{ProjectID: 1, Name: "ghcrio", RegistryID: 3}},
+	}
+	server := httptest.NewServer(fake.handler())
+	defer server.Close()
+	got, err := (&HarborClient{BaseURL: server.URL}).EnsureRegistry(context.Background(), "ghcr.io")
+	if err != nil {
+		t.Fatalf("EnsureRegistry() error = %v", err)
+	}
+	if got.ID != 3 || got.Type != "github-ghcr" {
+		t.Errorf("endpoint = %+v, want the existing github-ghcr endpoint", got)
+	}
+	fake.mu.Lock()
+	defer fake.mu.Unlock()
+	if fake.posts["registry"] != 0 || fake.posts["registry_update"] != 0 || fake.posts["registry_delete"] != 0 {
+		t.Errorf("registry POST/PUT/DELETE = %d/%d/%d, want 0/0/0",
+			fake.posts["registry"], fake.posts["registry_update"], fake.posts["registry_delete"])
+	}
+}
+
+func TestProvisionerRemovesUnusedGenericForGHCR(t *testing.T) {
+	fake := &fakeHarbor{
+		registries: []HarborRegistry{
+			{ID: 3, Name: "ghcr.io", Type: "github-ghcr", URL: "https://ghcr.io"},
+			{ID: 14, Name: "ghcr.io-generic", Type: "docker-registry", URL: "https://ghcr.io"},
+		},
+		projects: []HarborProject{{ProjectID: 1, Name: "ghcrio", RegistryID: 3}},
+	}
+	server := httptest.NewServer(fake.handler())
+	defer server.Close()
+	provisioner := &Provisioner{Harbor: &HarborClient{BaseURL: server.URL}, MirrorProject: "mirror"}
+	if err := provisioner.Ensure(context.Background(), "ghcr.io"); err != nil {
+		t.Fatalf("Ensure() error = %v", err)
+	}
+	fake.mu.Lock()
+	defer fake.mu.Unlock()
+	if fake.posts["project_update"] != 0 {
+		t.Errorf("project PUT = %d, want 0 (the project already uses the canonical endpoint)", fake.posts["project_update"])
+	}
+	if fake.posts["registry_delete"] != 1 {
+		t.Errorf("registry DELETE = %d, want the unused generic endpoint removed", fake.posts["registry_delete"])
+	}
+	for _, registry := range fake.registries {
+		if registry.Name == "ghcr.io-generic" {
+			t.Errorf("unused generic endpoint still present: %+v", registry)
+		}
+	}
+	if len(fake.registries) != 1 || fake.registries[0].Name != "ghcr.io" || fake.registries[0].Type != "github-ghcr" {
+		t.Errorf("registries = %+v, want only the working github-ghcr endpoint", fake.registries)
+	}
+	for _, project := range fake.projects {
+		if project.Name == "ghcrio" && project.RegistryID != 3 {
+			t.Errorf("ghcrio registry_id = %d, want 3", project.RegistryID)
+		}
+	}
+}
+
+func TestEnsureRegistryReusesExistingGenericWhenCanonicalMissing(t *testing.T) {
+	fake := &fakeHarbor{
+		registries: []HarborRegistry{{ID: 13, Name: "quay.io-generic", Type: "docker-registry", URL: "https://quay.io"}},
+		projects:   []HarborProject{{ProjectID: 1, Name: "quayio", RegistryID: 13}},
+	}
+	server := httptest.NewServer(fake.handler())
+	defer server.Close()
+	provisioner := &Provisioner{Harbor: &HarborClient{BaseURL: server.URL}, MirrorProject: "mirror"}
+	if err := provisioner.Ensure(context.Background(), "quay.io"); err != nil {
+		t.Fatalf("Ensure() error = %v", err)
+	}
+	if got := provisioner.ProjectFor("quay.io"); got != "quayio" {
+		t.Errorf("ProjectFor(quay.io) = %q", got)
+	}
+	fake.mu.Lock()
+	defer fake.mu.Unlock()
+	if fake.posts["registry"] != 0 {
+		t.Errorf("registry POST = %d, want no recreated canonical endpoint", fake.posts["registry"])
+	}
+	if fake.posts["registry_delete"] != 0 {
+		t.Errorf("registry DELETE = %d, want 0 while the generic endpoint is in use", fake.posts["registry_delete"])
+	}
+	if len(fake.registries) != 1 || fake.registries[0].Name != "quay.io-generic" {
+		t.Errorf("registries = %+v, want the existing generic endpoint", fake.registries)
+	}
+}
+
+func TestCleanupUnusedGenericKeepsReferencedGeneric(t *testing.T) {
+	fake := &fakeHarbor{
+		registries: []HarborRegistry{
+			{ID: 3, Name: "ghcr.io", Type: "github-ghcr", URL: "https://ghcr.io"},
+			{ID: 14, Name: "ghcr.io-generic", Type: "docker-registry", URL: "https://ghcr.io"},
+		},
+		// The fallback project still uses the generic endpoint: Harbor 412.
+		projects: []HarborProject{{ProjectID: 2, Name: "ghcrio-generic", RegistryID: 14}},
+	}
+	server := httptest.NewServer(fake.handler())
+	defer server.Close()
+	if err := (&HarborClient{BaseURL: server.URL}).CleanupUnusedGenericRegistry(context.Background(), "ghcr.io"); err != nil {
+		t.Fatalf("CleanupUnusedGenericRegistry() error = %v, want nil on 412", err)
+	}
+	fake.mu.Lock()
+	defer fake.mu.Unlock()
+	if fake.posts["registry_delete"] != 1 {
+		t.Errorf("registry DELETE = %d, want one attempt", fake.posts["registry_delete"])
+	}
+	if len(fake.registries) != 2 {
+		t.Errorf("referenced generic endpoint was deleted: %+v", fake.registries)
+	}
+}
+
+func TestCleanupStaleRegistryKeepsCompatibleGitHubEndpoint(t *testing.T) {
+	fake := &fakeHarbor{
+		registries: []HarborRegistry{{ID: 3, Name: "ghcr.io", Type: "github-ghcr", URL: "https://ghcr.io"}},
+		projects:   []HarborProject{{ProjectID: 1, Name: "ghcrio", RegistryID: 3}},
+	}
+	server := httptest.NewServer(fake.handler())
+	defer server.Close()
+	if err := (&HarborClient{BaseURL: server.URL}).CleanupStaleRegistry(context.Background(), "ghcr.io"); err != nil {
+		t.Fatalf("CleanupStaleRegistry() error = %v", err)
+	}
+	fake.mu.Lock()
+	defer fake.mu.Unlock()
+	if fake.posts["registry_delete"] != 0 {
+		t.Errorf("registry DELETE = %d, want 0 for a compatible github-ghcr endpoint", fake.posts["registry_delete"])
+	}
+}
+
+func TestEnsureRegistryDoesNotReuseGenericForDockerHub(t *testing.T) {
+	fake := &fakeHarbor{registries: []HarborRegistry{
+		{ID: 9, Name: "docker.io-generic", Type: "docker-registry", URL: "https://docker.io"},
+	}}
+	server := httptest.NewServer(fake.handler())
+	defer server.Close()
+	got, err := (&HarborClient{BaseURL: server.URL}).EnsureRegistry(context.Background(), "docker.io")
+	if err != nil {
+		t.Fatalf("EnsureRegistry() error = %v", err)
+	}
+	if got.Name != "docker.io" || got.Type != "docker-hub" {
+		t.Errorf("endpoint = %+v, want a canonical docker-hub endpoint", got)
+	}
+	fake.mu.Lock()
+	defer fake.mu.Unlock()
+	if fake.posts["registry"] != 1 {
+		t.Errorf("registry POST = %d, want 1", fake.posts["registry"])
+	}
+	if fake.lastRegistryBody["type"] != "docker-hub" {
+		t.Errorf("create body = %v, want docker-hub", fake.lastRegistryBody)
+	}
+}

@@ -6,6 +6,7 @@ import (
 	"encoding/base64"
 	"encoding/hex"
 	"encoding/json"
+	"errors"
 	"fmt"
 	"os"
 	"os/exec"
@@ -34,6 +35,7 @@ func singleSourceManifest(t *testing.T, registry *fakeRegistry, digest string, b
 	registry.manifests["mirror/docker.io/library/nginx:1.27"] = Manifest{
 		Digest: digest, MediaType: ociManifestType, Body: body,
 	}
+	registry.blobs["mirror/docker.io/library/nginx:sha256:config"] = []byte(`{"architecture":"amd64","os":"linux"}`)
 }
 
 func findNydusDescriptor(t *testing.T, index indexDocument) indexDescriptor {
@@ -247,6 +249,7 @@ func TestConverterDigestReferenceArgs(t *testing.T) {
 		Digest: digest, MediaType: ociManifestType,
 		Body: []byte(`{"schemaVersion":2,"config":{"digest":"sha256:config"},"layers":[]}`),
 	}
+	registry.blobs["mirror/docker.io/library/nginx:sha256:config"] = []byte(`{"architecture":"amd64","os":"linux"}`)
 	indexBody, _ := json.Marshal(indexDocument{Manifests: []indexDescriptor{
 		{MediaType: ociManifestType, Digest: "sha256:oci", Platform: &indexPlatform{OS: "linux", Architecture: "amd64"}},
 		{MediaType: ociManifestType, Digest: "sha256:nydus", ArtifactType: nydusArtifactType, Platform: &indexPlatform{OS: "linux", Architecture: "amd64"}},
@@ -616,5 +619,87 @@ func TestConverterTagPathDoesNotUseCopier(t *testing.T) {
 	}
 	if _, err := converter.Convert(context.Background(), "docker.io", "library/nginx", "1.27", "sha256:source"); err != nil {
 		t.Fatalf("tag conversion used the digest-only copier: %v", err)
+	}
+}
+
+func TestConverterSingleManifestPlatformDetection(t *testing.T) {
+	const digest = "sha256:4f69000000000000000000000000000000000000000000000000000000000000"
+	const targetTag = "nd-4f6900000000"
+	repoPath := "mirror/registry.access.redhat.com/ubi9/ubi-micro"
+
+	tests := []struct {
+		name   string
+		os     string
+		arch   string
+		wantOK bool
+	}{
+		{name: "amd64 converts", os: "linux", arch: "amd64", wantOK: true},
+		{name: "arm64 is not convertible", os: "linux", arch: "arm64"},
+		{name: "ppc64le is not convertible", os: "linux", arch: "ppc64le"},
+		{name: "s390x is not convertible", os: "linux", arch: "s390x"},
+	}
+	for _, test := range tests {
+		t.Run(test.name, func(t *testing.T) {
+			registry := newFakeRegistry()
+			registry.manifests[repoPath+":"+digest] = Manifest{
+				Digest: digest, MediaType: ociManifestType,
+				Body: []byte(`{"schemaVersion":2,"mediaType":"` + ociManifestType + `","config":{"digest":"sha256:config"},"layers":[]}`),
+			}
+			registry.blobs[repoPath+":sha256:config"] = []byte(`{"os":"` + test.os + `","architecture":"` + test.arch + `"}`)
+			nydusCalls := 0
+			if test.wantOK {
+				mergedBody, _ := json.Marshal(indexDocument{Manifests: []indexDescriptor{
+					{MediaType: ociManifestType, Digest: digest, Platform: &indexPlatform{OS: test.os, Architecture: test.arch}},
+					{MediaType: ociManifestType, Digest: "sha256:nydus", ArtifactType: nydusArtifactType, Platform: &indexPlatform{OS: test.os, Architecture: test.arch}},
+				}})
+				registry.manifests[repoPath+":"+targetTag+"-merged"] = Manifest{Digest: "sha256:merged", MediaType: ociIndexType, Body: mergedBody}
+				registry.manifests[repoPath+":sha256:nydus"] = Manifest{MediaType: ociManifestType, Body: nydusManifestBody("")}
+			}
+			converter := &Converter{
+				HarborURL: "https://harbor.example.com", MirrorProject: "mirror", ProxyPublicURL: testProxyURL,
+				NydusifyPath: "nydusify", NydusImage: "/usr/local/bin/nydus-image", Registry: registry,
+				Command: func(context.Context, string, ...string) *exec.Cmd {
+					nydusCalls++
+					if !test.wantOK {
+						t.Errorf("nydusify ran for a non-convertible %s/%s source", test.os, test.arch)
+					}
+					return exec.Command("true")
+				},
+			}
+			_, err := converter.Convert(context.Background(), "registry.access.redhat.com", "ubi9/ubi-micro", digest, digest)
+			if test.wantOK {
+				if err != nil {
+					t.Fatalf("Convert(amd64) error = %v", err)
+				}
+				if nydusCalls != 1 {
+					t.Errorf("nydusify calls = %d, want 1", nydusCalls)
+				}
+				published, ok := registry.manifests[repoPath+":"+targetTag]
+				if !ok {
+					t.Fatal("amd64 digest conversion did not publish a nydus index")
+				}
+				var index indexDocument
+				if err := json.Unmarshal(published.Body, &index); err != nil {
+					t.Fatal(err)
+				}
+				if len(index.Manifests) != 2 || index.Manifests[0].Platform == nil ||
+					index.Manifests[0].Platform.OS != "linux" || index.Manifests[0].Platform.Architecture != "amd64" {
+					t.Errorf("published manifests = %+v", index.Manifests)
+				}
+				return
+			}
+			if !errors.Is(err, ErrNonConvertible) {
+				t.Fatalf("Convert(%s) error = %v, want ErrNonConvertible", test.arch, err)
+			}
+			if nydusCalls != 0 {
+				t.Errorf("nydusify calls = %d, want 0", nydusCalls)
+			}
+			if _, ok := registry.manifests[repoPath+":"+targetTag]; ok {
+				t.Error("non-convertible source published a nydus index")
+			}
+			if _, ok := registry.manifests[repoPath+":"+digest]; !ok {
+				t.Error("source manifest must stay available")
+			}
+		})
 	}
 }

@@ -4,6 +4,7 @@ import (
 	"bytes"
 	"context"
 	"errors"
+	"fmt"
 	"log/slog"
 	"strings"
 	"sync/atomic"
@@ -213,5 +214,28 @@ func TestManagerRequeueRefreshesCachedJob(t *testing.T) {
 	manager.setState(job.Key(), "converting", 1, "")
 	if manager.Requeue(job) {
 		t.Fatal("Requeue(converting) = true, want false")
+	}
+}
+
+func TestManagerDoesNotRetryNonConvertible(t *testing.T) {
+	var calls atomic.Int32
+	manager := NewManager(func(context.Context, Job) error {
+		calls.Add(1)
+		return fmt.Errorf("%w: source is linux/arm64, conversion platform is linux/amd64", ErrNonConvertible)
+	})
+	ctx, cancel := context.WithCancel(context.Background())
+	defer cancel()
+	manager.Start(ctx)
+	job := Job{Registry: "registry.access.redhat.com", Repository: "ubi9/ubi-micro", Reference: "sha256:4f69", Digest: "sha256:4f69"}
+	if !manager.Enqueue(job) {
+		t.Fatal("Enqueue() = false")
+	}
+	waitState(t, manager, job.Key(), "failed")
+	if calls.Load() != 1 {
+		t.Errorf("work calls = %d, want 1 (no retry for a permanent platform mismatch)", calls.Load())
+	}
+	state, _ := manager.State(job.Key())
+	if state.Attempts != 1 || !strings.Contains(state.LastError, "not convertible") {
+		t.Errorf("state = %+v", state)
 	}
 }
