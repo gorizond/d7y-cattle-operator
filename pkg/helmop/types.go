@@ -168,6 +168,19 @@ func SchedulerHostTemplate(domain string) string {
 	return fmt.Sprintf(`d7y-scheduler.${ index .ClusterLabels %q }.`, LabelClusterID) + domain
 }
 
+// SharedSchedulerAddrTemplate is the client-facing scheduler address used by
+// the dynconfig of the shared data release. It must stay a hostname: the
+// scheduler front is a Traefik TCP-TLS route matched by HostSNI, so dialing the
+// public IP has no SNI and fails with a transport error. The public IP is only
+// used for the scheduler advertiseIP and the extras external-dns target.
+func SharedSchedulerAddrTemplate(domain string) string {
+	host := SchedulerHostTemplate(domain)
+	if host == "" {
+		return ""
+	}
+	return fmt.Sprintf("%s:%d", host, SchedulerPublicPort)
+}
+
 // Names are the downstream resource names derived from a cluster name.
 type Names struct {
 	KeyDB            string
