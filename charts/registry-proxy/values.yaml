@@ -7,7 +7,9 @@ serviceAccount:
 image:
   # Same image as the operator: it contains /registry-proxy.
   repository: ghcr.io/gorizond/d7y-cattle-operator
-  tag: v0.1.41
+  # Empty follows Chart.appVersion (v<appVersion>); the operator overrides
+  # both repository and tag with its own image on release upgrades.
+  tag: ""
   pullPolicy: IfNotPresent
 
 command:
