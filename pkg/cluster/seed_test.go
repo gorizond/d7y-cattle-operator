@@ -155,12 +155,14 @@ func newTestController(t *testing.T) (*Controller, *fakeHelmOpStore, *fakeEventS
 		Data:       map[string][]byte{"HARBOR_ADMIN_PASSWORD": []byte("admin-password")},
 	})
 	store := newFakeHelmOpStore()
+	bundles := newFakeHelmOpStore()
 	events := &fakeEventStore{}
 	controller := &Controller{
 		ctx:       context.Background(),
 		secrets:   secrets,
 		events:    events,
 		helmops:   store,
+		bundles:   bundles,
 		clusters:  newFakeClusterStore(),
 		registrar: newFakeRegistrar(),
 		allocator: newFakeAllocator(),

@@ -181,8 +181,9 @@ func initialize(ctx context.Context, cfg *registryproxy.Config, bootstrap *boots
 	copier := &registryproxy.Copier{Source: source, Mirror: mirror, MirrorProject: cfg.Mirror.Project}
 	timeout, _ := time.ParseDuration(cfg.Conversion.Timeout)
 	converter := &registryproxy.Converter{
-		HarborURL: base, MirrorProject: cfg.Mirror.Project, NydusifyPath: cfg.Conversion.Nydusify,
-		NydusImage: cfg.Conversion.NydusImage, Platform: cfg.Conversion.Platform,
+		HarborURL: base, MirrorProject: cfg.Mirror.Project, ProxyPublicURL: cfg.Proxy.PublicURL,
+		NydusifyPath: cfg.Conversion.Nydusify,
+		NydusImage:   cfg.Conversion.NydusImage, Platform: cfg.Conversion.Platform,
 		WorkDir: cfg.Conversion.WorkDir, Timeout: timeout,
 		SourceUser: robot.Name, SourcePass: robot.Secret, Registry: mirror,
 	}

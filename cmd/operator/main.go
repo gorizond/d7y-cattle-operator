@@ -67,6 +67,10 @@ func run() error {
 	if err != nil {
 		return fmt.Errorf("HelmOp client: %w", err)
 	}
+	bundles, err := clientFactory.ForResource(helmop.BundleGVR, true)
+	if err != nil {
+		return fmt.Errorf("Bundle client: %w", err)
+	}
 
 	apiHost, err := hostFromURL(cfg.ManagerAPIURL)
 	if err != nil {
@@ -90,7 +94,7 @@ func run() error {
 
 	ctx := signals.SetupSignalContext()
 	webhook.Register(ctx, secretController, serviceController, mutatingWebhookController, validatingWebhookController, crdController)
-	cluster.Register(ctx, clusterController, secretController, eventController, helmOps, cluster.Options{
+	cluster.Register(ctx, clusterController, secretController, eventController, helmOps, bundles, cluster.Options{
 		OperatorNamespace:           cfg.Namespace,
 		MTLSSecretName:              cfg.MTLSSecretName,
 		ManagerGRPCDomain:           cfg.ManagerGRPCDomain,

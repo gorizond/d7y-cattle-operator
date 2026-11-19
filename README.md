@@ -651,7 +651,10 @@ risks.
 4. Confirm `nydusd`/FUSE on the node, then pull again to confirm Dragonfly P2P.
    The exact source digest is only the
    `containerd.io/snapshot/nydus-source-digest` annotation; a digest-pinned
-   consumer sees the index digest, not the original source digest.
+   consumer sees the index digest, not the original source digest. The nydus
+   child manifest's `containerd.io/snapshot/nydus-source-reference` annotation
+   is rewritten to the public proxy reference so nydus does not resolve the
+   upstream registry directly.
 5. Force a conversion failure; the original mirror OCI tag must remain and a
    later webhook/pull retries. Do not run this pilot without explicit approval.
 
@@ -804,7 +807,7 @@ Pushing a `v*` tag runs `.github/workflows/release.yml`:
   the `gh-pages` branch.
 
 The repository charts are `d7y-cattle-operator`, `dragonfly-extras`,
-`p2p-static`, and `registry-proxy`. The KeyDB chart is
+`p2p-static`, `registry-proxy`, and `admission-webhook`. The KeyDB chart is
 external (`enapter/keydb` `0.48.0` from
 `https://enapter.github.io/charts/`) and is not vendored or published here.
 The operator pins that external chart and submits the three-master, no-PVC

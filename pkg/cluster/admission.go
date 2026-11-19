@@ -1,6 +1,7 @@
 package cluster
 
 import (
+	"errors"
 	"fmt"
 	"strings"
 
@@ -15,7 +16,18 @@ import (
 // proxy.domain, and no Harbor/proxy/seed state is consulted.
 func (c *Controller) ensureAdmission(cluster *provv1.Cluster, hc helmop.Cluster, roles Roles) error {
 	if !roles.Admission {
-		if err := c.deleteHelmOp(cluster, helmop.AdmissionName(cluster.Name)); err != nil {
+		name := helmop.AdmissionName(cluster.Name)
+		var errs []error
+		// Delete the HelmOp first so Fleet cannot recreate the Bundle, then
+		// remove the Bundle explicitly. Fleet's Bundle finalizer purges the
+		// BundleDeployment and the agent uninstalls the Helm release.
+		if err := c.deleteHelmOp(cluster, name); err != nil {
+			errs = append(errs, err)
+		}
+		if err := c.deleteBundle(cluster, name); err != nil {
+			errs = append(errs, err)
+		}
+		if err := errors.Join(errs...); err != nil {
 			c.event(cluster, corev1.EventTypeWarning, "AdmissionCleanupFailed", err.Error())
 			return err
 		}

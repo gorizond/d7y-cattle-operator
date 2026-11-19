@@ -80,6 +80,7 @@ type Controller struct {
 	secrets apply.SecretStore
 	events  eventStore
 	helmops apply.Store
+	bundles apply.Store
 	opts    Options
 
 	clusters clusterStore
@@ -92,12 +93,13 @@ type Controller struct {
 
 // Register wires the Cluster controller. Handlers must be registered before
 // the factories are started.
-func Register(ctx context.Context, clusters provctl.ClusterController, secrets corectl.SecretController, events corectl.EventController, helmops apply.Store, opts Options) {
+func Register(ctx context.Context, clusters provctl.ClusterController, secrets corectl.SecretController, events corectl.EventController, helmops, bundles apply.Store, opts Options) {
 	c := &Controller{
 		ctx:      ctx,
 		secrets:  secrets,
 		events:   events,
 		helmops:  helmops,
+		bundles:  bundles,
 		clusters: clusters,
 		opts:     opts,
 	}
@@ -716,6 +718,35 @@ func (c *Controller) deleteHelmOp(cluster *provv1.Cluster, name string) error {
 	return nil
 }
 
+// deleteBundle removes the Fleet Bundle generated from a HelmOp. The HelmOp
+// controller normally purges it from its finalizer, but that does not run when
+// the HelmOp was never reconciled or Fleet is temporarily unavailable. The
+// Bundle controller then purges BundleDeployments and the downstream agent
+// uninstalls the release. This is deliberately name-scoped: there is no broad
+// Fleet GC and no downstream-cluster client.
+func (c *Controller) deleteBundle(cluster *provv1.Cluster, name string) error {
+	if c.bundles == nil {
+		return nil
+	}
+	current := &unstructured.Unstructured{}
+	err := c.bundles.Get(c.ctx, cluster.Namespace, name, current, metav1.GetOptions{})
+	if apierrors.IsNotFound(err) {
+		return nil
+	}
+	if err != nil {
+		return fmt.Errorf("get Bundle %s/%s: %w", cluster.Namespace, name, err)
+	}
+	// Only delete a Bundle that Fleet generated from this HelmOp. A same-named
+	// Bundle without the HelmOp label may belong to a user or another source.
+	if current.GetLabels()[fleetv1alpha1.HelmOpLabel] != name {
+		return nil
+	}
+	if _, err := apply.Delete(c.ctx, c.bundles, cluster.Namespace, name); err != nil {
+		return fmt.Errorf("delete Bundle %s/%s: %w", cluster.Namespace, name, err)
+	}
+	return nil
+}
+
 func (c *Controller) cleanupAll(cluster *provv1.Cluster) error {
 	var errs []error
 	for _, name := range []string{
@@ -729,6 +760,9 @@ func (c *Controller) cleanupAll(cluster *provv1.Cluster) error {
 		if err := c.deleteHelmOp(cluster, name); err != nil {
 			errs = append(errs, err)
 		}
+	}
+	if err := c.deleteBundle(cluster, helmop.AdmissionName(cluster.Name)); err != nil {
+		errs = append(errs, err)
 	}
 	if err := c.deleteSeed(cluster); err != nil {
 		errs = append(errs, err)
