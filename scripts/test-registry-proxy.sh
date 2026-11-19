@@ -19,6 +19,13 @@ helm template registry-proxy "$chart" --namespace dragonfly-system \
   --set webhook.address=http://c1-registry-proxy.dragonfly-system.svc:8080/api/convert >"$tmp/proxy.yaml"
 
 helm template registry-proxy "$chart" --namespace dragonfly-system \
+  --set fullnameOverride=poligon --show-only templates/deployment.yaml >"$tmp/fullname.yaml"
+grep -q 'name: poligon-registry-proxy' "$tmp/fullname.yaml" || \
+  fail "fullnameOverride Deployment name is missing"
+grep -q 'app.kubernetes.io/instance: poligon-registry-proxy' "$tmp/fullname.yaml" || \
+  fail "fullnameOverride selector label is missing"
+
+helm template registry-proxy "$chart" --namespace dragonfly-system \
   --show-only templates/networkpolicy.yaml >"$tmp/netpol.yaml"
 
 grep -q 'kind: Deployment' "$tmp/proxy.yaml" || fail "proxy Deployment is missing"

@@ -196,12 +196,15 @@ func (c *Controller) reconcile(key string, cluster *provv1.Cluster) (result *pro
 	if harborErr != nil {
 		errs = append(errs, harborErr)
 	}
-	proxyErr := c.ensureRegistryProxy(cluster, hc, roles, harborErr)
+	proxyErr := c.ensureSharedRegistryProxy(cluster, hc, roles, harborErr)
+	if err := c.cleanupLegacyRegistryProxy(cluster, roles, proxyErr); err != nil {
+		errs = append(errs, err)
+	}
 	proxyReady := false
 	proxyMessage := ""
 	if proxyErr == nil && roles.Proxy {
 		var stateErr error
-		proxyReady, proxyMessage, stateErr = c.helmOpReady(cluster, helmop.RegistryProxyName(cluster.Name), "registry proxy")
+		proxyReady, proxyMessage, stateErr = c.helmOpReady(cluster, helmop.SharedRegistryProxyName(), "registry proxy")
 		if stateErr != nil {
 			proxyErr = stateErr
 		}
@@ -457,11 +460,12 @@ func (c *Controller) helmopCluster(cluster *provv1.Cluster) helmop.Cluster {
 		HarborChart:                 c.opts.HarborChart,
 		RegistryProxyChart:          c.opts.RegistryProxyChart,
 		AdmissionChart:              c.opts.AdmissionChart,
-		HarborAdminSecret:           helmop.HarborAdminSecretName(cluster.Name),
+		HarborAdminSecret:           helmop.SharedHarborAdminSecretName(),
 		HarborSecretKey:             helmop.HarborSecretKeyName(cluster.Name),
-		ProxyWebhookSecretName:      helmop.RegistryProxyWebhookSecretName(cluster.Name),
-		ProxyRobotSecretName:        helmop.RegistryProxyRobotSecretName(cluster.Name),
+		ProxyWebhookSecretName:      helmop.SharedRegistryProxyWebhookSecretName(),
+		ProxyRobotSecretName:        helmop.SharedRegistryProxyRobotSecretName(),
 		ProxyDomain:                 c.opts.ProxyDomain,
+		ProxyHarborURL:              c.opts.ProxyHarborURL,
 		ProxyPublicURL:              proxyPublicURL(c.opts.ProxyDomain, c.opts.ProxyBasePath),
 		ProxyBasePath:               c.opts.ProxyBasePath,
 		ProxyTLSSecret:              c.opts.ProxyTLSSecret,
@@ -748,6 +752,14 @@ func (c *Controller) ensureClusterMetadata(cluster *provv1.Cluster, hc helmop.Cl
 		strings.TrimSpace(cluster.Annotations[helmop.AnnotationSchedulerPublicIP]) == "" {
 		annotations[helmop.AnnotationSchedulerPublicIP] = ip
 	}
+	// The proxy ingress TLS Secret is cluster-specific; seed it from the
+	// operator default once and never overwrite a pinned value.
+	if hc.ProxyEnabled {
+		if secret := strings.TrimSpace(c.opts.ProxyTLSSecret); secret != "" &&
+			strings.TrimSpace(cluster.Annotations[helmop.AnnotationProxyTLSSecret]) == "" {
+			annotations[helmop.AnnotationProxyTLSSecret] = secret
+		}
+	}
 	if len(labels) == 0 && len(annotations) == 0 {
 		return nil, nil
 	}
@@ -871,6 +883,24 @@ func (c *Controller) cleanupLegacyHelmOps(cluster *provv1.Cluster, shared shared
 		if err := c.deleteBundle(cluster, name); err != nil {
 			errs = append(errs, err)
 		}
+	}
+	return errors.Join(errs...)
+}
+
+// cleanupLegacyRegistryProxy removes the per-cluster proxy HelmOp and Bundle
+// once the shared release was applied, or when the proxy role is gone. A failed
+// shared apply keeps the legacy release running.
+func (c *Controller) cleanupLegacyRegistryProxy(cluster *provv1.Cluster, roles Roles, proxyErr error) error {
+	if roles.Proxy && proxyErr != nil {
+		return nil
+	}
+	name := helmop.RegistryProxyName(cluster.Name)
+	var errs []error
+	if err := c.deleteHelmOp(cluster, name); err != nil {
+		errs = append(errs, err)
+	}
+	if err := c.deleteBundle(cluster, name); err != nil {
+		errs = append(errs, err)
 	}
 	return errors.Join(errs...)
 }

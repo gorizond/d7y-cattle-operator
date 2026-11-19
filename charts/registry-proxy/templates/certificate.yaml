@@ -2,7 +2,7 @@
 apiVersion: cert-manager.io/v1
 kind: Certificate
 metadata:
-  name: {{ .Release.Name }}
+  name: {{ include "registry-proxy.fullname" . }}
   namespace: {{ .Release.Namespace }}
   labels:
     {{- include "registry-proxy.labels" . | nindent 4 }}

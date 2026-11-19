@@ -1,7 +1,7 @@
 apiVersion: apps/v1
 kind: Deployment
 metadata:
-  name: {{ .Release.Name }}
+  name: {{ include "registry-proxy.fullname" . }}
   namespace: {{ .Release.Namespace }}
   labels:
     {{- include "registry-proxy.labels" . | nindent 4 }}
@@ -20,7 +20,7 @@ spec:
       {{- end }}
     spec:
       {{- if .Values.serviceAccount.create }}
-      serviceAccountName: {{ default .Release.Name .Values.serviceAccount.name }}
+      serviceAccountName: {{ default (include "registry-proxy.fullname" .) .Values.serviceAccount.name }}
       {{- end }}
       securityContext:
         runAsNonRoot: true
@@ -103,7 +103,7 @@ spec:
       volumes:
         - name: config
           configMap:
-            name: {{ .Release.Name }}-config
+            name: {{ include "registry-proxy.fullname" . }}-config
         - name: harbor-admin
           secret:
             secretName: {{ .Values.harbor.adminSecret }}

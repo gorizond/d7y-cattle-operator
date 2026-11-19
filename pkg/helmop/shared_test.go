@@ -28,6 +28,7 @@ func TestSharedHelmOpNamesAndReleases(t *testing.T) {
 		"extras":    {SharedExtras(c, ExtrasOptions{}), "d7y-extras"},
 		"mirror":    {SharedMirror(c), "d7y-containerd-mirror"},
 		"admission": {SharedAdmission(c), "d7y-admission"},
+		"proxy":     {SharedRegistryProxy(c), "d7y-registry-proxy"},
 	}
 	for component, entry := range ops {
 		if entry.op.Name != entry.name {
@@ -58,6 +59,7 @@ func TestSharedHelmOpSelectors(t *testing.T) {
 		"extras":    {SharedExtras(c, ExtrasOptions{}), map[string]string{LabelGate: "true", LabelRoleSeed: "true"}},
 		"mirror":    {SharedMirror(c), map[string]string{LabelGate: "true", LabelRoleSeed: "true"}},
 		"admission": {SharedAdmission(c), map[string]string{LabelGate: "true", LabelRoleAdmission: "true"}},
+		"proxy":     {SharedRegistryProxy(c), map[string]string{LabelGate: "true", LabelRoleProxy: "true"}},
 	}
 	for component, test := range tests {
 		selector := test.op.Spec.Targets[0].ClusterSelector
@@ -190,6 +192,7 @@ func TestSharedHelmOpsHaveNoPerClusterLabels(t *testing.T) {
 		"extras":    SharedExtras(c, ExtrasOptions{}),
 		"mirror":    SharedMirror(c),
 		"admission": SharedAdmission(c),
+		"proxy":     SharedRegistryProxy(c),
 	} {
 		if got := op.Labels["p2p.dragonfly.io/cluster-name"]; got != "" {
 			t.Errorf("%s carries a per-cluster label %q", name, got)
@@ -225,6 +228,7 @@ func TestPerClusterHelmOpsKeepStrictOwnership(t *testing.T) {
 		"control": Control(c),
 		"data":    Data(c),
 		"extras":  Extras(c, ExtrasOptions{IngressEnabled: true, Manager: true}),
+		"proxy":   RegistryProxy(c),
 	}
 	for name, op := range ops {
 		if op.Spec.Helm == nil {
@@ -244,5 +248,38 @@ func TestSharedManagerKeepsGlobalSecrets(t *testing.T) {
 		op.Spec.DownstreamResources[1].Kind != "Secret" ||
 		op.Spec.DownstreamResources[1].Name != "dragonfly-manager-api" {
 		t.Errorf("downstreamResources = %+v, want the fleet-global mTLS and manager credentials Secrets", op.Spec.DownstreamResources)
+	}
+}
+
+func TestSharedRegistryProxyValues(t *testing.T) {
+	c := sharedTestCluster()
+	c.ProxyHarborURL = "https://harbor.example.com"
+	c.ProxyRobotSecretRevision = "rev-1"
+	op := SharedRegistryProxy(c)
+
+	values := op.Spec.Helm.Values.Data
+	if got := values["fullnameOverride"]; got != SharedClusterNameTemplate {
+		t.Errorf("fullnameOverride = %v, want %s", got, SharedClusterNameTemplate)
+	}
+	if got := valueAt(t, values, "ingress", "tlsSecret"); got != SharedProxyTLSSecretTemplate {
+		t.Errorf("ingress.tlsSecret = %v, want %s", got, SharedProxyTLSSecretTemplate)
+	}
+	for path, want := range map[string]any{
+		"harbor.url":         "https://harbor.example.com",
+		"harbor.adminSecret": SharedHarborAdminSecretName(),
+		"harbor.robotSecret": SharedRegistryProxyRobotSecretName(),
+		"webhook.secretName": SharedRegistryProxyWebhookSecretName(),
+		"webhook.address":    SharedProxyWebhookAddressTemplate,
+	} {
+		keys := strings.Split(path, ".")
+		if got := valueAt(t, values, keys...); got != want {
+			t.Errorf("%s = %v, want %v", path, got, want)
+		}
+	}
+	if len(op.Spec.DownstreamResources) != 3 ||
+		op.Spec.DownstreamResources[0].Name != SharedHarborAdminSecretName() ||
+		op.Spec.DownstreamResources[1].Name != SharedRegistryProxyWebhookSecretName() ||
+		op.Spec.DownstreamResources[2].Name != SharedRegistryProxyRobotSecretName() {
+		t.Errorf("downstreamResources = %+v", op.Spec.DownstreamResources)
 	}
 }

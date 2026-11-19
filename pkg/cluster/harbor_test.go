@@ -9,6 +9,8 @@ import (
 	corev1 "k8s.io/api/core/v1"
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
 	"k8s.io/apimachinery/pkg/apis/meta/v1/unstructured"
+
+	"github.com/gorizond/d7y-cattle-operator/pkg/helmop"
 )
 
 func TestEnsureGeneratedSecretHonorsKeyLength(t *testing.T) {
@@ -39,15 +41,15 @@ func TestReconcileHarborAndProxy(t *testing.T) {
 	if len(events.events) != 0 {
 		t.Errorf("events = %+v, want none", events.events)
 	}
-	for _, name := range []string{"c1-harbor", "c1-registry-proxy"} {
+	for _, name := range []string{"c1-harbor", helmop.SharedRegistryProxyName()} {
 		if !store.has("fleet-default/" + name) {
 			t.Errorf("%s HelmOp was not created", name)
 		}
 	}
-	if got := dependsOn(store.object("fleet-default/c1-registry-proxy")); len(got) != 0 {
+	if got := dependsOn(store.object("fleet-default/" + helmop.SharedRegistryProxyName())); len(got) != 0 {
 		t.Errorf("proxy dependsOn = %v, want none (independent toggles)", got)
 	}
-	admin, err := controller.secrets.(*fakeSecretStore).Get("fleet-default", "c1-harbor-admin", metav1.GetOptions{})
+	admin, err := controller.secrets.(*fakeSecretStore).Get("fleet-default", helmop.SharedHarborAdminSecretName(), metav1.GetOptions{})
 	if err != nil {
 		t.Fatalf("Harbor admin Secret was not copied: %v", err)
 	}
@@ -61,7 +63,7 @@ func TestReconcileHarborAndProxy(t *testing.T) {
 		t.Errorf("RegistryProxyReady before HelmOp status = %+v, want False/Progressing", got)
 	}
 
-	proxyOp := store.object("fleet-default/c1-registry-proxy")
+	proxyOp := store.object("fleet-default/" + helmop.SharedRegistryProxyName())
 	if proxyOp == nil {
 		t.Fatal("registry proxy HelmOp is missing")
 	}
@@ -102,14 +104,14 @@ func TestReconcileCreatesRegistryProxyRobotSecret(t *testing.T) {
 	if call.Username != "admin" || call.Password != "admin-password" {
 		t.Error("robot ensurer did not receive the Harbor admin credentials")
 	}
-	if call.SecretName != "c1-registry-proxy-robot" || call.MirrorProject != "mirror" {
+	if call.SecretName != helmop.SharedRegistryProxyRobotSecretName() || call.MirrorProject != "mirror" {
 		t.Errorf("robot Secret/mirror = %q/%q", call.SecretName, call.MirrorProject)
 	}
 	if want := []string{"docker.io", "ghcr.io", "*"}; !reflect.DeepEqual(call.Registries, want) {
 		t.Errorf("registries = %v, want %v", call.Registries, want)
 	}
 
-	robot, err := controller.secrets.(*fakeSecretStore).Get("fleet-default", "c1-registry-proxy-robot", metav1.GetOptions{})
+	robot, err := controller.secrets.(*fakeSecretStore).Get("fleet-default", helmop.SharedRegistryProxyRobotSecretName(), metav1.GetOptions{})
 	if err != nil {
 		t.Fatalf("robot Secret was not created: %v", err)
 	}
@@ -119,7 +121,7 @@ func TestReconcileCreatesRegistryProxyRobotSecret(t *testing.T) {
 		}
 	}
 
-	proxy := store.object("fleet-default/c1-registry-proxy")
+	proxy := store.object("fleet-default/" + helmop.SharedRegistryProxyName())
 	if proxy == nil {
 		t.Fatal("registry proxy HelmOp is missing")
 	}
@@ -130,7 +132,7 @@ func TestReconcileCreatesRegistryProxyRobotSecret(t *testing.T) {
 		resource, _ := item.(map[string]any)
 		names = append(names, resource["name"].(string))
 	}
-	want := []string{"c1-harbor-admin", "c1-registry-proxy-webhook", "c1-registry-proxy-robot"}
+	want := []string{helmop.SharedHarborAdminSecretName(), helmop.SharedRegistryProxyWebhookSecretName(), helmop.SharedRegistryProxyRobotSecretName()}
 	if !reflect.DeepEqual(names, want) {
 		t.Errorf("downstreamResources = %v, want %v", names, want)
 	}
@@ -152,7 +154,7 @@ func TestReconcileCreatesRegistryProxyRobotSecret(t *testing.T) {
 
 func proxyRobotRevision(t *testing.T, store *fakeHelmOpStore) string {
 	t.Helper()
-	op := store.object("fleet-default/c1-registry-proxy")
+	op := store.object("fleet-default/" + helmop.SharedRegistryProxyName())
 	if op == nil {
 		t.Fatal("registry proxy HelmOp is missing")
 	}
@@ -180,7 +182,7 @@ func TestReconcileRegistryProxyRobotFailureSkipsHelmOp(t *testing.T) {
 	if _, err := controller.reconcile("", cluster); err == nil {
 		t.Fatal("reconcile() error = nil, want robot provisioning failure")
 	}
-	if store.has("fleet-default/c1-registry-proxy") {
+	if store.has("fleet-default/" + helmop.SharedRegistryProxyName()) {
 		t.Error("registry proxy HelmOp was applied without the robot Secret")
 	}
 	found := false
@@ -205,7 +207,7 @@ func TestReconcileExternalHarborSkipsHarborHelmOp(t *testing.T) {
 	if store.has("fleet-default/c1-harbor") {
 		t.Error("Harbor HelmOp was created for an external Harbor")
 	}
-	proxy := store.object("fleet-default/c1-registry-proxy")
+	proxy := store.object("fleet-default/" + helmop.SharedRegistryProxyName())
 	if proxy == nil {
 		t.Fatal("proxy HelmOp was not created for an external Harbor")
 	}
@@ -230,7 +232,7 @@ func TestReconcileProxyIndependentOfHarbor(t *testing.T) {
 	if store.has("fleet-default/c1-harbor") {
 		t.Error("Harbor HelmOp was created without the Harbor annotation")
 	}
-	if !store.has("fleet-default/c1-registry-proxy") {
+	if !store.has("fleet-default/" + helmop.SharedRegistryProxyName()) {
 		t.Error("independent proxy HelmOp was not created")
 	}
 }
@@ -245,7 +247,7 @@ func TestReconcileHarborDomainMissing(t *testing.T) {
 	if _, err := controller.reconcile("", cluster); err == nil {
 		t.Fatal("reconcile() error = nil, want HarborDomainMissing")
 	}
-	if store.has("fleet-default/c1-harbor") || store.has("fleet-default/c1-registry-proxy") {
+	if store.has("fleet-default/c1-harbor") || store.has("fleet-default/"+helmop.SharedRegistryProxyName()) {
 		t.Error("Harbor/proxy HelmOps were created without a valid domain")
 	}
 	if got := clusterStore.condition(string(conditionHarborDomainMissing)); got == nil || got.Status != corev1.ConditionTrue {
@@ -265,7 +267,7 @@ func TestReconcileHarborAdminSecretMissing(t *testing.T) {
 	if _, err := controller.reconcile("", cluster); err == nil {
 		t.Fatal("reconcile() error = nil, want missing admin Secret")
 	}
-	if store.has("fleet-default/c1-harbor") || store.has("fleet-default/c1-registry-proxy") {
+	if store.has("fleet-default/c1-harbor") || store.has("fleet-default/"+helmop.SharedRegistryProxyName()) {
 		t.Error("Harbor/proxy HelmOps were created without the admin Secret")
 	}
 	found := false
@@ -291,8 +293,16 @@ func TestReconcileRemovesHarborAndProxy(t *testing.T) {
 	if _, err := controller.reconcile("", cluster); err != nil {
 		t.Fatalf("reconcile(remove) error = %v", err)
 	}
-	if store.has("fleet-default/c1-harbor") || store.has("fleet-default/c1-registry-proxy") {
-		t.Error("Harbor/proxy HelmOps were not removed")
+	if store.has("fleet-default/c1-harbor") {
+		t.Error("per-cluster Harbor HelmOp was not removed")
+	}
+	// The shared proxy is global; removing the role only stops Fleet from
+	// targeting this Cluster, so the object remains.
+	if !store.has("fleet-default/" + helmop.SharedRegistryProxyName()) {
+		t.Error("shared registry proxy HelmOp was removed with the role")
+	}
+	if store.has("fleet-default/" + helmop.RegistryProxyName(cluster.Name)) {
+		t.Error("legacy per-cluster registry proxy HelmOp was not removed")
 	}
 }
 
@@ -316,7 +326,7 @@ func TestReconcileRegistryProxyIngressAndWebhook(t *testing.T) {
 	if _, err := controller.reconcile("", cluster); err != nil {
 		t.Fatalf("reconcile() error = %v", err)
 	}
-	proxy := store.object("fleet-default/c1-registry-proxy")
+	proxy := store.object("fleet-default/" + helmop.SharedRegistryProxyName())
 	if proxy == nil {
 		t.Fatal("registry proxy HelmOp is missing")
 	}
@@ -326,13 +336,16 @@ func TestReconcileRegistryProxyIngressAndWebhook(t *testing.T) {
 		want any
 	}{
 		{[]string{"ingress", "path"}, "/proxy"},
-		{[]string{"ingress", "tlsSecret"}, "poligon-harbor-tls"},
+		{[]string{"ingress", "tlsSecret"}, helmop.SharedProxyTLSSecretTemplate},
 		{[]string{"proxy", "basePath"}, "/proxy"},
-		{[]string{"webhook", "address"}, "http://c1-registry-proxy.dragonfly-system.svc:8080/api/convert"},
+		{[]string{"webhook", "address"}, helmop.SharedProxyWebhookAddressTemplate},
 	} {
 		if got := valueAtPath(t, values, tc.path...); got != tc.want {
 			t.Errorf("%v = %v, want %v", tc.path, got, tc.want)
 		}
+	}
+	if got := controller.clusters.(*fakeClusterStore).annotation(helmop.AnnotationProxyTLSSecret); got != "poligon-harbor-tls" {
+		t.Errorf("proxy-tls-secret annotation = %q, want the operator default", got)
 	}
 }
 
