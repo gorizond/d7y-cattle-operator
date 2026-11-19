@@ -35,9 +35,14 @@ type Options struct {
 	ManagerGRPCDomain string
 	// ManagerAPIURL is the public REST API URL; its hostname becomes a SAN.
 	ManagerAPIURL string
+	// SchedulerPublicIPs are the IPs resolved from the per-cluster scheduler
+	// host. They are public Traefik LB addresses used by bootstrap clients and
+	// DaemonSets.
+	SchedulerPublicIPs []string
 	// SchedulerHosts are the per-cluster scheduler DNS names
-	// (d7y-scheduler.<cluster-id>.<domain>). The shared leaf is DNS-only, so
-	// these are the only cluster-specific certificate identities.
+	// (d7y-scheduler.<cluster-id>.<domain>). They are additive SANs so clients
+	// dialing the hostname validate even when a wildcard DNS record points at
+	// a different cluster's load balancer.
 	SchedulerHosts []string
 }
 
@@ -64,6 +69,10 @@ func Generate(opts Options) (*Bundle, error) {
 		return nil, fmt.Errorf("pki: invalid manager API URL %q", opts.ManagerAPIURL)
 	}
 
+	ips, err := schedulerIPs(opts.SchedulerPublicIPs)
+	if err != nil {
+		return nil, err
+	}
 	dnsNames := leafDNSNames(opts.ManagerGRPCDomain, apiURL.Hostname(), opts.SchedulerHosts)
 
 	now := time.Now()
@@ -109,6 +118,7 @@ func Generate(opts Options) (*Bundle, error) {
 		KeyUsage:              x509.KeyUsageDigitalSignature,
 		ExtKeyUsage:           []x509.ExtKeyUsage{x509.ExtKeyUsageServerAuth, x509.ExtKeyUsageClientAuth},
 		DNSNames:              dnsNames,
+		IPAddresses:           ips,
 	}
 	leafDER, err := x509.CreateCertificate(rand.Reader, leafTemplate, caTemplate, &leafKey.PublicKey, caKey)
 	if err != nil {
@@ -121,10 +131,11 @@ func Generate(opts Options) (*Bundle, error) {
 	}
 
 	return &Bundle{
-		CACertPEM: encodePEM("CERTIFICATE", caDER),
-		CertPEM:   encodePEM("CERTIFICATE", leafDER),
-		KeyPEM:    encodePEM("PRIVATE KEY", keyDER),
-		DNSNames:  dnsNames,
+		CACertPEM:   encodePEM("CERTIFICATE", caDER),
+		CertPEM:     encodePEM("CERTIFICATE", leafDER),
+		KeyPEM:      encodePEM("PRIVATE KEY", keyDER),
+		DNSNames:    dnsNames,
+		IPAddresses: ips,
 	}, nil
 }
 
@@ -199,8 +210,8 @@ func leafDNSNames(grpcDomain, apiHost string, schedulerHosts []string) []string 
 	return names
 }
 
-// IsPublicIP reports whether ip is a globally routable unicast address
-// suitable for the public scheduler address. It rejects nil, loopback,
+// IsPublicIP reports whether ip is a globally routable unicast address that
+// may be used as a public P2P certificate SAN. It rejects nil, loopback,
 // unspecified, private, link-local unicast/multicast, multicast, and any
 // non-global-unicast address.
 func IsPublicIP(ip net.IP) bool {
@@ -214,11 +225,41 @@ func IsPublicIP(ip net.IP) bool {
 	return true
 }
 
+// schedulerIPs returns the loopback addresses plus the DNS-resolved public
+// scheduler IPs. Node IPs and internal ClusterIPs are deliberately never part
+// of the P2P certificate.
+func schedulerIPs(publicIPs []string) ([]net.IP, error) {
+	ips := []net.IP{net.IPv4(127, 0, 0, 1), net.IPv6loopback}
+	for _, raw := range publicIPs {
+		if raw == "" {
+			continue
+		}
+		ip := net.ParseIP(raw)
+		if ip == nil {
+			return nil, fmt.Errorf("pki: invalid scheduler IP %q", raw)
+		}
+		if !IsPublicIP(ip) {
+			return nil, fmt.Errorf("pki: scheduler IP %q is not public", raw)
+		}
+		ips = append(ips, ip)
+	}
+
+	seen := make(map[string]struct{}, len(ips))
+	result := make([]net.IP, 0, len(ips))
+	for _, ip := range ips {
+		key := ip.String()
+		if _, ok := seen[key]; ok {
+			continue
+		}
+		seen[key] = struct{}{}
+		result = append(result, ip)
+	}
+	return result, nil
+}
+
 // SANsMatch reports whether the certificate already carries exactly the
-// desired DNS and IP SAN sets. The shared P2P certificate is DNS-only, so ips
-// is normally empty; any legacy IP SAN makes this return false and forces one
-// rotation. Ordering and IPv4-mapped IPv6 forms are normalized so a stable
-// configuration never rewrites the Secret.
+// desired DNS and IP SAN sets. Ordering and IPv4-mapped IPv6 forms are
+// normalized so a stable configuration never rewrites the Secret.
 func SANsMatch(cert *x509.Certificate, dnsNames []string, ips []net.IP) bool {
 	if cert == nil {
 		return false

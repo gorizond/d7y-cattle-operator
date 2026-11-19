@@ -150,7 +150,7 @@ and JWT signing key; see [Manager root credentials](#manager-root-credentials).
 Defaults: `mtlsSecretName=dragonfly-p2p-mtls`, `dragonfly.chart.name=dragonfly`,
 `dragonfly.chart.repo=https://gorizond.github.io/dragonflyoss-helm-charts`,
 `dragonfly.chart.version=1.10.1-patch.2`, `extras.chart.name=dragonfly-extras`,
-`extras.chart.version=0.1.9`, `extras.ingress.controller=nginx`,
+`extras.chart.version=0.1.10`, `extras.ingress.controller=nginx`,
 `extras.ingress.grpcEnabled=true`, `extras.ingress.restEnabled=true`,
 `manager.grpcPort=443`, `webhook.port=9443`, `nydus.mirrorURL=""`,
 `leaderElect=false`. The public scheduler IP(s) are resolved from DNS at
@@ -362,24 +362,27 @@ The per-cluster DNS alias is
 `d7y-scheduler.<fleet-cluster-id>.<scheduler.domain>`, where the cluster ID
 comes from provisioning Cluster `status.clusterName` (with
 `scheduler.clusterID`/`P2P_CLUSTER_ID` as an explicit fallback). The operator
-resolves the alias at reconcile time with `net.LookupHost`; the first IPv4
-address becomes the scheduler `advertiseIP` and the extras external-dns
-target. The extras chart adds `external-dns.alpha.kubernetes.io/hostname` and
-`external-dns.alpha.kubernetes.io/target` to the `IngressRouteTCP` so an
-external-dns Traefik source can publish it; a deployment zone wildcard can
-also resolve it.
-The alias **is** the certificate identity: the shared P2P leaf is DNS-only and
-contains the scheduler hostname plus the manager DNS names. It contains no IP
-SANs, ClusterIPs, or node IPs, so validation matches what clients dial and
-cannot carry another cluster's stale address.
+resolves the alias at reconcile time with `net.LookupHost`; the resolved
+address(es) become P2P leaf IP SANs and the first IPv4 address becomes the
+scheduler `advertiseIP`. The extras chart publishes the alias with
+`external-dns.alpha.kubernetes.io/hostname`; the target is derived from the
+cluster's own load balancer, so the record follows the LB instead of a pinned
+address. A deployment zone wildcard can also resolve it.
+The P2P leaf carries both the resolved public IP SANs and the scheduler
+hostname DNS SAN. IP SANs are required because Dragonfly client 1.5.14 verifies
+the resolved IP; the DNS SAN keeps name-based callers working. It contains no
+ClusterIP and no node IPs.
 
 If DNS resolution fails or returns no addresses, the operator emits a
-`SchedulerDNSResolutionFailed` event and retries; it leaves the existing
-certificate untouched. The first seed reconcile after upgrading from an
-IP-SAN certificate rotates the CA and leaf once to the DNS-only set; later
-reconciles keep it stable. `scheduler.config.server.advertiseIP` and
-`advertisePort=443` use the public front; DaemonSets use the same public host
-from their local dynconfig.
+`SchedulerDNSResolutionFailed` event, keeps the existing certificate and its IP
+SANs, and continues the reconcile with an empty `advertiseIP`. The shared
+HelmOps, including the extras chart that publishes the alias, are still
+applied, so a missing alias does not block the first deploy. A later reconcile
+resolves the alias, adds the IP SAN, and rotates the certificate once. Existing
+public IP SANs are preserved when a new answer arrives, so a DNS/IP rotation
+keeps the old and new addresses valid during propagation.
+`scheduler.config.server.advertiseIP` and `advertisePort=443` use the public
+front; DaemonSets use the same public host from their local dynconfig.
 
 ### Fail-open node bootstrap
 

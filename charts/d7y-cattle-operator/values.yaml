@@ -70,7 +70,7 @@ extras:
   chart:
     repo: https://gorizond.github.io/d7y-cattle-operator
     name: dragonfly-extras
-    version: 0.1.9
+    version: 0.1.10
   ingress:
     # nginx terminates edge mTLS and uses GRPCS with client certificates to the
     # manager; traefik terminates edge mTLS and uses HTTPS IngressRoutes with
