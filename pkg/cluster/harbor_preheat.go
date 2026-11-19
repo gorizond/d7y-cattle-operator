@@ -129,6 +129,9 @@ func (c *Controller) ensureHarborPreheatPAT() (string, error) {
 		}
 		return token, nil
 	}
+	if secret.Data == nil {
+		secret.Data = make(map[string][]byte)
+	}
 	secret.Data[harborPreheatPATSecretKey] = []byte(token)
 	if _, err := c.secrets.Update(secret); err != nil {
 		return "", fmt.Errorf("update Harbor preheat PAT Secret %s/%s: %w", namespace, name, err)

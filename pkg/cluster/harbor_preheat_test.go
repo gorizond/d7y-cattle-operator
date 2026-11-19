@@ -310,7 +310,10 @@ func TestEnsureHarborPreheatRecoversPATConflict(t *testing.T) {
 	manager.tokens = []managerapi.PersonalAccessToken{{ID: 9, Name: harborPreheatPATName}}
 	controller.opts.ManagerAPIURL = managerServer.URL
 	controller.managerHTTPClient = managerServer.Client()
-	delete(controller.secrets.(*fakeSecretStore).secrets, "dragonfly-system/"+harborPreheatPATSecretName)
+	controller.secrets.(*fakeSecretStore).put(&corev1.Secret{
+		ObjectMeta: metav1.ObjectMeta{Name: harborPreheatPATSecretName, Namespace: "dragonfly-system"},
+		Type:       corev1.SecretTypeOpaque,
+	})
 	controller.secrets.(*fakeSecretStore).put(&corev1.Secret{
 		ObjectMeta: metav1.ObjectMeta{Name: "manager-api-credentials", Namespace: "dragonfly-system"},
 		Data:       map[string][]byte{"username": []byte("root"), "password": []byte("password")},
