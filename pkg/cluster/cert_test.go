@@ -4,13 +4,13 @@ import (
 	"bytes"
 	"crypto/x509"
 	"errors"
-	"net"
 	"slices"
 	"testing"
 
 	corev1 "k8s.io/api/core/v1"
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
 
+	"github.com/gorizond/d7y-cattle-operator/pkg/helmop"
 	"github.com/gorizond/d7y-cattle-operator/pkg/pki"
 )
 
@@ -73,8 +73,8 @@ func TestEnsureMTLSCertificateResolvesHostAndSANs(t *testing.T) {
 			t.Errorf("leaf DNS SANs %v do not contain %q", leaf.DNSNames, want)
 		}
 	}
-	if certHasIP(leaf.IPAddresses, "10.42.0.1") {
-		t.Error("leaf contains a node IP")
+	if len(leaf.IPAddresses) != 0 {
+		t.Errorf("leaf IP SANs = %v, want none", leaf.IPAddresses)
 	}
 }
 
@@ -188,36 +188,31 @@ func TestEnsureMTLSCertificateMissingClusterID(t *testing.T) {
 	}
 }
 
-func TestEnsureMTLSCertificatePublicIPRotationPreservesOldIP(t *testing.T) {
+func TestEnsureMTLSCertificateDNSOnlySANsAndPublicIPAnnotation(t *testing.T) {
 	controller, _, _ := newTestController(t)
 	cluster := testSeedCluster("42")
-	if _, err := controller.reconcile("", cluster); err != nil {
-		t.Fatalf("initial reconcile() error = %v", err)
-	}
-	first := certPEM(t, controller)
+	clusterStore := controller.clusters.(*fakeClusterStore)
+	clusterStore.set(cluster)
 
-	resolver := controller.opts.Resolver.(*fakeResolver)
-	resolver.ips = []string{"203.0.113.11"}
 	if _, err := controller.reconcile("", cluster); err != nil {
-		t.Fatalf("rotation reconcile() error = %v", err)
+		t.Fatalf("reconcile() error = %v", err)
 	}
-	rotated := certPEM(t, controller)
-	if string(rotated) == string(first) {
-		t.Fatal("certificate did not rotate after a DNS change")
+
+	leaf := firstCertificate(t, certPEM(t, controller))
+	if len(leaf.IPAddresses) != 0 {
+		t.Errorf("leaf IP SANs = %v, want none", leaf.IPAddresses)
 	}
-	leaf := firstCertificate(t, rotated)
-	for _, want := range []string{"203.0.113.10", "203.0.113.11"} {
-		if !certHasIP(leaf.IPAddresses, want) {
-			t.Errorf("rotated leaf IP SANs %v do not contain %q", leaf.IPAddresses, want)
+	for _, want := range []string{
+		"grpc.example.com",
+		"manager-api.example.com",
+		"d7y-scheduler.c-m-test.example.com",
+	} {
+		if !slices.Contains(leaf.DNSNames, want) {
+			t.Errorf("leaf DNS SANs %v do not contain %q", leaf.DNSNames, want)
 		}
 	}
-
-	// A stable DNS answer after the rotation is a no-op.
-	if _, err := controller.reconcile("", cluster); err != nil {
-		t.Fatalf("stable reconcile() error = %v", err)
-	}
-	if got := certPEM(t, controller); string(got) != string(rotated) {
-		t.Error("certificate rotated without a SAN change")
+	if got := clusterStore.annotation(helmop.AnnotationSchedulerPublicIP); got != "203.0.113.10" {
+		t.Errorf("scheduler public IP annotation = %q, want the resolved IP", got)
 	}
 }
 
@@ -237,15 +232,6 @@ func firstCertificate(t *testing.T, certPEM []byte) *x509.Certificate {
 		t.Fatalf("parse certificate: %v", err)
 	}
 	return certs[0]
-}
-
-func certHasIP(ips []net.IP, want string) bool {
-	for _, ip := range ips {
-		if ip.String() == want {
-			return true
-		}
-	}
-	return false
 }
 
 func containsString(values []string, want string) bool {
@@ -288,11 +274,8 @@ func TestManagerOnlyBootstrapsMissingCertificate(t *testing.T) {
 	if !containsString(leaf.DNSNames, "grpc.example.com") {
 		t.Errorf("bootstrap leaf DNS SANs = %v", leaf.DNSNames)
 	}
-	if len(leaf.IPAddresses) != 2 {
-		t.Errorf("bootstrap leaf IP SANs = %v, want only loopbacks", leaf.IPAddresses)
-	}
-	if certHasIP(leaf.IPAddresses, "203.0.113.10") {
-		t.Error("manager-only bootstrap unexpectedly added a public IP")
+	if len(leaf.IPAddresses) != 0 {
+		t.Errorf("bootstrap leaf IP SANs = %v, want none", leaf.IPAddresses)
 	}
 }
 

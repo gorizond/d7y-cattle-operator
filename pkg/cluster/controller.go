@@ -551,11 +551,13 @@ func schedulerHost(domain, clusterID string) string {
 }
 
 // ensureMTLSCertificate creates or updates the operator P2P Secret from the
-// scheduler host resolved at reconcile time. Seed clusters own the full SAN set:
-// resolved public IPs, the per-cluster scheduler DNS names, and manager DNS. A
-// DNS failure leaves the existing certificate untouched and returns an error so
-// the reconcile is retried. Manager-only clusters only bootstrap a missing
-// Secret and never rewrite an existing one (a seed reconcile owns the SAN set).
+// scheduler host resolved at reconcile time. Seed clusters own the DNS SAN set:
+// the per-cluster scheduler hostnames and manager DNS. The resolved public
+// address is returned for advertiseIP and the extras target; it is not a
+// certificate identity. A DNS failure leaves the existing certificate untouched
+// and returns an error so the reconcile is retried. Manager-only clusters only
+// bootstrap a missing Secret and never rewrite an existing one (a seed
+// reconcile owns the SAN set).
 func (c *Controller) ensureMTLSCertificate(cluster *provv1.Cluster, roles Roles) (string, error) {
 	if !roles.Manager && !roles.Seed {
 		return "", nil
@@ -601,17 +603,10 @@ func (c *Controller) ensureMTLSCertificate(cluster *provv1.Cluster, roles Roles)
 		c.event(cluster, corev1.EventTypeWarning, "SchedulerDNSResolutionFailed", msg)
 		return "", errors.New(msg)
 	}
-	publicIPs := resolvedIPs
-	if getErr == nil {
-		publicIPs = append(publicIPs, existingPublicIPs(existing)...)
-	}
-	publicIPs = dedupeStrings(publicIPs)
-
 	bundle, err := pki.Generate(pki.Options{
-		ManagerGRPCDomain:  c.opts.ManagerGRPCDomain,
-		ManagerAPIURL:      c.opts.ManagerAPIURL,
-		SchedulerPublicIPs: publicIPs,
-		SchedulerHosts:     append(existingSchedulerHosts(existing), host),
+		ManagerGRPCDomain: c.opts.ManagerGRPCDomain,
+		ManagerAPIURL:     c.opts.ManagerAPIURL,
+		SchedulerHosts:    append(existingSchedulerHosts(existing), host),
 	})
 	if err != nil {
 		c.event(cluster, corev1.EventTypeWarning, "MTLSSecretUnavailable", err.Error())
@@ -636,7 +631,7 @@ func (c *Controller) ensureMTLSCertificate(cluster *provv1.Cluster, roles Roles)
 
 // bootstrapMTLSSecret creates a manager-identity-only Secret when no seed
 // cluster has created the full certificate yet. It never updates an existing
-// Secret, so it cannot strip public IP SANs.
+// Secret, so it cannot strip the seed-owned scheduler DNS SANs.
 func (c *Controller) bootstrapMTLSSecret(cluster *provv1.Cluster) error {
 	bundle, err := pki.Generate(pki.Options{
 		ManagerGRPCDomain: c.opts.ManagerGRPCDomain,
@@ -670,27 +665,6 @@ func validPublicIPs(resolved []string) []string {
 		ips = append(ips, ip.String())
 	}
 	return dedupeStrings(ips)
-}
-
-func existingPublicIPs(secret *corev1.Secret) []string {
-	if secret == nil {
-		return nil
-	}
-	certs, err := pki.ParseCertificates(secret.Data[corev1.TLSCertKey])
-	if err != nil || len(certs) == 0 {
-		return nil
-	}
-	ips := make([]string, 0, len(certs[0].IPAddresses))
-	for _, ip := range certs[0].IPAddresses {
-		// Keep previously resolved public addresses through DNS/IP rotation,
-		// but never retain loopback, link-local, private, multicast, or
-		// internal ClusterIP SANs.
-		if !pki.IsPublicIP(ip) {
-			continue
-		}
-		ips = append(ips, ip.String())
-	}
-	return ips
 }
 
 // existingSchedulerHosts keeps the scheduler DNS names already present in the
