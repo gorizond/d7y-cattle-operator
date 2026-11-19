@@ -34,6 +34,9 @@ func TestSharedHelmOpNamesAndReleases(t *testing.T) {
 		if entry.op.Spec.Helm == nil || entry.op.Spec.Helm.ReleaseName != entry.name {
 			t.Errorf("%s releaseName = %+v, want %q", component, entry.op.Spec.Helm, entry.name)
 		}
+		if entry.op.Spec.Helm == nil || !entry.op.Spec.Helm.TakeOwnership {
+			t.Errorf("%s takeOwnership = %+v, want true", component, entry.op.Spec.Helm)
+		}
 		if len(entry.op.Spec.Targets) != 1 || entry.op.Spec.Targets[0].ClusterName != "" {
 			t.Errorf("%s targets = %+v, want one selector target", component, entry.op.Spec.Targets)
 		}
@@ -168,6 +171,24 @@ func TestSharedNamesAreTemplates(t *testing.T) {
 		want := SharedClusterNameTemplate + "-" + suffix
 		if name != want {
 			t.Errorf("%s name = %q, want %q", suffix, name, want)
+		}
+	}
+}
+
+func TestPerClusterHelmOpsKeepStrictOwnership(t *testing.T) {
+	c := sharedTestCluster()
+	ops := map[string]*fleetv1alpha1.HelmOp{
+		"keydb":   KeyDB(c),
+		"control": Control(c),
+		"data":    Data(c),
+		"extras":  Extras(c, ExtrasOptions{IngressEnabled: true, Manager: true}),
+	}
+	for name, op := range ops {
+		if op.Spec.Helm == nil {
+			t.Fatalf("%s spec.helm is nil", name)
+		}
+		if op.Spec.Helm.TakeOwnership {
+			t.Errorf("%s takeOwnership = true, want strict ownership for a per-cluster release", name)
 		}
 	}
 }
