@@ -568,49 +568,76 @@ func (f backendFunc) Referrers(context.Context, string, string, string) ([]byte,
 }
 
 func TestServerBasicAuth(t *testing.T) {
-	server := directServer(&recordingBackend{})
 	username := fmt.Sprintf("test-user-%d", time.Now().UnixNano())
 	password := fmt.Sprintf("test-pass-%d", time.Now().UnixNano())
-	server.AuthUsername = username
-	server.AuthPassword = password
-
-	for _, target := range []string{
+	protected := []string{
+		"/v2",
+		"/v2/",
 		"/v2/docker.io/library/nginx/manifests/1.27",
-		"/healthz",
-	} {
+		"/docker.io/v2",
+		"/docker.io/v2/",
+		"/docker.io/v2/library/nginx/manifests/1.27",
+		"/registry.gitlab.com/v2/org/image/manifests/v1",
+	}
+	exempt := map[string]struct {
+		method string
+		want   int
+	}{
+		"/api/convert": {method: http.MethodPost, want: http.StatusAccepted},
+		"/healthz":     {method: http.MethodGet, want: http.StatusOK},
+		"/readyz":      {method: http.MethodGet, want: http.StatusOK},
+		"/metrics":     {method: http.MethodGet, want: http.StatusOK},
+	}
+
+	serve := func(server *Server, method, target, user, pass string) *httptest.ResponseRecorder {
+		req := httptest.NewRequest(method, target, nil)
+		if user != "" {
+			req.SetBasicAuth(user, pass)
+		}
 		rec := httptest.NewRecorder()
-		server.Handler().ServeHTTP(rec, httptest.NewRequest(http.MethodGet, target, nil))
-		want := http.StatusUnauthorized
-		if target == "/healthz" {
-			want = http.StatusOK
+		server.Handler().ServeHTTP(rec, req)
+		return rec
+	}
+
+	t.Run("enabled", func(t *testing.T) {
+		server := directServer(&recordingBackend{})
+		server.AuthUsername = username
+		server.AuthPassword = password
+		server.Convert = http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) { w.WriteHeader(http.StatusAccepted) })
+
+		for _, target := range protected {
+			if rec := serve(server, http.MethodGet, target, "", ""); rec.Code != http.StatusUnauthorized {
+				t.Errorf("%s anonymous = %d, want 401", target, rec.Code)
+			}
+			if rec := serve(server, http.MethodGet, target, username, password+"-wrong"); rec.Code != http.StatusUnauthorized {
+				t.Errorf("%s wrong password = %d, want 401", target, rec.Code)
+			}
+			if rec := serve(server, http.MethodGet, target, username, password); rec.Code != http.StatusOK {
+				t.Errorf("%s valid credentials = %d %q, want 200", target, rec.Code, rec.Body.String())
+			}
 		}
-		if rec.Code != want {
-			t.Errorf("%s anonymous = %d, want %d", target, rec.Code, want)
+		for target, tc := range exempt {
+			if rec := serve(server, tc.method, target, "", ""); rec.Code != tc.want {
+				t.Errorf("%s without credentials = %d, want %d", target, rec.Code, tc.want)
+			}
 		}
-	}
+	})
 
-	req := httptest.NewRequest(http.MethodGet, "/v2/docker.io/library/nginx/manifests/1.27", nil)
-	req.SetBasicAuth(username, password+"-wrong")
-	rec := httptest.NewRecorder()
-	server.Handler().ServeHTTP(rec, req)
-	if rec.Code != http.StatusUnauthorized {
-		t.Errorf("wrong password = %d, want 401", rec.Code)
-	}
+	t.Run("disabled", func(t *testing.T) {
+		server := directServer(&recordingBackend{})
+		server.Convert = http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) { w.WriteHeader(http.StatusAccepted) })
 
-	req = httptest.NewRequest(http.MethodGet, "/v2/docker.io/library/nginx/manifests/1.27", nil)
-	req.SetBasicAuth(username, password)
-	rec = httptest.NewRecorder()
-	server.Handler().ServeHTTP(rec, req)
-	if rec.Code != http.StatusOK {
-		t.Errorf("valid basic auth = %d %q", rec.Code, rec.Body.String())
-	}
-
-	server.Convert = http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) { w.WriteHeader(http.StatusAccepted) })
-	rec = httptest.NewRecorder()
-	server.Handler().ServeHTTP(rec, httptest.NewRequest(http.MethodPost, "/api/convert", nil))
-	if rec.Code != http.StatusAccepted {
-		t.Errorf("/api/convert must use its own Bearer secret, got %d", rec.Code)
-	}
+		for _, target := range protected {
+			if rec := serve(server, http.MethodGet, target, "", ""); rec.Code != http.StatusOK {
+				t.Errorf("%s without auth = %d %q, want 200", target, rec.Code, rec.Body.String())
+			}
+		}
+		for target, tc := range exempt {
+			if rec := serve(server, tc.method, target, "", ""); rec.Code != tc.want {
+				t.Errorf("%s without auth = %d, want %d", target, rec.Code, tc.want)
+			}
+		}
+	})
 }
 
 func TestServerDirectRefProvisioningIsLazyAndAllowlisted(t *testing.T) {
