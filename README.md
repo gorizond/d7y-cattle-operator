@@ -48,7 +48,9 @@ pilot verification; remaining items are listed under Follow-ups.
   `<proxy.domain>/<registry>/<repo>:<tag>`,
   preserves `@sha256`, and is independent of Harbor/proxy/seed. The
   `p2p.dragonfly.io/mutate-exclure` annotation adds per-cluster namespace
-  exclusions to the webhook's `namespaceSelector`. The webhook Deployment runs
+  exclusions to the webhook's `namespaceSelector`; the shared release renders
+  it through Fleet's values template into a real YAML list (an absent
+  annotation renders an empty list). The webhook Deployment runs
   the operator image: the operator passes `image.repository`/`image.tag` from
   its `OPERATOR_IMAGE_REPOSITORY`/`OPERATOR_IMAGE_TAG` environment to the
   admission HelmOp; the chart `appVersion` is only a fallback when the operator
@@ -253,8 +255,6 @@ releases keep fixed defaults:
   ServiceMonitor).
 - `p2p.dragonfly.io/p2p-data-tls`: the shared data release uses the default
   plaintext P2P data path.
-- `p2p.dragonfly.io/mutate-exclure`: the shared admission release keeps only the
-  chart's system-namespace exclusions; the extra list is ignored.
 - The shared extras release enables the manager Ingress unconditionally. A seed
   Cluster without a local manager renders an Ingress with no local backend.
 - A seed-labeled Cluster without `p2p.dragonfly.io/scheduler-cluster-id`

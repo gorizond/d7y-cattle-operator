@@ -1,6 +1,7 @@
 package cluster
 
 import (
+	"strings"
 	"testing"
 
 	provv1 "github.com/rancher/rancher/pkg/apis/provisioning.cattle.io/v1"
@@ -287,11 +288,10 @@ func TestReconcileAdmissionCleanupLeavesUnlabeledBundle(t *testing.T) {
 	}
 }
 
-// TestSharedAdmissionIgnoresClusterExcludeList documents a deliberate
-// limitation: the excluded-namespace list is a per-Cluster annotation and Fleet
-// values templates cannot render a YAML list, so the shared release keeps the
-// chart's system-namespace exclusions only.
-func TestSharedAdmissionIgnoresClusterExcludeList(t *testing.T) {
+// TestSharedAdmissionTemplatesClusterExcludeList verifies that the shared
+// release passes the per-Cluster mutate-exclure annotation as a Fleet values
+// template string, which Fleet renders into a real YAML list at deploy time.
+func TestSharedAdmissionTemplatesClusterExcludeList(t *testing.T) {
 	controller, store, _ := newTestController(t)
 	cluster := admissionCluster()
 	cluster.Annotations[AnnotationAdmissionExclude] = " ns-a, ns-b "
@@ -299,12 +299,19 @@ func TestSharedAdmissionIgnoresClusterExcludeList(t *testing.T) {
 		t.Fatalf("reconcile() error = %v", err)
 	}
 	raw, ok := valueAtPath(t, helmValues(t, store.object("fleet-default/"+helmop.SharedAdmissionName())),
-		"namespaceSelector", "excludedNamespaces").([]any)
+		"namespaceSelector", "excludedNamespaces").(string)
 	if !ok {
-		t.Fatalf("namespaceSelector.excludedNamespaces = %T, want []any",
+		t.Fatalf("namespaceSelector.excludedNamespaces = %T, want the Fleet template string",
 			valueAtPath(t, helmValues(t, store.object("fleet-default/"+helmop.SharedAdmissionName())), "namespaceSelector", "excludedNamespaces"))
 	}
-	if len(raw) != 0 {
-		t.Errorf("namespaceSelector.excludedNamespaces = %v, want empty for the shared release", raw)
+	for _, want := range []string{
+		`index .ClusterAnnotations "p2p.dragonfly.io/mutate-exclure"`,
+		`splitList ","`,
+		`trim $v | quote`,
+		`]${ else }[]`,
+	} {
+		if !strings.Contains(raw, want) {
+			t.Errorf("shared admission excludedNamespaces template lacks %q: %s", want, raw)
+		}
 	}
 }

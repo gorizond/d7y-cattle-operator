@@ -147,6 +147,72 @@ func TestSharedValuesUseFleetTemplates(t *testing.T) {
 	if admission.Spec.TargetNamespace != "" || admission.Spec.DefaultNamespace != TargetNamespace {
 		t.Errorf("admission namespaces = %q/%q", admission.Spec.TargetNamespace, admission.Spec.DefaultNamespace)
 	}
+	admissionValues := admission.Spec.Helm.Values.Data
+	excluded, ok := valueAt(t, admissionValues, "namespaceSelector", "excludedNamespaces").(string)
+	if !ok || excluded != sharedAdmissionExcludedNamespacesTemplate {
+		t.Errorf("admission excludedNamespaces = %v, want the mutate-exclure template", excluded)
+	}
+	for _, want := range []string{
+		`index .ClusterAnnotations "p2p.dragonfly.io/mutate-exclure"`,
+		`splitList ","`,
+		`trim $v | quote`,
+		`]${ else }[]`,
+	} {
+		if !strings.Contains(sharedAdmissionExcludedNamespacesTemplate, want) {
+			t.Errorf("admission template lacks %q", want)
+		}
+	}
+
+	// The legacy per-cluster builder still passes the parsed list.
+	perCluster := c
+	perCluster.AdmissionExcludeNamespaces = []string{"ns-a", "ns-b"}
+	perClusterValues := Admission(perCluster).Spec.Helm.Values.Data
+	parsed, ok := valueAt(t, perClusterValues, "namespaceSelector", "excludedNamespaces").([]string)
+	if !ok || len(parsed) != 2 || parsed[0] != "ns-a" || parsed[1] != "ns-b" {
+		t.Errorf("per-cluster excludedNamespaces = %v, want [ns-a ns-b]", parsed)
+	}
+
+	// No other shared component may consume the admission annotation.
+	for name, op := range map[string]*fleetv1alpha1.HelmOp{
+		"keydb":   SharedKeyDB(c),
+		"manager": SharedManager(c),
+		"control": SharedControl(c),
+		"data":    SharedData(c),
+		"extras":  SharedExtras(c, ExtrasOptions{}),
+		"mirror":  SharedMirror(c),
+		"proxy":   SharedRegistryProxy(c),
+		"harbor":  SharedHarbor(c),
+	} {
+		if valuesContain(op.Spec.Helm.Values.Data, "mutate-exclure") {
+			t.Errorf("%s values unexpectedly consume the mutate-exclure annotation", name)
+		}
+	}
+}
+
+func valuesContain(value any, substring string) bool {
+	switch typed := value.(type) {
+	case string:
+		return strings.Contains(typed, substring)
+	case map[string]any:
+		for _, child := range typed {
+			if valuesContain(child, substring) {
+				return true
+			}
+		}
+	case []any:
+		for _, child := range typed {
+			if valuesContain(child, substring) {
+				return true
+			}
+		}
+	case []string:
+		for _, child := range typed {
+			if strings.Contains(child, substring) {
+				return true
+			}
+		}
+	}
+	return false
 }
 
 func TestSchedulerHostTemplate(t *testing.T) {
