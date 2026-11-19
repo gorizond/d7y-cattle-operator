@@ -76,6 +76,20 @@ entries:
     version: 0.1.0
   d7y-cattle-operator:
   - apiVersion: v2
+    appVersion: 0.1.64
+    created: "2026-11-19T23:11:46.357594004Z"
+    description: Dragonfly P2P operator for Rancher-managed RKE2 clusters
+    digest: 28cc4303b569b2c58ec44d4a3bcd82710b67417a53456c4de46b96e4223338c7
+    home: https://github.com/gorizond/d7y-cattle-operator
+    kubeVersion: '>=1.28.0-0'
+    name: d7y-cattle-operator
+    sources:
+    - https://github.com/gorizond/d7y-cattle-operator
+    type: application
+    urls:
+    - https://github.com/gorizond/d7y-cattle-operator/releases/download/d7y-cattle-operator-0.1.64/d7y-cattle-operator-0.1.64.tgz
+    version: 0.1.64
+  - apiVersion: v2
     appVersion: 0.1.63
     created: "2026-11-19T22:23:39.183040729Z"
     description: Dragonfly P2P operator for Rancher-managed RKE2 clusters
@@ -1116,6 +1130,20 @@ entries:
   registry-proxy:
   - apiVersion: v2
     appVersion: 0.1.45
+    created: "2026-11-19T23:11:46.720643615Z"
+    description: Smart OCI registry proxy fronting Harbor for Dragonfly/nydus clusters
+    digest: 2f7796c694007971c0a06985e79e120b6e0048488e01cadef30cb38621302924
+    home: https://github.com/gorizond/d7y-cattle-operator
+    kubeVersion: '>=1.28.0-0'
+    name: registry-proxy
+    sources:
+    - https://github.com/gorizond/d7y-cattle-operator
+    type: application
+    urls:
+    - https://github.com/gorizond/d7y-cattle-operator/releases/download/registry-proxy-0.1.22/registry-proxy-0.1.22.tgz
+    version: 0.1.22
+  - apiVersion: v2
+    appVersion: 0.1.45
     created: "2026-11-19T18:44:31.056633225Z"
     description: Smart OCI registry proxy fronting Harbor for Dragonfly/nydus clusters
     digest: 1659b37e3fe6441650dc7b78aba6e5704d89c02789f659e95240bace5f6fd837
@@ -1394,4 +1422,4 @@ entries:
     urls:
     - https://github.com/gorizond/d7y-cattle-operator/releases/download/registry-proxy-0.1.0/registry-proxy-0.1.0.tgz
     version: 0.1.0
-generated: "2026-11-19T22:23:39.910854961Z"
+generated: "2026-11-19T23:11:46.721029563Z"
