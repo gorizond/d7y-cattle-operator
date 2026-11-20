@@ -10,7 +10,8 @@ data:
     client_header_buffer_size 32k;
 
     server {
-        listen 8080;
+        listen 80;
+        listen [::]:80;
         server_name _;
         server_tokens off;
         root /usr/share/nginx/static;
@@ -45,4 +46,4 @@ data:
         }
     }
   p2p-install.sh.tmpl: |-
-{{ .Files.Get "files/p2p-install.sh" | replace "__NYDUS_CLUSTER_ID__" (default "" .Values.nydus.clusterId) | nindent 4 }}
+{{ .Files.Get "files/p2p-install.sh" | replace "__NYDUS_CLUSTER_ID__" (default "" .Values.nydus.clusterId) | indent 4 }}

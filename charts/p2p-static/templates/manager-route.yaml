@@ -8,11 +8,13 @@ metadata:
   labels:
     {{- include "p2p-static.labels" . | nindent 4 }}
 spec:
+  ingressClassName: {{ .Values.ingress.className | default "traefik" | quote }}
   entryPoints:
     - {{ .Values.manager.entryPoint | quote }}
   routes:
     - match: {{ printf "Host(`%s`) && (PathPrefix(`/p2p-install.sh`) || PathPrefix(`/bin`) || PathPrefix(`/nydus`))" $host | quote }}
       kind: Rule
+      priority: 1000
       services:
         - name: {{ include "p2p-static.fullname" . | quote }}
           port: {{ .Values.service.port }}

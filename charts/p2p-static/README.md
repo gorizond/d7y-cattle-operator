@@ -33,7 +33,8 @@ helm install p2p-static charts/p2p-static \
   --set manager.tlsSecret=manager-tls
 ```
 
-`manager.entryPoint` defaults to `websecure`. The route matches
+`manager.entryPoint` defaults to `websecure`; the IngressRoute uses
+`ingress.className` (default `traefik`). The route matches
 `Host("<manager-host>")` plus `PathPrefix("/p2p-install.sh")`,
 `PathPrefix("/bin")`, or `PathPrefix("/nydus")`, and forwards to the
 `p2p-static` Service. The manager REST API keeps its own `/api` paths; these
