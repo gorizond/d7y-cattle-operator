@@ -516,3 +516,62 @@ func (f *fakeEvents) Create(event *corev1.Event) (*corev1.Event, error) {
 	f.events = append(f.events, event)
 	return event, nil
 }
+
+func TestHetznerUserDataFromFileEnabled(t *testing.T) {
+	handler, _, _ := newTestHandler()
+	object := map[string]any{
+		"apiVersion": MachineConfigGroup + "/" + MachineConfigVersion,
+		"kind":       "HetznerConfig",
+		"metadata": map[string]any{
+			"name":      "c1-pool1",
+			"namespace": "fleet-default",
+			"labels":    map[string]any{LabelEnabled: "true"},
+			"annotations": map[string]any{
+				AnnotationSeed:             "true",
+				AnnotationSchedulerCluster: "1",
+			},
+		},
+		"userData":         testUserData,
+		"userDataFromFile": false,
+	}
+	raw, err := json.Marshal(object)
+	if err != nil {
+		t.Fatalf("marshal object: %v", err)
+	}
+	req := &wranglerwebhook.Request{
+		AdmissionRequest: admissionv1.AdmissionRequest{
+			UID:       "uid",
+			Operation: admissionv1.Create,
+			Kind:      metav1.GroupVersionKind{Group: MachineConfigGroup, Version: MachineConfigVersion, Kind: "HetznerConfig"},
+			Resource:  metav1.GroupVersionResource{Group: MachineConfigGroup, Version: MachineConfigVersion, Resource: "hetznerconfigs"},
+			Namespace: "fleet-default",
+			Name:      "c1-pool1",
+			Object:    runtime.RawExtension{Raw: raw},
+		},
+		ObjTemplate: &unstructured.Unstructured{},
+	}
+
+	resp := &wranglerwebhook.Response{AdmissionResponse: admissionv1.AdmissionResponse{Allowed: true}}
+	if err := handler.Admit(resp, req); err != nil {
+		t.Fatalf("Admit() error = %v", err)
+	}
+	patch := decodeJSONPatch(t, resp)
+	var userDataPatched, fromFilePatched bool
+	for _, op := range patch {
+		switch op.Path {
+		case "/userData":
+			userDataPatched = true
+		case "/userDataFromFile":
+			fromFilePatched = true
+			if op.Value != true {
+				t.Errorf("userDataFromFile value = %v, want true", op.Value)
+			}
+		}
+	}
+	if !userDataPatched {
+		t.Errorf("userData was not patched: %s", resp.Patch)
+	}
+	if !fromFilePatched {
+		t.Errorf("userDataFromFile was not patched: %s", resp.Patch)
+	}
+}

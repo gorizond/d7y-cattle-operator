@@ -199,19 +199,46 @@ func (h *Handler) Admit(resp *wranglerwebhook.Response, req *wranglerwebhook.Req
 	if !changed {
 		return nil
 	}
-	path := "/" + nodeConfigKey
+	specNested := false
 	if _, ok := config.Object["spec"].(map[string]any); ok {
+		specNested = true
+	}
+	path := "/" + nodeConfigKey
+	if specNested {
 		path = "/spec/" + nodeConfigKey
 	}
 	op := "replace"
 	if !present {
 		op = "add"
 	}
-	patch, err := json.Marshal([]jsonPatchOperation{{
+	ops := []jsonPatchOperation{{
 		Op:    op,
 		Path:  path,
 		Value: patched,
-	}})
+	}}
+	// HetznerConfig is the only rke-machine-config kind that declares
+	// userDataFromFile. Rancher merges the generated install script into a
+	// temporary file and passes that path on --hetzner-user-data, so the driver
+	// must read the path as a file instead of treating it as inline content.
+	if nodeConfigKey == defaultNodeConfigKey {
+		fromFile, found, err := nodeConfigBool(config.Object, specNested, "userDataFromFile")
+		if err != nil {
+			h.event(req, "NodeConfigMalformed", err)
+			return nil
+		}
+		if found && !fromFile {
+			prefix := ""
+			if specNested {
+				prefix = "/spec"
+			}
+			ops = append(ops, jsonPatchOperation{
+				Op:    "replace",
+				Path:  prefix + "/userDataFromFile",
+				Value: true,
+			})
+		}
+	}
+	patch, err := json.Marshal(ops)
 	if err != nil {
 		h.event(req, "PatchCreateFailed", err)
 		return nil
@@ -237,6 +264,15 @@ func nodeConfigValue(object map[string]any, key string) (string, bool, error) {
 		return unstructured.NestedString(object, "spec", key)
 	}
 	return unstructured.NestedString(object, key)
+}
+
+// nodeConfigBool reads a boolean node-config field. Only HetznerConfig declares
+// userDataFromFile, so found is false for every other machine config kind.
+func nodeConfigBool(object map[string]any, specNested bool, key string) (bool, bool, error) {
+	if specNested {
+		return unstructured.NestedBool(object, "spec", key)
+	}
+	return unstructured.NestedBool(object, key)
 }
 
 func schedulerHost(domain, clusterID string) string {
