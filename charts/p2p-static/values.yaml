@@ -12,6 +12,15 @@ service:
   type: ClusterIP
   port: 80
 
+# Serve /p2p-install.sh and the static /bin,/nydus assets on the manager host.
+# The manager REST API keeps its own /api paths; these prefixes do not overlap.
+manager:
+  enabled: false
+  host: ""
+  entryPoint: websecure
+  # TLS Secret for the manager host (for example the manager public cert secret).
+  tlsSecret: ""
+
 ingress:
   # When enabled, each hosts[].host must be set and must match the published
   # static URL.

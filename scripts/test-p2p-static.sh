@@ -87,6 +87,22 @@ if grep -q 'kind: PersistentVolumeClaim' "$tmp/p2p-static.yaml"; then
   fail "p2p-static must not render a PVC"
 fi
 
+if grep -q 'kind: IngressRoute' "$tmp/p2p-static.yaml"; then
+  fail "p2p-static must not render a manager route by default"
+fi
+
+helm template p2p-static "$root/charts/p2p-static" --namespace dragonfly-system \
+  --set manager.enabled=true --set manager.host=manager.example.com \
+  --set manager.tlsSecret=manager-tls >"$tmp/p2p-static-manager.yaml"
+grep -q 'kind: IngressRoute' "$tmp/p2p-static-manager.yaml" || fail "p2p-static manager IngressRoute missing"
+grep -q 'Host(`manager.example.com`)' "$tmp/p2p-static-manager.yaml" || fail "p2p-static manager host match missing"
+grep -q 'PathPrefix(`/p2p-install.sh`)' "$tmp/p2p-static-manager.yaml" || fail "p2p-static install path missing"
+grep -q 'PathPrefix(`/bin`)' "$tmp/p2p-static-manager.yaml" || fail "p2p-static /bin path missing"
+grep -q 'PathPrefix(`/nydus`)' "$tmp/p2p-static-manager.yaml" || fail "p2p-static /nydus path missing"
+grep -q 'kind: Rule' "$tmp/p2p-static-manager.yaml" || fail "p2p-static manager route kind missing"
+grep -q 'name: "p2p-static"' "$tmp/p2p-static-manager.yaml" || fail "p2p-static manager service missing"
+grep -q 'secretName: "manager-tls"' "$tmp/p2p-static-manager.yaml" || fail "p2p-static manager TLS Secret missing"
+
 helm template p2p-static "$root/charts/p2p-static" --namespace dragonfly-system \
   --set nydus.clusterId=example-node >"$tmp/p2p-static-values.yaml"
 grep -q 'NYDUS_CLUSTER_ID_DEFAULT="example-node"' "$tmp/p2p-static-values.yaml" || fail "p2p-static chart value nydus.clusterId did not render"
