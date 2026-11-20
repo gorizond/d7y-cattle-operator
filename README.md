@@ -78,13 +78,14 @@ flowchart TB
   subgraph NODE["Node"]
     PAY -.-> P["p2p-install.sh on node<br/>host nydus + dfdaemon bootstrap"]
   end
-  P --> CL
+  P -.->|"host bootstrap"| P2P
   PODS["Pods"] --> CTD["containerd"] --> CL
   CL --> P2P["Dragonfly P2P"] --> SCH
   P2P --> SC
   EX -->|"gRPC 65003 mTLS / REST 8080 JWT"| MGR
   EX -->|"TCP 8002 TLS passthrough"| SCH
   CLIENT["External clients"] --> PUB["d7y-scheduler.&lt;cluster-id&gt;.&lt;domain&gt;"] --> EX
+  CLIENT -->|"manager gRPC/REST"| EX
 ```
 
 ### Data flow
