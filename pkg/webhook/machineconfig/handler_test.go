@@ -392,43 +392,72 @@ func patchedUserData(t *testing.T, resp *wranglerwebhook.Response) string {
 	return patchedNodeConfig(t, resp, "userData")
 }
 
-func patchedRootNodeConfig(t *testing.T, resp *wranglerwebhook.Response, key string) string {
+type patchOperation struct {
+	Op    string `json:"op"`
+	Path  string `json:"path"`
+	Value any    `json:"value"`
+}
+
+func decodeJSONPatch(t *testing.T, resp *wranglerwebhook.Response) []patchOperation {
 	t.Helper()
+	if resp.PatchType == nil || *resp.PatchType != admissionv1.PatchTypeJSONPatch {
+		t.Fatalf("PatchType = %v, want JSONPatch", resp.PatchType)
+	}
 	if len(resp.Patch) == 0 {
 		t.Fatal("response has no patch")
 	}
-	var patch map[string]any
+	var patch []patchOperation
 	if err := json.Unmarshal(resp.Patch, &patch); err != nil {
-		t.Fatalf("decode patch: %v", err)
+		t.Fatalf("decode JSON patch: %v", err)
 	}
-	if spec, ok := patch["spec"]; ok {
-		t.Fatalf("root-level patch created spec: %#v", spec)
+	if len(patch) == 0 {
+		t.Fatal("JSON patch is empty")
 	}
-	nodeConfig, ok := patch[key].(string)
-	if !ok {
-		t.Fatalf("patch %s = %#v", key, patch[key])
-	}
-	return nodeConfig
+	return patch
 }
 
 func patchedNodeConfig(t *testing.T, resp *wranglerwebhook.Response, key string) string {
 	t.Helper()
-	if len(resp.Patch) == 0 {
-		t.Fatal("response has no patch")
+	path := "/spec/" + key
+	for _, op := range decodeJSONPatch(t, resp) {
+		if op.Path != path {
+			continue
+		}
+		if op.Op != "replace" && op.Op != "add" {
+			t.Fatalf("patch op for %s = %q, want replace or add", path, op.Op)
+		}
+		nodeConfig, ok := op.Value.(string)
+		if !ok {
+			t.Fatalf("patch %s value = %#v", path, op.Value)
+		}
+		return nodeConfig
 	}
-	var patch map[string]any
-	if err := json.Unmarshal(resp.Patch, &patch); err != nil {
-		t.Fatalf("decode patch: %v", err)
+	t.Fatalf("JSON patch does not contain %s", path)
+	return ""
+}
+
+func patchedRootNodeConfig(t *testing.T, resp *wranglerwebhook.Response, key string) string {
+	t.Helper()
+	path := "/" + key
+	patch := decodeJSONPatch(t, resp)
+	for _, op := range patch {
+		if op.Path == "/spec" || strings.HasPrefix(op.Path, "/spec/") {
+			t.Fatalf("root-level patch contains spec path %q", op.Path)
+		}
+		if op.Path != path {
+			continue
+		}
+		if op.Op != "replace" && op.Op != "add" {
+			t.Fatalf("patch op for %s = %q, want replace or add", path, op.Op)
+		}
+		nodeConfig, ok := op.Value.(string)
+		if !ok {
+			t.Fatalf("patch %s value = %#v", path, op.Value)
+		}
+		return nodeConfig
 	}
-	spec, ok := patch["spec"].(map[string]any)
-	if !ok {
-		t.Fatalf("patch spec = %#v", patch["spec"])
-	}
-	nodeConfig, ok := spec[key].(string)
-	if !ok {
-		t.Fatalf("patch %s = %#v", key, spec[key])
-	}
-	return nodeConfig
+	t.Fatalf("JSON patch does not contain %s", path)
+	return ""
 }
 
 func extractCFG(t *testing.T, userData string) string {
