@@ -491,6 +491,7 @@ type fakeClusterStore struct {
 	mu            sync.Mutex
 	cluster       *provv1.Cluster
 	updates       int
+	updateErr     error
 	statusUpdates int
 	statusErr     error
 }
@@ -509,6 +510,9 @@ func (f *fakeClusterStore) Update(cluster *provv1.Cluster) (*provv1.Cluster, err
 	f.mu.Lock()
 	defer f.mu.Unlock()
 	f.updates++
+	if f.updateErr != nil {
+		return nil, f.updateErr
+	}
 	f.cluster = cluster.DeepCopy()
 	return f.cluster.DeepCopy(), nil
 }
@@ -545,6 +549,7 @@ func (f *fakeClusterStore) deliver(cluster *provv1.Cluster) {
 		cluster.Annotations[key] = value
 	}
 	cluster.ResourceVersion = f.cluster.ResourceVersion
+	cluster.Spec = *f.cluster.Spec.DeepCopy()
 }
 
 func (f *fakeClusterStore) annotation(key string) string {

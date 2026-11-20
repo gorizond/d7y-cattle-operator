@@ -97,7 +97,7 @@ func dataValues(c Cluster, names Names, schedulerAddr string) map[string]any {
 			"download":  map[string]any{"server": map[string]any{"requestRateLimit": 500}},
 			"proxy": map[string]any{
 				"ip":     "127.0.0.1",
-				"server": map[string]any{"port": 4001, "requestRateLimit": 500},
+				"server": map[string]any{"port": mirrorPort(c), "requestRateLimit": 500},
 				// Always schedule blob pulls through the node client: the live
 				// demo-data client needed 500 rps and "always" to stop
 				// falling back to the origin.

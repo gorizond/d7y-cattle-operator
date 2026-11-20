@@ -216,12 +216,14 @@ type Chart struct {
 
 // Cluster carries the per-cluster inputs shared by the HelmOp builders.
 type Cluster struct {
-	Name              string
-	Namespace         string
-	MTLSSecretName    string
-	Chart             Chart
-	ExtrasChart       Chart
-	MirrorChart       Chart
+	Name           string
+	Namespace      string
+	MTLSSecretName string
+	Chart          Chart
+	ExtrasChart    Chart
+	MirrorChart    Chart
+	// MirrorPort is the node-local dfdaemon/containerd mirror port.
+	MirrorPort        int
 	ManagerGRPCDomain string
 	ManagerGRPCPort   int
 	ManagerAPIHost    string

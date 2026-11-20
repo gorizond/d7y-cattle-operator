@@ -42,6 +42,7 @@ type Options struct {
 	MTLSSecretName              string
 	ManagerGRPCDomain           string
 	ManagerGRPCPort             int
+	ContainerdMirrorPort        int
 	ManagerAPIHost              string
 	ManagerAPIURL               string
 	ManagerAPICredentialsSecret string
@@ -62,12 +63,13 @@ type Options struct {
 
 // Controller reconciles provisioning.cattle.io/v1 Clusters.
 type Controller struct {
-	ctx     context.Context
-	secrets apply.SecretStore
-	events  eventStore
-	helmops apply.Store
-	bundles apply.Store
-	opts    Options
+	ctx        context.Context
+	secrets    apply.SecretStore
+	configmaps configMapStore
+	events     eventStore
+	helmops    apply.Store
+	bundles    apply.Store
+	opts       Options
 
 	clusters clusterStore
 
@@ -79,15 +81,16 @@ type Controller struct {
 
 // Register wires the Cluster controller. Handlers must be registered before
 // the factories are started.
-func Register(ctx context.Context, clusters provctl.ClusterController, secrets corectl.SecretController, events corectl.EventController, helmops, bundles apply.Store, opts Options) {
+func Register(ctx context.Context, clusters provctl.ClusterController, secrets corectl.SecretController, configmaps corectl.ConfigMapController, events corectl.EventController, helmops, bundles apply.Store, opts Options) {
 	c := &Controller{
-		ctx:      ctx,
-		secrets:  secrets,
-		events:   events,
-		helmops:  helmops,
-		bundles:  bundles,
-		clusters: clusters,
-		opts:     opts,
+		ctx:        ctx,
+		secrets:    secrets,
+		configmaps: configmaps,
+		events:     events,
+		helmops:    helmops,
+		bundles:    bundles,
+		clusters:   clusters,
+		opts:       opts,
 	}
 	clusters.OnChange(ctx, controllerName, c.reconcile)
 }
@@ -120,6 +123,17 @@ func (c *Controller) reconcile(key string, cluster *provv1.Cluster) (result *pro
 		return cluster, nil
 	}
 	status.rolesResolved(true, roles.Manager, roles.Seed)
+
+	if updated, err := c.ensureContainerdHosts(cluster); err != nil {
+		c.event(cluster, corev1.EventTypeWarning, "ContainerdHostsFailed", err.Error())
+		status.set(conditionContainerdHostsReady, false, "ApplyFailed", err.Error())
+	} else {
+		status.set(conditionContainerdHostsReady, true, "Ready", "containerd registry mirror hosts are reconciled")
+		if updated != nil {
+			cluster = updated
+			status.rebase(updated)
+		}
+	}
 
 	hc := c.helmopCluster(cluster)
 	c.warnUnsupportedChartVersion(cluster, hc.Chart.Version)
@@ -294,6 +308,7 @@ func (c *Controller) helmopCluster(cluster *provv1.Cluster) helmop.Cluster {
 		Chart:                       c.opts.DragonflyChart,
 		ExtrasChart:                 c.opts.ExtrasChart,
 		MirrorChart:                 c.opts.MirrorChart,
+		MirrorPort:                  c.opts.ContainerdMirrorPort,
 		ManagerGRPCDomain:           c.opts.ManagerGRPCDomain,
 		P2PDomain:                   c.opts.P2PDomain,
 		ManagerGRPCPort:             c.opts.ManagerGRPCPort,

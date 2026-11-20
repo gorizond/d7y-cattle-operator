@@ -44,3 +44,16 @@ func TestMirrorHelmOp(t *testing.T) {
 		t.Error("mirror values request persistence")
 	}
 }
+
+func TestMirrorPortFlowsToMirrorAndClientProxy(t *testing.T) {
+	c := testCluster()
+	c.MirrorPort = 4101
+	mirrorValues := Mirror(c).Spec.Helm.Values.Data
+	if got := valueAt(t, mirrorValues, "port"); got != 4101 {
+		t.Errorf("mirror port = %v, want 4101", got)
+	}
+	dataValues := Data(c).Spec.Helm.Values.Data
+	if got := valueAt(t, dataValues, "client", "config", "proxy", "server", "port"); got != 4101 {
+		t.Errorf("client proxy port = %v, want 4101", got)
+	}
+}

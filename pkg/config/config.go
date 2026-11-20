@@ -18,6 +18,7 @@ import (
 const (
 	DefaultMTLSSecretName                = "dragonfly-p2p-mtls"
 	DefaultManagerGRPCPort               = 443
+	DefaultContainerdMirrorPort          = 4001
 	DefaultDragonflyChartRepo            = "https://gorizond.github.io/dragonflyoss-helm-charts"
 	DefaultDragonflyChartName            = "dragonfly"
 	DefaultDragonflyChartVersion         = "1.10.1-patch.2"
@@ -45,6 +46,7 @@ var chartVersionPattern = regexp.MustCompile(`^v?[0-9]+\.[0-9]+\.[0-9]+(?:[-+][0
 type Config struct {
 	ManagerGRPCDomain           string
 	ManagerGRPCPort             int
+	ContainerdMirrorPort        int
 	ManagerAPIURL               string
 	NginxStaticURL              string
 	NydusMirrorURL              string
@@ -98,11 +100,16 @@ func Load(args []string) (*Config, error) {
 	if err != nil {
 		return nil, err
 	}
+	defaultContainerdMirrorPort, err := envInt("CONTAINERD_MIRROR_PORT", DefaultContainerdMirrorPort)
+	if err != nil {
+		return nil, err
+	}
 
 	cfg := &Config{}
 	fs := flag.NewFlagSet("d7y-cattle-operator", flag.ContinueOnError)
 	fs.StringVar(&cfg.ManagerGRPCDomain, "manager-grpc-domain", envOr("MANAGER_GRPC_DOMAIN", ""), "public hostname of the manager gRPC endpoint (no scheme)")
 	fs.IntVar(&cfg.ManagerGRPCPort, "manager-grpc-port", defaultManagerGRPCPort, "public port of the manager gRPC endpoint")
+	fs.IntVar(&cfg.ContainerdMirrorPort, "containerd-mirror-port", defaultContainerdMirrorPort, "node-local containerd mirror port")
 	fs.StringVar(&cfg.ManagerAPIURL, "manager-api-url", envOr("MANAGER_API_URL", ""), "public HTTPS URL of the manager REST API")
 	fs.StringVar(&cfg.NginxStaticURL, "nginx-static-url", envOr("NGINX_STATIC_URL", ""), "base URL of the static asset server (http or https)")
 	fs.StringVar(&cfg.NydusMirrorURL, "nydus-mirror-url", envOr("NYDUS_MIRROR_URL", ""), "optional HTTPS mirror path for nydus blobs")
@@ -160,6 +167,9 @@ func (c *Config) Validate() error {
 	}
 	if c.ManagerGRPCPort < 1 || c.ManagerGRPCPort > 65535 {
 		add("--manager-grpc-port: %d is outside 1-65535", c.ManagerGRPCPort)
+	}
+	if c.ContainerdMirrorPort < 1 || c.ContainerdMirrorPort > 65535 {
+		add("--containerd-mirror-port: %d is outside 1-65535", c.ContainerdMirrorPort)
 	}
 	if c.NginxStaticURL == "" {
 		add("--nginx-static-url is required")
