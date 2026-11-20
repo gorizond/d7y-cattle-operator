@@ -63,37 +63,84 @@ flowchart TB
   end
 
   subgraph D1["Downstream cluster A"]
-    N1["Node<br/>Pods<br/>Dragonfly (dfdaemon)<br/>Nydus"]
-    N2["Node<br/>Pods<br/>Dragonfly (dfdaemon)<br/>Nydus"]
-    N3["Node<br/>provisioning / bootstrap<br/>before RKE2<br/>host dfdaemon + nydus"]
+    subgraph N1["Node"]
+      P1["Pods"]
+      DF1["dfdaemon pod"]
+      NY1["nydus (host)"]
+    end
+    subgraph N2["Node"]
+      P2["Pods"]
+      DF2["dfdaemon pod"]
+      SCH1["scheduler pod"]
+      NY2["nydus (host)"]
+    end
+    subgraph N3["Node"]
+      N3L["provisioning / bootstrap<br/>before RKE2<br/>joining P2P"]
+      DF3["host dfdaemon"]
+      NY3["nydus (host)"]
+    end
   end
 
   subgraph D2["Downstream cluster B"]
-    MGR["Dragonfly manager"]
-    N4["Node<br/>Pods<br/>Dragonfly (dfdaemon)<br/>Nydus"]
-    N5["Node<br/>Pods<br/>Dragonfly (dfdaemon)<br/>Nydus"]
+    subgraph N4["Node"]
+      P4["Pods"]
+      DF4["dfdaemon pod"]
+      MGR["manager pod"]
+      NY4["nydus (host)"]
+    end
+    subgraph N5["Node"]
+      P5["Pods"]
+      DF5["dfdaemon pod"]
+      SCH2["scheduler pod"]
+      NY5["nydus (host)"]
+    end
   end
+
+  PUB["d7y-scheduler.&lt;cluster-id&gt;.&lt;domain&gt;"]
 
   FLEET -->|"HelmOps"| D1
   FLEET -->|"HelmOps"| D2
-  MGR -.->|"register scheduler/seed"| D1
-  N1 <-->|"P2P"| N2
-  N3 <-->|"P2P"| N1
-  N2 <-->|"P2P across clusters"| N4
-  N4 <-->|"P2P"| N5
-  style N3 stroke-dasharray: 5 5
+  MGR -.->|"register scheduler/seed"| SCH1
+  MGR -.->|"register scheduler/seed"| SCH2
+  DF1 <-->|"P2P"| DF2
+  DF3 <-->|"P2P (joining)"| DF1
+  DF2 <-->|"P2P across clusters"| DF4
+  DF4 <-->|"P2P"| DF5
+  DF3 -->|"scheduler alias"| PUB
+  PUB -->|"TCP 443 TLS passthrough"| SCH1
+
+  classDef workload fill:#f3f4f6,stroke:#6b7280
+  classDef dfdaemon fill:#dbeafe,stroke:#2563eb
+  classDef scheduler fill:#dcfce7,stroke:#16a34a
+  classDef manager fill:#ede9fe,stroke:#7c3aed
+  classDef nydus fill:#fef9c3,stroke:#ca8a04
+
+  class P1,P2,P4,P5 workload
+  class DF1,DF2,DF3,DF4,DF5 dfdaemon
+  class SCH1,SCH2 scheduler
+  class MGR manager
+  class NY1,NY2,NY3,NY4,NY5 nydus
+
+  style N1 stroke-width:3px
+  style N2 stroke-width:3px
+  style N3 fill:#fff7ed,stroke:#f59e0b,stroke-width:2px,stroke-dasharray:5 5
+  style N4 stroke-width:3px
+  style N5 stroke-width:3px
+  style N3L fill:transparent,stroke:transparent,color:#b45309
 ```
+
+Color legend: gray = workload pods, blue = dfdaemon, green = scheduler, purple = manager, yellow = nydus (host); orange dashed = node still provisioning before RKE2.
 
 ### At a glance
 
 - The operator runs on the local Rancher/Fleet cluster. It reconciles every Cluster labelled `d7y-operator-cattle: "true"` and creates the Fleet HelmOps for KeyDB, manager, scheduler/seed, extras, and the containerd mirror.
-- Each downstream cluster runs Dragonfly on its nodes: pods pull through the node-local dfdaemon proxy, Dragonfly distributes blobs P2P, and nydus is the host snapshotter. The diagram places the manager in downstream cluster B; the dashed node in downstream cluster A is provisioning before RKE2 and is already joined to P2P via its host dfdaemon.
-- The manager registers schedulers/seed peers and allocates scheduler IDs; each seed cluster has its own scheduler/seed, and external-dns (or a wildcard zone) publishes `d7y-scheduler.<cluster-id>.<domain>` for pre-RKE2 bootstrap.
+- Every running downstream node has a dfdaemon pod, with nydus on the host; pods pull through the node-local proxy and Dragonfly distributes blobs P2P. The diagram shows a scheduler pod per seed cluster and the manager pod on a node in downstream cluster B.
+- The orange dashed node in downstream cluster A is still provisioning before RKE2: it has only the host dfdaemon and nydus and is already joining P2P. The scheduler alias `d7y-scheduler.<cluster-id>.<domain>` is published by external-dns (or a wildcard zone) and used before RKE2 to bootstrap node/RKE2 image pulls.
 
 ### Multi-cluster topology
 
-- The manager is a role, not a fixed local component: the diagram places it in downstream cluster B, while any Cluster with `d7y-operator-manager` can run the shared manager; the operator stays on the local Rancher cluster. Manager and seed roles may be split across different Clusters, each with its own KeyDB/extras release.
-- N downstream/seed Clusters have N scheduler IDs. Each seed Cluster runs its own scheduler + seed under its ID. The scheduler/seed for a new Cluster's ID runs in a seed Cluster reachable before the new Cluster's RKE2 (it cannot run in that Cluster before its own RKE2 exists); external-dns or a wildcard zone publishes `d7y-scheduler.<cluster-id>.<domain>`. In downstream cluster A, the dashed node is the pre-RKE2 bootstrap stage: it already pulls via P2P before RKE2 and Pods exist.
+- The manager is a role, not a fixed local component: the diagram places the purple manager pod on a node in downstream cluster B, while any Cluster with `d7y-operator-manager` can run it; the operator stays on the local Rancher cluster. Green scheduler pods are per seed Cluster, and blue dfdaemon pods run on every running node. Manager and seed roles may be split across different Clusters, each with its own KeyDB/extras release.
+- N downstream/seed Clusters have N scheduler IDs. Each seed Cluster runs its own scheduler + seed under its ID. The scheduler/seed for a new Cluster's ID runs in a seed Cluster reachable before the new Cluster's RKE2 (it cannot run in that Cluster before its own RKE2 exists); external-dns or a wildcard zone publishes `d7y-scheduler.<cluster-id>.<domain>`. In downstream cluster A, the orange dashed node is the pre-RKE2 bootstrap stage: its host dfdaemon joins P2P before RKE2 and any Kubernetes Pods exist.
 - `p2p-install.sh` + the host dfdaemon bootstrap start before RKE2 and pull node/RKE2 images via Dragonfly P2P from the scheduler/seed. This accelerates provisioning before the Kubernetes node starts; if the alias is unreachable, the script is fail-open and pulls directly.
 
 ## Follow-ups
