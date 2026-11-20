@@ -162,8 +162,7 @@ func TestRepeatInjectionNoPatch(t *testing.T) {
 
 func TestUserDataNoLongerPatched(t *testing.T) {
 	handler, _, _ := newTestHandler()
-	encoded := base64.StdEncoding.EncodeToString([]byte(testUserData))
-	req := testRequest(admissionv1.Create, "c1-pool1", "Amazonec2Config", encoded, nil, nil)
+	req := testRequest(admissionv1.Create, "c1-pool1", "Amazonec2Config", testUserData, nil, nil)
 	resp := &wranglerwebhook.Response{AdmissionResponse: admissionv1.AdmissionResponse{Allowed: true}}
 
 	if err := handler.Admit(resp, req); err != nil {
