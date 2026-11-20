@@ -22,11 +22,6 @@ const (
 	MirrorPort            = 4001
 	MirrorCertsDir        = "/var/lib/rancher/rke2/agent/etc/containerd/certs.d"
 
-	// HarborTargetNamespace is where the Harbor HelmOp is installed.
-	HarborTargetNamespace = "harbor"
-	// RegistryProxyPort is the proxy Service/container port.
-	RegistryProxyPort = 8080
-
 	ManagerGRPCPort = 65003
 	// ManagerGRPCEdgePort is the public gRPC port used by schedulers to reach
 	// the manager through the edge.
@@ -49,22 +44,6 @@ const (
 	KeyDBChartRepo    = "https://enapter.github.io/charts/"
 	KeyDBChartName    = "keydb"
 	KeyDBChartVersion = "0.48.0"
-
-	HarborChartRepo    = "https://helm.goharbor.io"
-	HarborChartName    = "harbor"
-	HarborChartVersion = "1.19.4"
-
-	RegistryProxyChartRepo    = "https://gorizond.github.io/d7y-cattle-operator"
-	RegistryProxyChartName    = "registry-proxy"
-	RegistryProxyChartVersion = "0.1.15"
-
-	// RegistryProxyMirrorProject is the Harbor project that stores converted
-	// images and receives the robot's push/grant permissions.
-	RegistryProxyMirrorProject = "mirror"
-
-	AdmissionChartRepo    = "https://gorizond.github.io/d7y-cattle-operator"
-	AdmissionChartName    = "admission-webhook"
-	AdmissionChartVersion = "0.1.2"
 )
 
 // Fleet targeting labels. Fleet matches spec.targets[].clusterSelector against
@@ -79,11 +58,8 @@ const (
 	// reads it from .ClusterLabels.
 	LabelClusterID = "p2p.dragonfly.io/cluster-id"
 
-	LabelRoleManager   = "d7y-operator-manager"
-	LabelRoleSeed      = "d7y-operator-seed"
-	LabelRoleProxy     = "d7y-operator-proxy"
-	LabelRoleHarbor    = "d7y-operator-harbor"
-	LabelRoleAdmission = "d7y-operator-admission"
+	LabelRoleManager = "d7y-operator-manager"
+	LabelRoleSeed    = "d7y-operator-seed"
 
 	// AnnotationSchedulerClusterID is the Fleet template input for the
 	// scheduler cluster ID. The controller writes it during registration.
@@ -91,22 +67,16 @@ const (
 	// AnnotationSchedulerPublicIP is stamped per Cluster so shared values can
 	// render the resolved public advertiseIP without changing the DNS-based
 	// resolution itself.
-	AnnotationSchedulerPublicIP = "p2p.dragonfly.io/scheduler-public-ip"
-	// AnnotationProxyTLSSecret carries the per-cluster registry-proxy ingress
-	// TLS Secret. The operator stamps the configured default only when absent.
-	AnnotationProxyTLSSecret = "p2p.dragonfly.io/proxy-tls-secret"
-	// AnnotationProxyHostAliases carries per-Cluster registry-proxy /etc/hosts
-	// entries as comma-separated ip=hostname pairs.
-	AnnotationProxyHostAliases = "p2p.dragonfly.io/proxy-host-aliases"
-	// AnnotationHarborTLSSecret optionally pins a per-cluster Harbor ingress
-	// TLS Secret; empty falls back to <cluster>-harbor-tls.
-	AnnotationHarborTLSSecret    = "p2p.dragonfly.io/harbor-tls-secret"
+	AnnotationSchedulerPublicIP  = "p2p.dragonfly.io/scheduler-public-ip"
 	AnnotationSchedulerReplicas  = "p2p.dragonfly.io/scheduler-replicas"
 	AnnotationSeedClientReplicas = "p2p.dragonfly.io/seedclient-replicas"
-
 	// SharedClusterNameTemplate is the per-target cluster name made available
 	// by Fleet inside spec.helm.values.
 	SharedClusterNameTemplate = "${ .ClusterName }"
+	// SharedManagerIngressEnabledTemplate gates the manager ingress per target:
+	// true only when the Cluster carries the manager role label. It must render
+	// to a bare YAML bool; a quoted "false" would be truthy in Helm.
+	SharedManagerIngressEnabledTemplate = `${ if eq (index .ClusterLabels "` + LabelRoleManager + `") "true" }true${ else }false${ end }`
 	// SharedSchedulerPublicIPTemplate resolves the per-target public LB IP
 	// stamped on the Cluster annotation.
 	// The annotation may be absent on a Cluster (for example when a user has not
@@ -116,44 +86,18 @@ const (
 	// SharedSchedulerClusterIDTemplate resolves the per-target scheduler ID
 	// written by the registration flow.
 	SharedSchedulerClusterIDTemplate = `${ index .ClusterAnnotations "p2p.dragonfly.io/scheduler-cluster-id" }`
-	// SharedProxyTLSSecretTemplate resolves the per-target proxy ingress TLS
-	// Secret. Empty means the ingress renders without TLS.
-	SharedProxyTLSSecretTemplate = `${ index .ClusterAnnotations "p2p.dragonfly.io/proxy-tls-secret" | default "" }`
-	// SharedProxyWebhookAddressTemplate points a same-cluster managed Harbor at
-	// the proxy Service. External-Harbor clusters keep the chart default
-	// (proxy.publicURL + /api/convert).
-	SharedProxyWebhookAddressTemplate = `${ if and (eq (index .ClusterLabels "d7y-operator-harbor") "true") (eq (index .ClusterAnnotations "p2p.dragonfly.io/harbor-url") "") }http://${ .ClusterName }-registry-proxy.dragonfly-system.svc:8080/api/convert${ end }`
-	// SharedManagerIngressEnabledTemplate gates the manager ingress per target:
-	// true only when the Cluster carries the manager role label. It must render
-	// to a bare YAML bool; a quoted "false" would be truthy in Helm.
-	SharedManagerIngressEnabledTemplate = `${ if eq (index .ClusterLabels "` + LabelRoleManager + `") "true" }true${ else }false${ end }`
-	// SharedHarborDomainTemplate resolves the per-target Harbor ingress host.
-	SharedHarborDomainTemplate = `${ index .ClusterAnnotations "p2p.dragonfly.io/harbor-domain" }`
-	// SharedHarborTLSSecretTemplate resolves the per-target Harbor ingress TLS
-	// Secret. The default follows the cert-manager convention
-	// <cluster>-harbor-tls (e.g. demo-harbor-tls); the annotation overrides
-	// it. Build the default with printf: a nested ${ .ClusterName } inside the
-	// default string argument would stay literal because Fleet renders the
-	// template only once.
-	SharedHarborTLSSecretTemplate = `${ index .ClusterAnnotations "p2p.dragonfly.io/harbor-tls-secret" | default (printf "%s-harbor-tls" .ClusterName) }`
-	// SharedHarborFullnameTemplate keeps the legacy <cluster>-harbor fullname,
-	// so Harbor workloads and the existing PVCs keep their names.
-	SharedHarborFullnameTemplate = SharedClusterNameTemplate + "-harbor"
 )
 
 // Shared HelmOp names. These are also the Helm release names, so they must be
 // fixed and must not contain template markers: Fleet rejects templated
 // spec.helm.releaseName values.
 const (
-	sharedKeyDBName     = "d7y-keydb"
-	sharedManagerName   = "d7y-manager"
-	sharedControlName   = "d7y-control"
-	sharedDataName      = "d7y-data"
-	sharedExtrasName    = "d7y-extras"
-	sharedMirrorName    = "d7y-containerd-mirror"
-	sharedAdmissionName = "d7y-admission"
-	sharedProxyName     = "d7y-registry-proxy"
-	sharedHarborName    = "d7y-harbor"
+	sharedKeyDBName   = "d7y-keydb"
+	sharedManagerName = "d7y-manager"
+	sharedControlName = "d7y-control"
+	sharedDataName    = "d7y-data"
+	sharedExtrasName  = "d7y-extras"
+	sharedMirrorName  = "d7y-containerd-mirror"
 )
 
 // SharedKeyDBName returns the shared KeyDB HelmOp and release name.
@@ -174,40 +118,9 @@ func SharedExtrasName() string { return sharedExtrasName }
 // SharedMirrorName returns the shared containerd-mirror HelmOp and release name.
 func SharedMirrorName() string { return sharedMirrorName }
 
-// SharedAdmissionName returns the shared admission-webhook HelmOp and release
-// name.
-func SharedAdmissionName() string { return sharedAdmissionName }
-
-// SharedRegistryProxyName returns the shared registry-proxy HelmOp and release
-// name.
-func SharedRegistryProxyName() string { return sharedProxyName }
-
-// SharedHarborName returns the shared Harbor HelmOp and release name.
-func SharedHarborName() string { return sharedHarborName }
-
-// SharedHarborAdminSecretName is the fleet-wide Harbor admin Secret.
-func SharedHarborAdminSecretName() string { return "d7y-harbor-admin" }
-
-// SharedHarborSecretKeyName is the fleet-wide Harbor core secret-key Secret.
-func SharedHarborSecretKeyName() string { return "d7y-harbor-secret" }
-
-// SharedHarborDBSecretName is the fleet-wide Harbor database password Secret.
-func SharedHarborDBSecretName() string { return "d7y-harbor-db" }
-
-// SharedRegistryProxyRobotSecretName is the fleet-wide robot Secret shared by
-// every registry-proxy target.
-func SharedRegistryProxyRobotSecretName() string { return "d7y-registry-proxy-robot" }
-
-// SharedRegistryProxyWebhookSecretName is the fleet-wide Harbor webhook Secret.
-func SharedRegistryProxyWebhookSecretName() string { return "d7y-registry-proxy-webhook" }
-
-// SharedRegistryProxyBasicAuthSecretName is the fleet-wide client Basic auth
-// Secret shared by every registry-proxy target.
-func SharedRegistryProxyBasicAuthSecretName() string { return "d7y-registry-proxy-basic-auth" }
-
 // GateSelector matches every Cluster that opted into the Dragonfly stack. KeyDB
-// must reach manager-only and label-only Clusters too: the manager, Harbor and
-// registry-proxy releases point at the cluster-local <cluster>-keydb Service.
+// must reach manager-only and label-only Clusters too: the manager release
+// points at the cluster-local <cluster>-keydb Service.
 func GateSelector() map[string]string {
 	return map[string]string{LabelGate: "true"}
 }
@@ -217,25 +130,10 @@ func ManagerSelector() map[string]string {
 	return map[string]string{LabelGate: "true", LabelRoleManager: "true"}
 }
 
-// ProxySelector matches the registry-proxy role.
-func ProxySelector() map[string]string {
-	return map[string]string{LabelGate: "true", LabelRoleProxy: "true"}
-}
-
-// HarborSelector matches the Harbor role.
-func HarborSelector() map[string]string {
-	return map[string]string{LabelGate: "true", LabelRoleHarbor: "true"}
-}
-
 // SharedSelector matches the seed role: the shared control, data, extras, and
 // containerd-mirror releases only make sense on Clusters that run a scheduler.
 func SharedSelector() map[string]string {
 	return map[string]string{LabelGate: "true", LabelRoleSeed: "true"}
-}
-
-// AdmissionSelector matches Clusters that opted into the admission webhook.
-func AdmissionSelector() map[string]string {
-	return map[string]string{LabelGate: "true", LabelRoleAdmission: "true"}
 }
 
 // SchedulerHostTemplate returns the Fleet values template for the per-target
@@ -316,70 +214,14 @@ type Chart struct {
 	Version string
 }
 
-// HostAlias is a pod /etc/hosts entry, rendered as a Kubernetes HostAlias.
-type HostAlias struct {
-	IP        string   `json:"ip"`
-	Hostnames []string `json:"hostnames"`
-}
-
 // Cluster carries the per-cluster inputs shared by the HelmOp builders.
 type Cluster struct {
-	Name               string
-	Namespace          string
-	MTLSSecretName     string
-	Chart              Chart
-	ExtrasChart        Chart
-	MirrorChart        Chart
-	HarborChart        Chart
-	RegistryProxyChart Chart
-	AdmissionChart     Chart
-
-	// HarborDomain is the Harbor ingress/externalURL host. HarborURL selects
-	// an existing/external Harbor; HarborManaged is true only when the operator
-	// owns the Harbor HelmOp. HarborAdminSecret is the downstream Secret name.
-	HarborDomain       string
-	HarborURL          string
-	HarborManaged      bool
-	HarborAdminSecret  string
-	HarborDBPassword   string
-	HarborSecretKey    string
-	HarborIngressClass string
-
-	// ProxyEnabled is the independent p2p.dragonfly.io/proxy role.
-	ProxyEnabled bool
-	// ProxyDomain is the public proxy host used by the admission rewrite.
-	ProxyDomain            string
-	ProxyHarborURL         string
-	ProxyPublicURL         string
-	ProxyBasePath          string
-	ProxyTLSSecret         string
-	ProxyHostAliases       []HostAlias
-	ProxyRegistries        []string
-	ProxyWebhookSecretName string
-	ProxyRobotSecretName   string
-	// ProxyBasicAuthEnabled enables client Basic auth on /v2 reads.
-	ProxyBasicAuthEnabled  bool
-	ProxyBasicAuthUsername string
-	// ProxyUpstreamCredentialsSecret is the Secret name with credentials.yaml
-	// for private upstream registries.
-	ProxyUpstreamCredentialsSecret string
-	// ProxyUpstreamSecretRevision rolls proxy pods when upstream credentials
-	// rotate.
-	ProxyUpstreamSecretRevision string
-	// ProxyRobotSecretRevision rolls proxy pods when robot credentials rotate.
-	ProxyRobotSecretRevision string
-	// AdmissionEnabled is the independent p2p.dragonfly.io/admission role.
-	AdmissionEnabled         bool
-	AdmissionImagePullSecret string
-	AdmissionServiceAccount  string
-	AdmissionNetworkOnly     bool
-	// AdmissionExcludeNamespaces are extra namespaces the webhook must skip.
-	AdmissionExcludeNamespaces []string
-	// OperatorImageRepository/OperatorImageTag make the admission webhook run
-	// the same image as the operator. Empty means the chart default is used.
-	OperatorImageRepository string
-	OperatorImageTag        string
-
+	Name              string
+	Namespace         string
+	MTLSSecretName    string
+	Chart             Chart
+	ExtrasChart       Chart
+	MirrorChart       Chart
 	ManagerGRPCDomain string
 	ManagerGRPCPort   int
 	ManagerAPIHost    string
@@ -435,37 +277,6 @@ func ExtrasName(cluster string) string { return objectName(cluster, "extras") }
 
 // MirrorName returns the containerd-mirror HelmOp and release name.
 func MirrorName(cluster string) string { return objectName(cluster, "containerd-mirror") }
-
-// HarborName returns the Harbor HelmOp and release name.
-func HarborName(cluster string) string { return objectName(cluster, "harbor") }
-
-// RegistryProxyName returns the registry-proxy HelmOp and release name.
-func RegistryProxyName(cluster string) string { return objectName(cluster, "registry-proxy") }
-
-// AdmissionName returns the admission-webhook HelmOp and release name.
-func AdmissionName(cluster string) string { return objectName(cluster, "admission-webhook") }
-
-// HarborAdminSecretName is the per-cluster downstream admin Secret.
-func HarborAdminSecretName(cluster string) string { return objectName(cluster, "harbor-admin") }
-
-// HarborTLSSecretName is the TLS Secret expected by the Harbor ingress.
-func HarborTLSSecretName(cluster string) string { return objectName(cluster, "harbor-tls") }
-
-// HarborDBSecretName is the generated internal database password Secret.
-func HarborDBSecretName(cluster string) string { return objectName(cluster, "harbor-db") }
-
-// HarborSecretKeyName is the generated Harbor core secret-key Secret.
-func HarborSecretKeyName(cluster string) string { return objectName(cluster, "harbor-secret") }
-
-// RegistryProxyWebhookSecretName is the Harbor webhook shared Secret.
-func RegistryProxyWebhookSecretName(cluster string) string {
-	return objectName(cluster, "registry-proxy-webhook")
-}
-
-// RegistryProxyRobotSecretName is the Harbor robot Secret.
-func RegistryProxyRobotSecretName(cluster string) string {
-	return objectName(cluster, "registry-proxy-robot")
-}
 
 // ManagerFullname returns the chart fullnameOverride that makes the Dragonfly
 // chart create the <cluster>-manager Service.

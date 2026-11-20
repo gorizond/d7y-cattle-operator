@@ -3,15 +3,15 @@
 Kubernetes operator that runs [Dragonfly](https://d7y.io) P2P on Rancher-managed
 RKE2 clusters.
 
-**Status**: v0.1.51 (2026-11-19). The operator implements the Cluster controller,
+**Status**: v0.1.67 (2026-11-20). The operator implements the Cluster controller,
 role resolution, KeyDB, manager, seed role, manager registration,
-`dragonfly-extras`, the fail-open `p2p-static` bootstrap, admission webhook,
-Harbor, registry proxy with source-OCI first pull, manager root credentials,
-Harbor Dragonfly preheat distribution, and host nydus. The
-manager/Harbor/proxy/seed/nydus stack and the Harbor preheat instance have live
-pilot verification; remaining items are listed under Follow-ups.
+`dragonfly-extras`, the fail-open `p2p-static` bootstrap, manager root
+credentials, and host nydus. The manager/seed/nydus stack has live pilot
+verification; remaining items are listed under Follow-ups.
 
 ## What it does today
+
+Harbor, registry-proxy, and admission webhook add-ons are out of scope.
 
 - Parses and validates the operator configuration from flags/environment variables.
 - Ensures a single mTLS CA and leaf certificate Secret (`dragonfly-p2p-mtls` by
@@ -33,28 +33,6 @@ pilot verification; remaining items are listed under Follow-ups.
   `p2p.dragonfly.io/seed: "true"` and a scheduler cluster ID is present. Nydus
   is host-only: `p2p-install.sh` installs and supervises it on the node; the
   operator creates no nydus DaemonSet or HelmOp.
-- Deploys Harbor on `p2p.dragonfly.io/harbor: "true"` and the external
-  stateless registry proxy on `p2p.dragonfly.io/proxy: "true"`. Harbor uses the
-  `<cluster>-keydb` Service rendered by the shared `d7y-keydb` release; the
-  proxy has no PVC.
-- Runs the stateless registry proxy with source-OCI first-pull passthrough: a
-  tag manifest is served from the source immediately while nydusify conversion
-  is queued in the background; digest refs stay source OCI. The operator passes
-  its own image repository/tag to the proxy HelmOp, so the proxy image follows
-  the operator release.
-- Deploys the opt-in Pod image-rewriting webhook on
-  `p2p.dragonfly.io/admission: "true"` (shared `d7y-admission`). It
-  rewrites any explicit registry (and Docker Hub shorthand) to
-  `<proxy.domain>/<registry>/<repo>:<tag>`,
-  preserves `@sha256`, and is independent of Harbor/proxy/seed. The
-  `p2p.dragonfly.io/mutate-exclure` annotation adds per-cluster namespace
-  exclusions to the webhook's `namespaceSelector`; the shared release renders
-  it through Fleet's values template into a real YAML list (an absent
-  annotation renders an empty list). The webhook Deployment runs
-  the operator image: the operator passes `image.repository`/`image.tag` from
-  its `OPERATOR_IMAGE_REPOSITORY`/`OPERATOR_IMAGE_TAG` environment to the
-  admission HelmOp; the chart `appVersion` is only a fallback when the operator
-  image is unknown.
 - Manages the manager Ingresses, the public scheduler TCP front, and optional
   VPAs through the shared `d7y-extras` HelmOp and the `dragonfly-extras`
   chart. The operator has no Ingress, IngressRouteTCP, or
@@ -68,9 +46,6 @@ pilot verification; remaining items are listed under Follow-ups.
 - Generates or repairs the manager root credentials Secret (`username`,
   `password`, `jwt-key`) and wires the password/JWT key into the manager; see
   [Manager root credentials](#manager-root-credentials).
-- Registers the Dragonfly manager as a Harbor Administration → Distributions
-  preheat provider with an operator-generated `job` PAT; this is not a Harbor
-  registry adapter; see [Harbor Dragonfly distribution](#harbor-dragonfly-distribution).
 - Publishes role/registration state as Cluster conditions
   (`d7y.io/RolesResolved`, `d7y.io/KeyDBReady`, `d7y.io/ControlReady`,
   `d7y.io/DataReady`, `d7y.io/Registered`) and updates them only when they
@@ -81,7 +56,7 @@ pilot verification; remaining items are listed under Follow-ups.
 
 - Remaining pilot work: cold cross-node P2P, fscache/EROFS on a kernel with
   `EROFS_FS_ONDEMAND`/`CACHEFILES_ONDEMAND`, and full envtest coverage. The
-  manager/Harbor/proxy/seed/nydus path is verified on the pilot.
+  manager/seed/nydus path is verified on the pilot.
 - The extras chart's VPA targetRef names must be verified against live workload
   names in the pilot.
 - The KeyDB chart is external: `enapter/keydb` `0.48.0` from
@@ -117,7 +92,6 @@ chart. The release tag (`v<chart version>`) and the default image tag
 (`v<chart version>`) are kept in sync by the release workflow.
 
 The operator reads credentials only from Secret names. No secret values are passed
-through flags or chart values. `nginx.staticURL` and `managerApiCredentialsSecret`
 are required by the configuration contract. When the named Secret is absent, the
 operator creates it in its own namespace with a generated manager root password
 and JWT signing key; see [Manager root credentials](#manager-root-credentials).
@@ -131,10 +105,6 @@ and JWT signing key; see [Manager root credentials](#manager-root-credentials).
 | `manager.apiURL` | `MANAGER_API_URL` | Public manager REST API URL (`https://`) |
 | `scheduler.domain` | `P2P_DOMAIN` | Base domain for `d7y-scheduler.<fleet-cluster-id>.<domain>`; required |
 | `scheduler.clusterID` | `P2P_CLUSTER_ID` | Optional fallback when provisioning Cluster `status.clusterName` is empty |
-| `nginx.staticURL` | `NGINX_STATIC_URL` | Base URL of the static asset server (`http` or `https`) |
-| `nydus.mirrorURL` | `NYDUS_MIRROR_URL` | Optional HTTPS mirror path for nydus blobs, including the registry segment (for example `https://proxy.example.test/docker.io`); empty keeps the dfdaemon proxy fallback |
-| `image.repository` | `OPERATOR_IMAGE_REPOSITORY` | Operator image repository passed to the admission webhook |
-| `image.tag` | `OPERATOR_IMAGE_TAG` | Operator image tag passed to the admission webhook; defaults to `v<chart version>` |
 | `managerApiCredentialsSecret` | `MANAGER_API_CREDENTIALS_SECRET` | Secret with `username`, `password`, and `jwt-key` for the manager API and manager root login; generated by the operator when absent |
 | `dragonfly.chart.repo` | `DRAGONFLY_CHART_REPO` | Helm repository URL of the Dragonfly chart; defaults to the gorizond fork |
 | `extras.chart.repo` | `EXTRAS_CHART_REPO` | Helm repository URL of the dragonfly-extras chart |
@@ -152,7 +122,7 @@ Defaults: `mtlsSecretName=dragonfly-p2p-mtls`, `dragonfly.chart.name=dragonfly`,
 `dragonfly.chart.version=1.10.1-patch.2`, `extras.chart.name=dragonfly-extras`,
 `extras.chart.version=0.1.10`, `extras.ingress.controller=nginx`,
 `extras.ingress.grpcEnabled=true`, `extras.ingress.restEnabled=true`,
-`manager.grpcPort=443`, `webhook.port=9443`, `nydus.mirrorURL=""`,
+`manager.grpcPort=443`,
 `leaderElect=false`. The public scheduler IP(s) are resolved from DNS at
 reconcile time; there is no scheduler IP value. `scheduler.domain` has no
 default and is required. `scheduler.clusterID` is only a fallback for an
@@ -170,9 +140,6 @@ matching role label must also be present for Fleet to render the shared release.
 | `d7y-operator-cattle` | `"true"` | Gate: opts the Cluster into the Dragonfly stack |
 | `d7y-operator-manager` | `"true"` | Manager role (shared `d7y-manager`) |
 | `d7y-operator-seed` | `"true"` | Seed role (shared control/data/extras/mirror) |
-| `d7y-operator-proxy` | `"true"` | Registry proxy role (shared `d7y-registry-proxy`) |
-| `d7y-operator-harbor` | `"true"` | Harbor role (per-cluster) |
-| `d7y-operator-admission` | `"true"` | Admission webhook role (shared) |
 
 Role labels are user-managed: the operator only stamps
 `p2p.dragonfly.io/cluster-id` (from `status.clusterName`, read by the scheduler
@@ -189,14 +156,10 @@ The role annotations and matching labels add:
 | `manager: "true"` | `d7y-keydb`, `d7y-manager` |
 | `seed: "true"` + scheduler ID | `d7y-keydb`, `d7y-control`, `d7y-data`, `d7y-extras`, `d7y-containerd-mirror` |
 | manager + seed | shared seed set + `d7y-manager` |
-| `proxy: "true"` | `d7y-registry-proxy` (external `harbor-url` allowed) |
-| `harbor: "true"` | `d7y-harbor` |
-| `admission: "true"` | `d7y-admission` |
 
-The `harbor`, `proxy`, `admission`, and `seed` annotations are independent:
-any combination is valid and nothing is auto-installed. Removing a per-cluster
-toggle deletes its HelmOp; the shared releases stop targeting the Cluster only
-when the matching role label is removed.
+The `seed` annotation is independent of the manager role. Removing it deletes
+the per-cluster seed HelmOps; the shared releases stop targeting the Cluster
+only when the matching role label is removed.
 
 ### Shared HelmOps
 
@@ -213,14 +176,11 @@ templates.
 | `d7y-data` | seedClient + client | same as control |
 | `d7y-extras` | extras (public scheduler front, VPA, Ingress) | same as control |
 | `d7y-containerd-mirror` | node containerd mirror | same as control |
-| `d7y-admission` | admission webhook | `d7y-operator-cattle=true`, `d7y-operator-admission=true` |
-| `d7y-registry-proxy` | registry proxy | `d7y-operator-cattle=true`, `d7y-operator-proxy=true` |
-| `d7y-harbor` | Harbor | `d7y-operator-cattle=true`, `d7y-operator-harbor=true` |
 
 The rendered values keep the per-cluster downstream names:
 
-- `fullnameOverride`: `${ .ClusterName }` (manager and registry proxy),
-  `${ .ClusterName }-harbor` (Harbor), `${ .ClusterName }-keydb`,
+- `fullnameOverride`: `${ .ClusterName }` (manager),
+  `${ .ClusterName }-keydb`,
   `${ .ClusterName }-control`, `${ .ClusterName }-data`
 - Ingress/VPA backends: `${ .ClusterName }-manager`,
   `${ .ClusterName }-control-scheduler`, `${ .ClusterName }-data-seed-client`
@@ -235,15 +195,13 @@ and uninstalls the release.
 
 Legacy per-cluster objects (`<cluster>-keydb`, `<cluster>-manager`,
 `<cluster>-control`, `<cluster>-data`, `<cluster>-extras`,
-`<cluster>-containerd-mirror`, `<cluster>-admission-webhook`,
-`<cluster>-registry-proxy`, `<cluster>-harbor`) are deleted, HelmOp and Bundle,
-once the corresponding shared HelmOp has been applied.
+`<cluster>-containerd-mirror`) are deleted, HelmOp and Bundle, once the
+corresponding shared HelmOp has been applied.
 
 Existing annotation-driven Clusters must add the matching role label (for
 example `d7y-operator-seed: "true"` next to `p2p.dragonfly.io/seed: "true"`):
 Fleet selectors cannot read annotations. The operator never sets or removes
-role labels. If `proxy.domain` is empty, the shared admission release is not
-created and the legacy per-cluster admission HelmOp is left in place.
+role labels.
 
 ### Known shared-HelmOp limitations
 
@@ -300,10 +258,6 @@ only when the value, reason, or message changes:
 | `d7y.io/KeyDBReady` | The shared `d7y-keydb` HelmOp was applied. |
 | `d7y.io/ControlReady` | The shared `d7y-control` HelmOp was applied and registration succeeded (`seed: "true"`). |
 | `d7y.io/DataReady` | The shared `d7y-data` and `d7y-containerd-mirror` HelmOps were applied (`seed: "true"`). |
-| `d7y.io/HarborReady` | The shared `d7y-harbor` HelmOp was applied, or an external `harbor-url` is configured. |
-| `d7y.io/RegistryProxyReady` | The independent registry proxy HelmOp was applied. |
-| `d7y.io/AdmissionWebhookReady` | The shared `d7y-admission` HelmOp was applied and Ready. |
-| `d7y.io/HarborDomainMissing` | `harbor: "true"` is set but `harbor-domain` is missing or invalid. |
 | `d7y.io/Registered` | Scheduler and seed-peer records were ensured and linked in the manager. |
 | `d7y.io/RegistrationFailed` | Registration failed permanently; `d7y.io/Retrying` marks transient failures. |
 | `d7y.io/IdMismatch` | The user-provided `scheduler-cluster-id` differs from the manager server ID; the annotation is preserved. |
@@ -534,233 +488,6 @@ recommendation-only VPAs. The operator creates the shared `d7y-extras` HelmOp:
   Secret; the chart no longer renders a CA-only Secret. The operator RBAC
   remains limited to Clusters, HelmOps, Secrets, and Events.
 
-## Harbor and registry proxy
-
-Harbor is rendered by the shared `d7y-harbor` HelmOp for Clusters with the
-`d7y-operator-cattle: "true"` and `d7y-operator-harbor: "true"` labels.
-`p2p.dragonfly.io/harbor-domain` is required and must be a DNS name (no
-scheme/port/path); the shared values read it from the Cluster annotations, so
-it becomes the Harbor `externalURL` and Ingress host on every target.
-
-The chart `fullnameOverride` is `${ .ClusterName }-harbor`, so the workloads
-and the existing PVCs keep their names (`demo-harbor-registry`,
-`demo-harbor-jobservice`, `demo-harbor-database`). Harbor's immutable
-workload selectors include the Helm release name, so the shared release also
-sets Fleet's Helm `force` option for the one-time adoption: Helm replaces those
-immutable fields instead of failing. The legacy `<cluster>-harbor` HelmOp and
-Bundle are removed only after the shared HelmOp has been applied; PVCs use
-`resourcePolicy: keep` and survive both the adoption and the legacy removal.
-Expect a short Harbor restart during that first adoption.
-
-The Harbor admin Secret is delivered from the local/operator cluster. Put a
-Secret in the operator namespace (default name `harbor-admin`, configurable
-with `proxy.harborAdminSecret`) containing the `HARBOR_ADMIN_PASSWORD` key
-before the shared Harbor HelmOp is applied. The operator copies it into the
-HelmOp namespace as the fixed `d7y-harbor-admin` and Fleet
-`downstreamResources` delivers it to the `harbor` namespace as
-`existingSecretAdminPassword`; values are never written to HelmOp values,
-logs, or events. The operator also generates the fixed `d7y-harbor-db` and
-`d7y-harbor-secret` Secrets once for the internal DB password and Harbor
-secret key, and delivers the latter with `existingSecretSecretKey` (the DB
-password is passed in the chart values).
-
-The Harbor ingress TLS Secret defaults to `<cluster>-harbor-tls`, matching the
-cert-manager naming convention (for example `demo-harbor-tls`). Pin a
-different name with `p2p.dragonfly.io/harbor-tls-secret`. The Secret must exist
-in the `harbor` namespace (cert-manager or manual) before Harbor starts.
-
-Harbor values use the `<cluster>-keydb` Service rendered by the shared
-`d7y-keydb` release, as `<cluster>-keydb.dragonfly-system.svc:6379`
-(`redis.type=external`), and create no Redis PVC. Registry, jobservice, and
-database PVCs are 50Gi/5Gi/10Gi on the `longhorn` storage class with
-`resourcePolicy: keep`. Internal database, `trivy.enabled=false`, and ingress
-TLS Secret `<cluster>-harbor-tls` are the v1 defaults. The generated
-`d7y-harbor-secret` `secretKey` is 16 random bytes encoded as 32 hex characters
-(AES-256); the DB password remains 32 bytes encoded as 64 hex characters.
-
-An external `p2p.dragonfly.io/harbor-url` skips the managed Harbor release.
-Because the Fleet selector is label-based, an external-Harbor Cluster must not
-carry the `d7y-operator-harbor` label.
-
-### Harbor Dragonfly distribution
-
-Harbor's Administration → Distributions page manages P2P preheat provider
-instances. This is not a registry adapter: Harbor has no `dragonfly` registry
-type, so the operator never sends it to `/api/v2.0/registries`. Instead, when a
-Harbor-enabled Cluster has a resolved Harbor URL and `manager.apiURL` is set,
-the operator ensures one preheat instance named `dragonfly`:
-
-- vendor `dragonfly`, auth mode `OAUTH`, insecure `false`
-- endpoint = `--manager-api-url` (the public HTTPS manager REST URL)
-- token = a manager personal access token (PAT) generated for the `root` user
-
-The PAT is created through the manager API (`harbor-preheat`, user ID `1`,
-scope `job`, expiry now + 10 years) only when the operator-namespace Secret
-`dragonfly-harbor-preheat` (key `token`) is absent or empty. The token is
-returned once by the manager, stored in that Secret, reused on later
-reconciles, and never written to logs, events, or HelmOp values. The operator
-reads the Harbor admin credentials from the per-cluster Harbor admin Secret
-(`username`, defaulting to `admin`, and `HARBOR_ADMIN_PASSWORD`) and updates an
-existing instance in place. Harbor 2.15.4 addresses preheat instances by
-**name**, not numeric ID: the operator sends
-`PUT /api/v2.0/p2p/preheat/instances/<name>` with the numeric `id` in the body.
-A numeric-id PUT returns `404 instance <id> not found` even when the list
-contains that instance. Harbor answers `409` when the name already exists; the
-operator re-lists and updates. After a successful create/update it pings the
-instance; a ping failure is reported as a `HarborPreheatFailed` Cluster event
-while the instance is kept for the next retry. Harbor displays `status:
-Unknown` for a healthy row; use the ping endpoint as the health signal.
-
-The instance is created only when the Harbor role is enabled, a Harbor URL is
-resolved, and `manager.apiURL` is set. It requires the manager to be reachable
-from Harbor and the Harbor admin Secret to exist in the Cluster namespace.
-
-The registry proxy is independent of Harbor and the seed role:
-`p2p.dragonfly.io/proxy: "true"` is rendered by the shared
-`d7y-registry-proxy` HelmOp (selector `d7y-operator-proxy=true`) on every
-matching Cluster, with the public URL built from the operator value
-`proxy.domain` (`https://<proxy.domain>`). It has no PVC and no in-cluster
-mirror. Its Harbor URL comes from `p2p.dragonfly.io/harbor-url` or the operator
-value `proxy.harborURL`. The chart `fullnameOverride` is the Fleet template
-`${ .ClusterName }`, so downstream objects keep their old
-`<cluster>-registry-proxy` names during migration.
-
-The per-cluster proxy ingress TLS Secret is read from the
-`p2p.dragonfly.io/proxy-tls-secret` annotation. The operator stamps it from the
-`proxy.tlsSecret` value only when the annotation is absent, and never
-overwrites a pinned value.
-
-Per-cluster `/etc/hosts` entries come from the
-`p2p.dragonfly.io/proxy-host-aliases` annotation, a comma-separated list of
-`ip=hostname` pairs (for example `203.0.113.10=harbor.example.com`). The
-shared release renders it into the chart's `proxy.hostAliases` as a real YAML
-list; when the annotation is absent or blank it falls back to the operator-wide
-`proxy.hostAliases` (`--proxy-host-aliases` / `PROXY_HOST_ALIASES`), and then to
-an empty list. Use it when an in-cluster Harbor domain must resolve to the
-Harbor ClusterIP (typically a same-cluster managed Harbor reached through the
-Traefik ClusterIP). The annotation is per Cluster and never overwritten by the
-operator.
-
-The operator provisions the Harbor system robot and writes its Secret in the
-HelmOp namespace. The robot and webhook Secrets are now fleet-wide fixed names,
-`d7y-registry-proxy-robot` and `d7y-registry-proxy-webhook`, and the Harbor admin
-Secret is the fixed `d7y-harbor-admin`; all three are listed in
-`spec.downstreamResources` so Fleet copies them to `dragonfly-system`. The same
-robot/admin credentials are therefore shared by every proxy target. The proxy
-only reads the mounted `username`/`password` and never creates, updates, or
-deletes the Secret. The operator pre-creates the explicit allowlist proxy
-projects and the writable `mirror` project before provisioning the robot; the
-proxy still idempotently ensures the Harbor registry endpoints, request-scoped
-projects for a `*` allowlist, and the `PUSH_ARTIFACT` webhook policy. No manual
-Harbor project is needed. The source proxy project is never mutated. The proxy
-copies source manifests/blobs into `mirror/<registry>/<repo>`, runs `nydusify
-convert --merge-platform --oci --fs-version 6` to `:<tag>-merged` (RAFS v6 is
-required by fscache), verifies the nydus artifact by its `artifactType` and
-bootstrap layer rather than descriptor position, and moves that index to
-`<tag>`. A multiarch tag is converted through its target-platform child digest;
-the published index keeps only that child plus the nydus artifact, because
-nydusify copies only the converted child and Harbor rejects an index whose
-descriptors are absent from the target repository. A single-manifest source
-gets its `os`/`architecture` from the image config blob. If that platform is
-not the configured conversion platform (default `linux/amd64`), the job fails
-with a clear non-convertible result and publishes no nydus index: the source
-manifest stays available and digest pulls keep working. Digest refs for amd64
-single manifests and multiarch index refs still convert. A digest reference is
-copied byte-for-byte (attestation descriptors included) so its
-content-addressed identity stays valid; before publishing, the proxy also
-copies a missing target-platform source child manifest and its blobs into the
-target repository, then publishes only descriptors that resolve there. A
-digest-triggered conversion publishes its nydus index under a short
-`nd-<digest12>` tag; the digest reference itself still resolves to the source
-OCI manifest. Tag copies and conversions are otherwise unchanged. Harbor
-registry endpoints are reconciled without changing an existing type: Docker Hub
-keeps the `docker-hub` adapter, every other host uses the generic
-`docker-registry` adapter (the typed GitHub/GitLab/Quay adapters embed it), and
-a stale-type endpoint is kept while a deterministic `<host>-generic` endpoint
-is created. An existing `github-ghcr` endpoint is accepted for `ghcr.io` and
-kept: the working project is not moved to a generic endpoint, and an unused
-`ghcr.io-generic` left by an earlier rollout is removed. A generic endpoint is
-reused when the canonical name is absent, so hosts that already work through
-`<host>-generic` (quay.io and other stale-type cases) keep it. A same-type URL
-drift is updated in place. When a source project still points at the old
-endpoint, the proxy re-points the project `registry_id` if Harbor allows,
-otherwise it creates and uses a deterministic `<project>-generic` project.
-After the re-point, an explicit bounded cleanup deletes the old exact-name
-stale endpoint when nothing references it; Harbor's 412 response means a
-project still references it and the endpoint is left alone. Generic cleanup
-removes only an unreferenced `<host>-generic` that is not in use; a referenced
-generic answers 412 and stays. Neither cleanup scans the endpoint list.
-`/api/convert` is a Harbor-reachable shared-secret endpoint and returns 202
-before the asynchronous copy/conversion.
-
-The proxy Manager is intentionally in-memory. After a proxy restart, in-flight
-jobs are not automatically restored; the next Harbor `PUSH_ARTIFACT` webhook or
-client pull re-enqueues the job. There is no durable queue, cron, or startup
-reconciliation in v1; Harbor remains the source of truth.
-
-Scaling (future): multiple proxy replicas need a shared KeyDB/Redis-backed
-Manager for job state and deduplication. The current KeyDB is multi-master but
-has no PVC/HA, so state durability is a separate decision; v1 stays in-memory.
-
-The proxy accepts the OCI direct-ref route
-`/v2/<registry>/<repo>/manifests|blobs|referrers` (the first path segment is
-the explicit registry, as produced by the admission rewrite) and keeps
-`?ns=<registry>` / `X-Dragonfly-Registry` for containerd/dfdaemon. A `?ns`
-hint naming the proxy itself is ignored so the direct-ref segment wins.
-Unqualified repository paths are rejected with 403. The default allowlist is
-`*`: any explicit registry is accepted, and proxy auth (Basic or network-only)
-is the security boundary. The first segment must still look like a registry
-(dot, port, or `localhost`). Docker aliases (`registry-1.docker.io`,
-`index.docker.io`) are canonicalized to `docker.io` before Harbor project
-mapping.
-
-On the first manifest request for a tag the proxy returns the source OCI
-manifest immediately and starts the copy and nydus conversion job in the
-background; after the job completes the same tag returns the nydus OCI index.
-Digest references cannot carry a same-digest nydus index and keep the source
-OCI manifest. Blob
-requests never copy the image: they read the `mirror` project first and fall
-back to the Harbor proxy project, so a multi-arch copy still walks every index
-child once in the background job.
-
-Target clusters do not need an in-cluster proxy mirror; the proxy
-Service/Deployment is rendered by the shared `d7y-registry-proxy` HelmOp with
-the per-cluster `<cluster>-registry-proxy` name.
-`SMART_PROXY_URL` in the bootstrap payload is optional and fail-open.
-
-Client auth is optional: when `auth.mode` is `basic` the proxy checks
-`Authorization: Basic` on every registry API read, in both `/v2` and
-`/<registry>/v2` forms, using `auth.username` and a password mounted at
-`auth.password_file` (a Secret); health probes stay open and `/api/convert`
-keeps its Bearer webhook secret. Empty mode means network-only
-(NetworkPolicy/TLS): no credentials are required from dfdaemon or containerd.
-Private upstream registries are optional and disabled by default. Set
-`PROXY_UPSTREAM_CREDENTIALS_SECRET` to a Secret in the operator namespace with a
-`credentials.yaml` key:
-
-```yaml
-registry.gitlab.com:
-  access_key: <user>
-  access_secret: <token>
-```
-
-The file is keyed by exact normalized registry host. A path-prefix key such as
-`registry.gitlab.com/group/` does not match, and per-prefix credentials are not
-supported by the current lookup. The token must grant `read_registry` on the
-repositories served through the proxy. The operator replicates the Secret to
-the HelmOp namespace and passes it as `upstream.credentialsSecret`; the chart
-mounts it read-only at
-`/etc/registry-proxy/secrets/upstream/credentials.yaml` and sets
-`upstream.credentials_file`. Credentials are never written to the ConfigMap or
-logs.
-
-The proxy's `harbor.url` must be HTTPS; nydusify converts through the Harbor
-registry and the proxy does not enable plain-HTTP conversion.
-
-Conditions: `d7y.io/HarborReady`, `d7y.io/RegistryProxyReady`, and
-`d7y.io/HarborDomainMissing`. Missing/invalid domain keeps Harbor/proxy
-HelmOps absent and records the event/condition.
-
 ## Host nydus snapshotter
 
 `p2p-install.sh` installs the patched host snapshotter from
@@ -781,20 +508,6 @@ another fork release. The other nydus daemon assets (`nydusd`, `nydus-image`,
 `nydus-overlayfs`) stay pinned in the static store at `NYDUS_VERSION`
 (`v0.16.0`). A missing release asset falls back to the direct registry so RKE2
 can still start. There is no MITM proxy or local CA on the node.
-
-Set `nydus.mirrorURL` (`NYDUS_MIRROR_URL`) to the registry proxy mirror path,
-for example `https://proxy.example.test/docker.io`, to make nydusd fetch nydus
-blobs directly from that HTTPS path instead of the dfdaemon proxy. The
-bootstrap writes `server = "<mirror>"` plus the containerd-compatible
-`[host."<mirror>"]` entry under
-`/etc/nydus/mirrors/{docker.io,index.docker.io,_default}/hosts.toml` and adds
-`[remote.mirrors_config] dir = "/etc/nydus/mirrors"` to
-`/etc/nydus/config.toml`; the generated `nydusd-config.json` then omits the
-`proxy.url`/`use_http` block. The value must include the registry segment
-(the proxy serves blobs at `<mirror>/v2/...`) and is supplied per deployment;
-no domain is hardcoded. Leaving it empty preserves the existing dfdaemon proxy
-fallback and the direct-registry behavior. Dragonfly and the containerd mirror
-are unchanged.
 
 The `containerd-mirror` chart is created only for seed clusters
 (`p2p.dragonfly.io/seed: "true"`) and writes only
@@ -818,16 +531,7 @@ The operator only acts on Clusters labeled `d7y-operator-cattle: "true"`.
 | `p2p.dragonfly.io/scheduler-replicas` | integer | Scheduler replicas (default `1`) |
 | `p2p.dragonfly.io/seedclient-replicas` | integer | Seed client replicas (default `1`) |
 | `p2p.dragonfly.io/monitoring` | label selector, `true`, or `enabled` | Enable metrics and ServiceMonitors for manager/scheduler/seedClient/client when the selector matches the Cluster labels; empty, invalid, or non-matching disables. Requires the Prometheus Operator ServiceMonitor CRD. |
-| `p2p.dragonfly.io/harbor` | `"true"` | Deploy Harbor (requires `harbor-domain`) |
-| `p2p.dragonfly.io/harbor-domain` | DNS name | Harbor Ingress host / `externalURL` |
-| `p2p.dragonfly.io/harbor-url` | HTTPS URL | Use an existing/external Harbor; no managed Harbor release |
-| `p2p.dragonfly.io/harbor-tls-secret` | Secret name | Per-cluster Harbor ingress TLS Secret; empty derives `<cluster>-harbor-tls` |
-| `p2p.dragonfly.io/proxy` | `"true"` | Deploy the shared registry proxy HelmOp |
-| `p2p.dragonfly.io/proxy-tls-secret` | Secret name | Per-cluster proxy ingress TLS Secret; stamped from `proxy.tlsSecret` only when absent and never overwritten |
-| `p2p.dragonfly.io/proxy-host-aliases` | comma-separated `ip=hostname` pairs | Per-cluster registry-proxy `/etc/hosts` pins; falls back to the operator-wide `proxy.hostAliases` when absent or blank |
-| `p2p.dragonfly.io/mutate-exclure` | comma-separated namespaces | Extra namespaces the admission webhook skips (added to the system and release-namespace exclusions); invalid DNS-1123 labels are logged and skipped |
 | `p2p.dragonfly.io/p2p-data-tls` | `"true"` or `"enabled"` | Keep mTLS on the P2P data path (`seedClient`/`client` upload and scheduler `seedPeer`). Default/off uses plaintext P2P data; scheduler server, manager gRPC/API, and monitoring TLS are unaffected. |
-| `p2p.dragonfly.io/node-config-key` | field name | Machine-config `spec` field patched by the webhook (default `userData`, e.g. `postBootScript`) |
 
 When monitoring is enabled, a Dragonfly component with `enable=false` is
 explicitly given `metrics.enable=false` and `metrics.serviceMonitor.enable=false`
@@ -917,82 +621,6 @@ host updater. There is no in-cluster nydus DaemonSet or HelmOp. See
 `charts/p2p-static/README.md` for values, payload keys, drop-ins, and pilot
 risks.
 
-## Smart proxy pilot (after approval)
-
-1. Render/lint locally and enable `p2p.dragonfly.io/harbor`,
-   `p2p.dragonfly.io/harbor-domain`, `p2p.dragonfly.io/proxy`, and
-   `p2p.dragonfly.io/seed` on a test Cluster.
-2. Pull `docker.io/library/nginx:1.27` through a node; no `-nydus` tag and no
-   admission webhook are used.
-3. Check `oras manifest fetch harbor.<domain>/mirror/docker.io/library/nginx:1.27`
-   returns an OCI index with the OCI child first and the nydus child
-   (`artifactType=application/vnd.nydus.image.manifest.v1+json`) second.
-4. Confirm `nydusd`/FUSE on the node, then pull again to confirm Dragonfly P2P.
-   The exact source digest is only the
-   `containerd.io/snapshot/nydus-source-digest` annotation; a digest-pinned
-   consumer sees the index digest, not the original source digest. The nydus
-   child manifest's `containerd.io/snapshot/nydus-source-reference` annotation
-   is rewritten to the public proxy reference so nydus does not resolve the
-   upstream registry directly.
-5. Force a conversion failure; the original mirror OCI tag must remain and a
-   later webhook/pull retries. Do not run this pilot without explicit approval.
-
-## Admission webhook
-
-The operator serves `/mutate` on port 9443. The `MutatingWebhookConfiguration`
-matches `rke-machine-config.cattle.io/v1` wildcard resources with
-`operations: ["CREATE"]`, `failurePolicy: Ignore`, `sideEffects: None`, and
-`admissionReviewVersions: ["v1"]`. Updates are never mutated.
-
-A new machine config is patched only when its target Cluster (resolved by the
-`<cluster>-<pool>` name prefix, or by the `p2p.dragonfly.io/cluster`
-(`namespace/name` or name), `p2p.dragonfly.io/cluster-name`, and
-`p2p.dragonfly.io/cluster-namespace` annotations) has the
-`d7y-operator-cattle: "true"` label and `p2p.dragonfly.io/seed: "true"` annotation,
-or the config itself carries them. The payload is the base64url env-file from
-`contracts/bootstrap-payload.md`; the node-config field is patched in plain YAML,
-plain shell, or base64-encoded cloud-config form with the marker
-`# d7y-cattle-operator:p2p-install`. Reapplying does not add a second call.
-
-The patched spec field defaults to `userData`. Set the target Cluster annotation
-`p2p.dragonfly.io/node-config-key` to choose a different single field name
-(`postBootScript`, `userdata`, ...). The value must match
-`^[A-Za-z][A-Za-z0-9]*$` and is interpreted as a field name under `spec`, not a
-JSON path. Invalid values emit a `NodeConfigKeyInvalid` warning event and the
-webhook does not patch. Cloud-config content keeps the existing `runcmd`
-insertion; plain shell content, such as CloudblastConfig `postBootScript`, is
-preserved and the bootstrap line is appended as a new shell line.
-
-```yaml
-apiVersion: provisioning.cattle.io/v1
-kind: Cluster
-metadata:
-  name: c1
-  namespace: fleet-default
-  labels:
-    d7y-operator-cattle: "true"
-  annotations:
-    p2p.dragonfly.io/seed: "true"
-    p2p.dragonfly.io/node-config-key: postBootScript
----
-apiVersion: rke-machine-config.cattle.io/v1
-kind: CloudblastConfig
-metadata:
-  name: c1-pool1
-  namespace: fleet-default
-spec:
-  postBootScript: |
-    #!/bin/bash
-    echo "before bootstrap"
-```
-
-Serving TLS comes from Wrangler needacert: the webhook Service carries
-`need-a-cert.cattle.io/secret-name`; needacert creates/rotates the TLS Secret
-and injects the CA bundle into the MutatingWebhookConfiguration. The mounted
-Secret is optional, and the server falls back to an in-memory self-signed
-certificate only until needacert is available; `failurePolicy: Ignore` keeps
-node creation unblocked.
-
 ## Known pilot risk: extras target names
 
 The Ingress backends and VPA targetRefs assume the Dragonfly chart workload
@@ -1070,7 +698,7 @@ make docker-build   # container image
 make docker-test    # go test ./... inside Docker
 make lint           # go vet ./... inside Docker
 make helm-lint      # helm lint every chart under charts/
-make helm-template  # render the operator, extras, p2p-static, and proxy charts
+make helm-template  # render the operator, extras, p2p-static, and mirror charts
 ```
 
 ## Security notes
@@ -1090,7 +718,7 @@ Pushing a `v*` tag runs `.github/workflows/release.yml`:
   the `gh-pages` branch.
 
 The repository charts are `d7y-cattle-operator`, `dragonfly-extras`,
-`p2p-static`, `registry-proxy`, and `admission-webhook`. The KeyDB chart is
+`p2p-static`, and `containerd-mirror`. The KeyDB chart is
 external (`enapter/keydb` `0.48.0` from
 `https://enapter.github.io/charts/`) and is not vendored or published here.
 The operator pins that external chart and submits the three-master, no-PVC

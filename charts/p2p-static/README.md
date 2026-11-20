@@ -157,7 +157,7 @@ logged reason, rather than starting a snapshotter that cannot mount images.
 unit, and the unit's `ExecStartPre` reruns it on every start, so a kernel or
 module change is picked up without rerunning `p2p-install.sh`.
 
-Images must be RAFS v6 for EROFS/fscache. The registry-proxy nydusify
+Images must be RAFS v6 for EROFS/fscache. The nydusify
 conversion must pass `--fs-version 6` (the proxy PR wires `fs_version=6`);
 this chart only validates and reports the prerequisite and contains no
 conversion code.
@@ -234,15 +234,6 @@ Measured effect (cold python start, then warm):
 | via dfdaemon        | 5.0 s  | 2.9 s  |
 
 Caveat: cross-node P2P for RAFS and zran is not yet confirmed.
-
-## Harbor admin Secret
-
-Harbor is deployed by the operator, not by this chart. Before enabling
-`p2p.dragonfly.io/harbor`, put a Secret in the local/operator namespace
-(default name `harbor-admin`) with the `HARBOR_ADMIN_PASSWORD` key. The
-operator copies it per cluster and Fleet delivers it to Harbor as
-`existingSecretAdminPassword`; values must never be placed in chart values or
-Git.
 
 ## Host dfdaemon bootstrap switch
 

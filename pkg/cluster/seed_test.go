@@ -13,7 +13,6 @@ import (
 	"k8s.io/apimachinery/pkg/runtime/schema"
 
 	"github.com/gorizond/d7y-cattle-operator/pkg/helmop"
-	"github.com/gorizond/d7y-cattle-operator/pkg/registryproxy"
 )
 
 func TestReconcileSeedCreatesSharedHelmOps(t *testing.T) {
@@ -33,7 +32,6 @@ func TestReconcileSeedCreatesSharedHelmOps(t *testing.T) {
 		helmop.SharedDataName(),
 		helmop.SharedExtrasName(),
 		helmop.SharedMirrorName(),
-		helmop.SharedAdmissionName(),
 	} {
 		if !store.has("fleet-default/" + name) {
 			t.Errorf("%s shared HelmOp was not created", name)
@@ -41,7 +39,6 @@ func TestReconcileSeedCreatesSharedHelmOps(t *testing.T) {
 	}
 	for _, legacy := range []string{
 		"c1-keydb", "c1-control", "c1-data", "c1-extras",
-		"c1-containerd-mirror", "c1-admission-webhook",
 	} {
 		if store.has("fleet-default/" + legacy) {
 			t.Errorf("legacy per-cluster HelmOp %s still exists", legacy)
@@ -111,9 +108,7 @@ func TestReconcileStampsClusterIDAndPublicIP(t *testing.T) {
 
 func TestReconcileSeedMirrorIsDefaultOnly(t *testing.T) {
 	controller, store, _ := newTestController(t)
-	controller.opts.ProxyHarborURL = "https://external.example.com"
 	cluster := testSeedCluster("42")
-	cluster.Annotations[AnnotationProxy] = "true"
 
 	if _, err := controller.reconcile("", cluster); err != nil {
 		t.Fatalf("reconcile() error = %v", err)
@@ -132,9 +127,7 @@ func TestReconcileSeedMirrorIsDefaultOnly(t *testing.T) {
 	if got := valueAtPath(t, values, "port"); got != int64(4001) {
 		t.Errorf("mirror port = %v, want 4001", got)
 	}
-	if !store.has("fleet-default/" + helmop.SharedRegistryProxyName()) {
-		t.Error("per-cluster proxy HelmOp was not created independently of the mirror")
-	}
+
 }
 
 func TestReconcileSeedDeletesLegacyNydusHelmOp(t *testing.T) {
@@ -199,7 +192,7 @@ func TestReconcileSeedRemovalAndLabelRemoval(t *testing.T) {
 	}
 	// cleanupAll removes the per-cluster objects; shared objects stay because
 	// Fleet stops targeting the unlabeled cluster.
-	for _, name := range []string{"c1-manager", "c1-harbor", "c1-registry-proxy", "c1-keydb", "c1-control", "c1-data", "c1-extras", "c1-containerd-mirror", "c1-admission-webhook"} {
+	for _, name := range []string{"c1-manager", "c1-keydb", "c1-control", "c1-data", "c1-extras", "c1-containerd-mirror"} {
 		if store.has("fleet-default/" + name) {
 			t.Errorf("per-cluster HelmOp %s left after label removal", name)
 		}
@@ -219,28 +212,18 @@ func newTestController(t *testing.T) (*Controller, *fakeHelmOpStore, *fakeEventS
 		Type:       corev1.SecretTypeTLS,
 		Data:       map[string][]byte{"ca.crt": []byte("ca"), "tls.crt": []byte("cert")},
 	})
-	secrets.put(&corev1.Secret{
-		ObjectMeta: metav1.ObjectMeta{Name: "harbor-admin", Namespace: "dragonfly-system"},
-		Data:       map[string][]byte{"HARBOR_ADMIN_PASSWORD": []byte("admin-password")},
-	})
-	secrets.put(&corev1.Secret{
-		ObjectMeta: metav1.ObjectMeta{Name: "dragonfly-harbor-preheat", Namespace: "dragonfly-system"},
-		Data:       map[string][]byte{"token": []byte("fixture-preheat-pat")},
-	})
 	store := newFakeHelmOpStore()
 	bundles := newFakeHelmOpStore()
 	events := &fakeEventStore{}
 	controller := &Controller{
-		ctx:            context.Background(),
-		secrets:        secrets,
-		events:         events,
-		helmops:        store,
-		bundles:        bundles,
-		clusters:       newFakeClusterStore(),
-		robotEnsurer:   &fakeRobotEnsurer{},
-		preheatEnsurer: &fakePreheatEnsurer{},
-		registrar:      newFakeRegistrar(),
-		allocator:      newFakeAllocator(),
+		ctx:       context.Background(),
+		secrets:   secrets,
+		events:    events,
+		helmops:   store,
+		bundles:   bundles,
+		clusters:  newFakeClusterStore(),
+		registrar: newFakeRegistrar(),
+		allocator: newFakeAllocator(),
 		opts: Options{
 			OperatorNamespace:           "dragonfly-system",
 			MTLSSecretName:              "dragonfly-p2p-mtls",
@@ -254,14 +237,6 @@ func newTestController(t *testing.T) (*Controller, *fakeHelmOpStore, *fakeEventS
 			DragonflyChart:              helmop.Chart{Repo: "https://charts.example.com", Name: "dragonfly", Version: "1.10.1-patch.2"},
 			ExtrasChart:                 helmop.Chart{Repo: "https://charts.example.com", Name: "dragonfly-extras", Version: "0.1.10"},
 			MirrorChart:                 helmop.Chart{Repo: "https://charts.example.com", Name: "containerd-mirror", Version: "0.1.0"},
-			HarborChart:                 helmop.Chart{Repo: "https://helm.example.com", Name: "harbor", Version: "1.19.4"},
-			RegistryProxyChart:          helmop.Chart{Repo: "https://charts.example.com", Name: "registry-proxy", Version: "0.1.0"},
-			HarborIngressClass:          "traefik",
-			ProxyDomain:                 "proxy.example.com",
-			ProxyBasePath:               "/proxy",
-			ProxyTLSSecret:              "demo-harbor-tls",
-			ProxyHarborAdminSecret:      "harbor-admin",
-			ProxyRegistries:             []string{"docker.io"},
 			ExtrasIngressController:     "nginx",
 			ExtrasIngressGRPCEnabled:    true,
 			ExtrasIngressRESTEnabled:    true,
@@ -405,44 +380,6 @@ func (f *fakeHelmOpStore) Update(_ context.Context, namespace string, obj, resul
 func (f *fakeHelmOpStore) Delete(_ context.Context, namespace, name string, _ metav1.DeleteOptions) error {
 	delete(f.objects, namespace+"/"+name)
 	return nil
-}
-
-type robotEnsureCall struct {
-	HarborURL     string
-	Username      string
-	Password      string
-	SecretName    string
-	MirrorProject string
-	Registries    []string
-}
-
-type fakeRobotEnsurer struct {
-	calls    []robotEnsureCall
-	err      error
-	password string
-}
-
-func (f *fakeRobotEnsurer) Ensure(ctx context.Context, harborURL, username, password, secretName, mirrorProject string, registries []string, store registryproxy.SecretStore) error {
-	f.calls = append(f.calls, robotEnsureCall{
-		HarborURL:     harborURL,
-		Username:      username,
-		Password:      password,
-		SecretName:    secretName,
-		MirrorProject: mirrorProject,
-		Registries:    append([]string(nil), registries...),
-	})
-	if f.err != nil {
-		return f.err
-	}
-	secretPassword := f.password
-	if secretPassword == "" {
-		secretPassword = "fixture-robot-password"
-	}
-	return store.Put(ctx, secretName, map[string][]byte{
-		"username":                []byte("robot$d7y-registry-proxy"),
-		"password":                []byte(secretPassword),
-		"permissions-fingerprint": []byte("v1:sha256:fixture"),
-	})
 }
 
 type fakeSecretStore struct {

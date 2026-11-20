@@ -28,21 +28,12 @@ spec:
           args:
             - --leader-elect={{ .Values.leaderElect }}
           env:
-            # The admission webhook must run the same image as the operator.
-            - name: OPERATOR_IMAGE_REPOSITORY
-              value: {{ .Values.image.repository | quote }}
-            - name: OPERATOR_IMAGE_TAG
-              value: {{ include "d7y-cattle-operator.imageTag" . | quote }}
             - name: MANAGER_GRPC_DOMAIN
               value: {{ .Values.manager.grpcDomain | quote }}
             - name: MANAGER_GRPC_PORT
               value: {{ .Values.manager.grpcPort | quote }}
             - name: MANAGER_API_URL
               value: {{ .Values.manager.apiURL | quote }}
-            - name: NGINX_STATIC_URL
-              value: {{ .Values.nginx.staticURL | quote }}
-            - name: NYDUS_MIRROR_URL
-              value: {{ .Values.nydus.mirrorURL | quote }}
             - name: P2P_DOMAIN
               value: {{ .Values.scheduler.domain | quote }}
             - name: P2P_CLUSTER_ID
@@ -69,50 +60,6 @@ spec:
               value: {{ .Values.containerdMirror.chart.name | quote }}
             - name: CONTAINERD_MIRROR_CHART_VERSION
               value: {{ .Values.containerdMirror.chart.version | quote }}
-            - name: HARBOR_CHART_REPO
-              value: {{ .Values.harbor.chart.repo | quote }}
-            - name: HARBOR_CHART_NAME
-              value: {{ .Values.harbor.chart.name | quote }}
-            - name: HARBOR_CHART_VERSION
-              value: {{ .Values.harbor.chart.version | quote }}
-            - name: REGISTRY_PROXY_CHART_REPO
-              value: {{ .Values.registryProxy.chart.repo | quote }}
-            - name: REGISTRY_PROXY_CHART_NAME
-              value: {{ .Values.registryProxy.chart.name | quote }}
-            - name: REGISTRY_PROXY_CHART_VERSION
-              value: {{ .Values.registryProxy.chart.version | quote }}
-            - name: ADMISSION_CHART_REPO
-              value: {{ .Values.admission.chart.repo | quote }}
-            - name: ADMISSION_CHART_NAME
-              value: {{ .Values.admission.chart.name | quote }}
-            - name: ADMISSION_CHART_VERSION
-              value: {{ .Values.admission.chart.version | quote }}
-            - name: ADMISSION_IMAGE_PULL_SECRET
-              value: {{ .Values.admission.imagePullSecret | quote }}
-            - name: ADMISSION_SERVICE_ACCOUNT
-              value: {{ .Values.admission.serviceAccountName | quote }}
-            - name: ADMISSION_NETWORK_ONLY
-              value: {{ .Values.admission.networkOnly | quote }}
-            - name: PROXY_DOMAIN
-              value: {{ .Values.proxy.domain | quote }}
-            - name: PROXY_HARBOR_URL
-              value: {{ .Values.proxy.harborURL | quote }}
-            - name: PROXY_HARBOR_ADMIN_SECRET
-              value: {{ .Values.proxy.harborAdminSecret | quote }}
-            - name: PROXY_REGISTRIES
-              value: {{ if kindIs "slice" .Values.proxy.registries }}{{ join "," .Values.proxy.registries | quote }}{{ else }}{{ .Values.proxy.registries | quote }}{{ end }}
-            - name: PROXY_BASE_PATH
-              value: {{ .Values.proxy.basePath | quote }}
-            - name: PROXY_TLS_SECRET
-              value: {{ .Values.proxy.tlsSecret | quote }}
-            - name: PROXY_HOST_ALIASES
-              value: {{ .Values.proxy.hostAliases | default list | toJson | quote }}
-            - name: PROXY_BASIC_AUTH_ENABLED
-              value: {{ .Values.proxy.basicAuthEnabled | quote }}
-            - name: PROXY_BASIC_AUTH_USERNAME
-              value: {{ .Values.proxy.basicAuthUsername | quote }}
-            - name: PROXY_UPSTREAM_CREDENTIALS_SECRET
-              value: {{ .Values.proxy.upstreamCredentialsSecret | quote }}
             - name: EXTRAS_INGRESS_CONTROLLER
               value: {{ .Values.extras.ingress.controller | quote }}
             - name: EXTRAS_INGRESS_CLASS_NAME
@@ -129,22 +76,6 @@ spec:
               valueFrom:
                 fieldRef:
                   fieldPath: metadata.namespace
-            - name: WEBHOOK_PORT
-              value: {{ .Values.webhook.port | quote }}
-            - name: WEBHOOK_CERT_DIR
-              value: {{ .Values.webhook.certDir | quote }}
-            - name: WEBHOOK_SERVICE_NAME
-              value: {{ include "d7y-cattle-operator.webhookName" . }}
-          ports:
-            - name: webhook
-              containerPort: {{ .Values.webhook.port }}
-              protocol: TCP
-          {{- if .Values.webhook.enabled }}
-          volumeMounts:
-            - name: webhook-certs
-              mountPath: {{ .Values.webhook.certDir }}
-              readOnly: true
-          {{- end }}
           securityContext:
             allowPrivilegeEscalation: false
             readOnlyRootFilesystem: true
@@ -153,10 +84,3 @@ spec:
                 - ALL
           resources:
             {{- toYaml .Values.resources | nindent 12 }}
-      {{- if .Values.webhook.enabled }}
-      volumes:
-        - name: webhook-certs
-          secret:
-            secretName: {{ include "d7y-cattle-operator.webhookName" . }}-cert
-            optional: true
-      {{- end }}

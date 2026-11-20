@@ -2,35 +2,7 @@ package helmop
 
 import (
 	"testing"
-
-	fleetv1alpha1 "github.com/rancher/fleet/pkg/apis/fleet.cattle.io/v1alpha1"
 )
-
-func TestMirrorHelmOpHasNoProxyValues(t *testing.T) {
-	c := testCluster()
-	c.ProxyEnabled = true
-	c.ProxyPublicURL = "https://proxy.example.com/proxy"
-	c.ProxyRegistries = []string{"docker.io", "registry.gitlab.com", "ghcr.io"}
-	op := Mirror(c)
-
-	if got := dependsOnNames(op); len(got) != 1 || got[0] != "c1-data" {
-		t.Errorf("dependsOn = %v, want data only", got)
-	}
-	values := op.Spec.Helm.Values.Data
-	for _, key := range []string{"proxy", "registries", "docker.io", "index.docker.io"} {
-		if containsKey(values, key) {
-			t.Errorf("mirror values contain %q; chart hosts files are static", key)
-		}
-	}
-}
-
-func dependsOnNames(op *fleetv1alpha1.HelmOp) []string {
-	names := make([]string, 0, len(op.Spec.DependsOn))
-	for _, item := range op.Spec.DependsOn {
-		names = append(names, item.Name)
-	}
-	return names
-}
 
 func TestMirrorHelmOp(t *testing.T) {
 	op := Mirror(testCluster())

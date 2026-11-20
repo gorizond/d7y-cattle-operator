@@ -11,10 +11,6 @@ var envKeys = []string{
 	"MANAGER_API_URL",
 	"P2P_DOMAIN",
 	"P2P_CLUSTER_ID",
-	"NGINX_STATIC_URL",
-	"NYDUS_MIRROR_URL",
-	"OPERATOR_IMAGE_REPOSITORY",
-	"OPERATOR_IMAGE_TAG",
 	"MTLS_SECRET_NAME",
 	"MANAGER_API_CREDENTIALS_SECRET",
 	"DRAGONFLY_CHART_REPO",
@@ -26,22 +22,6 @@ var envKeys = []string{
 	"CONTAINERD_MIRROR_CHART_REPO",
 	"CONTAINERD_MIRROR_CHART_NAME",
 	"CONTAINERD_MIRROR_CHART_VERSION",
-	"HARBOR_CHART_REPO",
-	"HARBOR_CHART_NAME",
-	"HARBOR_CHART_VERSION",
-	"REGISTRY_PROXY_CHART_REPO",
-	"REGISTRY_PROXY_CHART_NAME",
-	"REGISTRY_PROXY_CHART_VERSION",
-	"PROXY_DOMAIN",
-	"PROXY_HARBOR_URL",
-	"PROXY_HARBOR_ADMIN_SECRET",
-	"PROXY_REGISTRIES",
-	"PROXY_BASE_PATH",
-	"PROXY_TLS_SECRET",
-	"PROXY_BASIC_AUTH_ENABLED",
-	"PROXY_BASIC_AUTH_USERNAME",
-	"PROXY_UPSTREAM_CREDENTIALS_SECRET",
-	"PROXY_HOST_ALIASES",
 	"EXTRAS_INGRESS_CONTROLLER",
 	"EXTRAS_INGRESS_CLASS_NAME",
 	"EXTRAS_INGRESS_GRPC_ENABLED",
@@ -49,9 +29,6 @@ var envKeys = []string{
 	"EXTRAS_INGRESS_TLS_SECRET",
 	"EXTRAS_TRAEFIK_SERVERS_TRANSPORT_ENABLED",
 	"POD_NAMESPACE",
-	"WEBHOOK_PORT",
-	"WEBHOOK_CERT_DIR",
-	"WEBHOOK_SERVICE_NAME",
 	"KUBECONFIG",
 }
 
@@ -67,7 +44,6 @@ func requiredArgs() []string {
 		"--manager-grpc-domain=manager-grpc.example.com",
 		"--manager-api-url=https://manager-api.example.com",
 		"--p2p-domain=example.com",
-		"--nginx-static-url=https://static.example.com",
 		"--manager-api-credentials-secret=dragonfly-manager-api",
 	}
 }
@@ -91,9 +67,6 @@ func TestLoadDefaults(t *testing.T) {
 	}
 	if cfg.MTLSSecretName != DefaultMTLSSecretName {
 		t.Errorf("MTLSSecretName = %q, want %q", cfg.MTLSSecretName, DefaultMTLSSecretName)
-	}
-	if cfg.OperatorImageRepository != "" || cfg.OperatorImageTag != "" {
-		t.Errorf("operator image defaults = %q/%q, want empty", cfg.OperatorImageRepository, cfg.OperatorImageTag)
 	}
 	if cfg.DragonflyChartRepo != DefaultDragonflyChartRepo {
 		t.Errorf("DragonflyChartRepo = %q, want %q", cfg.DragonflyChartRepo, DefaultDragonflyChartRepo)
@@ -122,36 +95,6 @@ func TestLoadDefaults(t *testing.T) {
 	if cfg.MirrorChartVersion != DefaultMirrorChartVersion {
 		t.Errorf("MirrorChartVersion = %q, want %q", cfg.MirrorChartVersion, DefaultMirrorChartVersion)
 	}
-	if cfg.HarborChartVersion != DefaultHarborChartVersion {
-		t.Errorf("HarborChartVersion = %q, want %q", cfg.HarborChartVersion, DefaultHarborChartVersion)
-	}
-	if cfg.RegistryProxyChartVersion != DefaultRegistryProxyChartVersion {
-		t.Errorf("RegistryProxyChartVersion = %q, want %q", cfg.RegistryProxyChartVersion, DefaultRegistryProxyChartVersion)
-	}
-	if cfg.ProxyDomain != "" || cfg.ProxyHarborURL != "" {
-		t.Errorf("proxy defaults = domain:%q url:%q, want empty", cfg.ProxyDomain, cfg.ProxyHarborURL)
-	}
-	if cfg.ProxyHarborAdminSecret != DefaultProxyHarborAdminSecret {
-		t.Errorf("ProxyHarborAdminSecret = %q, want %q", cfg.ProxyHarborAdminSecret, DefaultProxyHarborAdminSecret)
-	}
-	if cfg.ProxyRegistries != DefaultProxyRegistries {
-		t.Errorf("ProxyRegistries = %q, want %q", cfg.ProxyRegistries, DefaultProxyRegistries)
-	}
-	if cfg.ProxyBasePath != "" {
-		t.Errorf("ProxyBasePath = %q, want empty by default", cfg.ProxyBasePath)
-	}
-	if cfg.ProxyTLSSecret != "" {
-		t.Errorf("ProxyTLSSecret = %q, want empty", cfg.ProxyTLSSecret)
-	}
-	if cfg.ProxyBasicAuthEnabled {
-		t.Error("ProxyBasicAuthEnabled = true, want false")
-	}
-	if cfg.ProxyBasicAuthUsername != DefaultProxyBasicAuthUsername {
-		t.Errorf("ProxyBasicAuthUsername = %q, want %q", cfg.ProxyBasicAuthUsername, DefaultProxyBasicAuthUsername)
-	}
-	if cfg.ProxyUpstreamCredentialsSecret != "" {
-		t.Errorf("ProxyUpstreamCredentialsSecret = %q, want empty", cfg.ProxyUpstreamCredentialsSecret)
-	}
 	if cfg.ExtrasIngressController != DefaultExtrasIngressController {
 		t.Errorf("ExtrasIngressController = %q, want %q", cfg.ExtrasIngressController, DefaultExtrasIngressController)
 	}
@@ -169,15 +112,6 @@ func TestLoadDefaults(t *testing.T) {
 	}
 	if cfg.Namespace != DefaultNamespace {
 		t.Errorf("Namespace = %q, want %q", cfg.Namespace, DefaultNamespace)
-	}
-	if cfg.WebhookPort != DefaultWebhookPort {
-		t.Errorf("WebhookPort = %d, want %d", cfg.WebhookPort, DefaultWebhookPort)
-	}
-	if cfg.WebhookCertDir != DefaultWebhookCertDir {
-		t.Errorf("WebhookCertDir = %q, want %q", cfg.WebhookCertDir, DefaultWebhookCertDir)
-	}
-	if cfg.WebhookServiceName != DefaultWebhookServiceName {
-		t.Errorf("WebhookServiceName = %q, want %q", cfg.WebhookServiceName, DefaultWebhookServiceName)
 	}
 	if cfg.LeaderElect {
 		t.Error("LeaderElect = true, want false")
@@ -200,9 +134,6 @@ func TestForkChartDefaults(t *testing.T) {
 	if DefaultMirrorChartVersion != "0.1.0" {
 		t.Errorf("DefaultMirrorChartVersion = %q", DefaultMirrorChartVersion)
 	}
-	if DefaultRegistryProxyChartVersion != "0.1.23" {
-		t.Errorf("DefaultRegistryProxyChartVersion = %q", DefaultRegistryProxyChartVersion)
-	}
 }
 
 func TestLoadRequiredFlags(t *testing.T) {
@@ -210,7 +141,6 @@ func TestLoadRequiredFlags(t *testing.T) {
 		"--manager-grpc-domain",
 		"--manager-api-url",
 		"--p2p-domain",
-		"--nginx-static-url",
 		"--manager-api-credentials-secret",
 	} {
 		t.Run(required, func(t *testing.T) {
@@ -238,9 +168,6 @@ func TestLoadInvalidValues(t *testing.T) {
 	tests := map[string]string{
 		"manager API without https":         "--manager-api-url=http://manager-api.example.com",
 		"manager API with invalid URL":      "--manager-api-url=not-a-url",
-		"nginx static with unsupported URL": "--nginx-static-url=ftp://static.example.com",
-		"nydus mirror without path":         "--nydus-mirror-url=https://proxy.example.com",
-		"nydus mirror with query":           "--nydus-mirror-url=https://proxy.example.com/docker.io?x=1",
 		"gRPC domain with scheme":           "--manager-grpc-domain=https://manager-grpc.example.com",
 		"gRPC domain with port":             "--manager-grpc-domain=manager-grpc.example.com:443",
 		"invalid Secret name":               "--mtls-secret-name=Bad_Name",
@@ -251,26 +178,9 @@ func TestLoadInvalidValues(t *testing.T) {
 		"invalid dragonfly chart repo":      "--dragonfly-chart-repo=not-a-url",
 		"invalid extras chart version":      "--extras-chart-version=latest",
 		"invalid extras chart repo":         "--extras-chart-repo=not-a-url",
-		"invalid harbor chart version":      "--harbor-chart-version=latest",
-		"invalid harbor chart repo":         "--harbor-chart-repo=not-a-url",
-		"invalid registry proxy version":    "--registry-proxy-chart-version=latest",
-		"invalid registry proxy repo":       "--registry-proxy-chart-repo=not-a-url",
-		"invalid proxy domain":              "--proxy-domain=Bad_Domain",
-		"invalid proxy harbor URL":          "--proxy-harbor-url=http://harbor.example.com",
-		"invalid proxy admin secret":        "--proxy-harbor-admin-secret=Bad_Secret",
-		"empty proxy registry":              "--proxy-registries=docker.io,",
-		"invalid proxy base path":           "--proxy-base-path=proxy",
-		"invalid proxy TLS secret":          "--proxy-tls-secret=Bad_Secret",
-		"invalid proxy host alias IP":       `--proxy-host-aliases=[{"ip":"not-an-ip","hostnames":["harbor.example.com"]}]`,
-		"invalid proxy host alias hosts":    `--proxy-host-aliases=[{"ip":"10.0.0.1","hostnames":[]}]`,
-		"malformed proxy host aliases":      `--proxy-host-aliases=not-json`,
 		"invalid extras ingress controller": "--extras-ingress-controller=haproxy",
 		"invalid extras ingress class":      "--extras-ingress-class-name=Bad_Name",
 		"invalid extras ingress TLS Secret": "--extras-ingress-tls-secret=Bad_Name",
-		"webhook port zero":                 "--webhook-port=0",
-		"webhook port too large":            "--webhook-port=70000",
-		"empty webhook cert dir":            "--webhook-cert-dir=",
-		"invalid webhook service name":      "--webhook-service-name=Bad_Name",
 		"invalid p2p domain":                "--p2p-domain=Bad_Suffix",
 		"invalid p2p cluster id":            "--p2p-cluster-id=Bad_Cluster",
 	}
@@ -294,10 +204,6 @@ func TestLoadEnvOverride(t *testing.T) {
 	t.Setenv("MANAGER_API_URL", "https://api.env.example.com")
 	t.Setenv("P2P_DOMAIN", "env.example.com")
 	t.Setenv("P2P_CLUSTER_ID", "c-m-env")
-	t.Setenv("NGINX_STATIC_URL", "http://static.env.example.com")
-	t.Setenv("NYDUS_MIRROR_URL", "https://proxy.env.example.com/docker.io")
-	t.Setenv("OPERATOR_IMAGE_REPOSITORY", "ghcr.io/example/d7y-cattle-operator")
-	t.Setenv("OPERATOR_IMAGE_TAG", "v9.9.9")
 	t.Setenv("MTLS_SECRET_NAME", "env-mtls")
 	t.Setenv("MANAGER_API_CREDENTIALS_SECRET", "env-credentials")
 	t.Setenv("DRAGONFLY_CHART_REPO", "https://charts.env.example.com")
@@ -316,9 +222,6 @@ func TestLoadEnvOverride(t *testing.T) {
 	t.Setenv("EXTRAS_INGRESS_TLS_SECRET", "dragonfly-p2p-mtls")
 	t.Setenv("EXTRAS_TRAEFIK_SERVERS_TRANSPORT_ENABLED", "false")
 	t.Setenv("POD_NAMESPACE", "env-namespace")
-	t.Setenv("WEBHOOK_PORT", "10443")
-	t.Setenv("WEBHOOK_CERT_DIR", "/tmp/webhook-certs")
-	t.Setenv("WEBHOOK_SERVICE_NAME", "env-webhook")
 	t.Setenv("KUBECONFIG", "/tmp/kubeconfig")
 
 	cfg, err := Load(nil)
@@ -341,15 +244,7 @@ func TestLoadEnvOverride(t *testing.T) {
 	if cfg.ClusterIDFallback != "c-m-env" {
 		t.Errorf("ClusterIDFallback = %q", cfg.ClusterIDFallback)
 	}
-	if cfg.NginxStaticURL != "http://static.env.example.com" {
-		t.Errorf("NginxStaticURL = %q", cfg.NginxStaticURL)
-	}
-	if cfg.NydusMirrorURL != "https://proxy.env.example.com/docker.io" {
-		t.Errorf("NydusMirrorURL = %q", cfg.NydusMirrorURL)
-	}
-	if cfg.OperatorImageRepository != "ghcr.io/example/d7y-cattle-operator" || cfg.OperatorImageTag != "v9.9.9" {
-		t.Errorf("operator image = %q/%q", cfg.OperatorImageRepository, cfg.OperatorImageTag)
-	}
+
 	if cfg.MTLSSecretName != "env-mtls" {
 		t.Errorf("MTLSSecretName = %q", cfg.MTLSSecretName)
 	}
@@ -404,116 +299,9 @@ func TestLoadEnvOverride(t *testing.T) {
 	if cfg.Namespace != "env-namespace" {
 		t.Errorf("Namespace = %q", cfg.Namespace)
 	}
-	if cfg.WebhookPort != 10443 {
-		t.Errorf("WebhookPort = %d", cfg.WebhookPort)
-	}
-	if cfg.WebhookCertDir != "/tmp/webhook-certs" {
-		t.Errorf("WebhookCertDir = %q", cfg.WebhookCertDir)
-	}
-	if cfg.WebhookServiceName != "env-webhook" {
-		t.Errorf("WebhookServiceName = %q", cfg.WebhookServiceName)
-	}
+
 	if cfg.Kubeconfig != "/tmp/kubeconfig" {
 		t.Errorf("Kubeconfig = %q", cfg.Kubeconfig)
-	}
-}
-
-func TestLoadHarborProxyEnv(t *testing.T) {
-	clearEnv(t)
-	t.Setenv("PROXY_DOMAIN", "proxy.env.example.com")
-	t.Setenv("PROXY_HARBOR_URL", "https://harbor.env.example.com")
-	t.Setenv("PROXY_HARBOR_ADMIN_SECRET", "env-harbor-admin")
-	t.Setenv("PROXY_REGISTRIES", "docker.io,ghcr.io")
-	t.Setenv("PROXY_BASE_PATH", "/proxy")
-	t.Setenv("PROXY_TLS_SECRET", "demo-harbor-tls")
-	t.Setenv("HARBOR_CHART_VERSION", "1.19.4")
-	t.Setenv("REGISTRY_PROXY_CHART_VERSION", "0.1.11")
-	cfg, err := Load(requiredArgs())
-	if err != nil {
-		t.Fatalf("Load() error = %v", err)
-	}
-	if cfg.ProxyDomain != "proxy.env.example.com" || cfg.ProxyHarborURL != "https://harbor.env.example.com" {
-		t.Errorf("proxy env = %q/%q", cfg.ProxyDomain, cfg.ProxyHarborURL)
-	}
-	if cfg.ProxyHarborAdminSecret != "env-harbor-admin" || cfg.ProxyRegistries != "docker.io,ghcr.io" {
-		t.Errorf("proxy secret/registries = %q/%q", cfg.ProxyHarborAdminSecret, cfg.ProxyRegistries)
-	}
-	if cfg.ProxyBasePath != "/proxy" || cfg.ProxyTLSSecret != "demo-harbor-tls" {
-		t.Errorf("proxy path/TLS = %q/%q", cfg.ProxyBasePath, cfg.ProxyTLSSecret)
-	}
-}
-
-func TestLoadProxyUpstreamCredentialsEnv(t *testing.T) {
-	clearEnv(t)
-	t.Setenv("PROXY_UPSTREAM_CREDENTIALS_SECRET", "upstream-creds")
-	cfg, err := Load(requiredArgs())
-	if err != nil {
-		t.Fatalf("Load() error = %v", err)
-	}
-	if cfg.ProxyUpstreamCredentialsSecret != "upstream-creds" {
-		t.Errorf("ProxyUpstreamCredentialsSecret = %q, want upstream-creds", cfg.ProxyUpstreamCredentialsSecret)
-	}
-}
-
-func TestLoadProxyBasicAuthEnv(t *testing.T) {
-	clearEnv(t)
-	t.Setenv("PROXY_BASIC_AUTH_ENABLED", "true")
-	t.Setenv("PROXY_BASIC_AUTH_USERNAME", "proxy-user")
-	cfg, err := Load(requiredArgs())
-	if err != nil {
-		t.Fatalf("Load() error = %v", err)
-	}
-	if !cfg.ProxyBasicAuthEnabled {
-		t.Error("ProxyBasicAuthEnabled = false, want true")
-	}
-	if cfg.ProxyBasicAuthUsername != "proxy-user" {
-		t.Errorf("ProxyBasicAuthUsername = %q, want proxy-user", cfg.ProxyBasicAuthUsername)
-	}
-}
-
-func TestLoadHarborProxyConfig(t *testing.T) {
-	clearEnv(t)
-	args := append(requiredArgs(),
-		"--harbor-chart-version=1.19.4",
-		"--registry-proxy-chart-version=0.1.11",
-		"--proxy-domain=proxy.example.com",
-		"--proxy-harbor-url=https://harbor.example.com",
-		"--proxy-harbor-admin-secret=harbor-admin",
-		"--proxy-registries=docker.io,ghcr.io",
-		"--proxy-base-path=/proxy",
-		"--proxy-tls-secret=demo-harbor-tls",
-	)
-	cfg, err := Load(args)
-	if err != nil {
-		t.Fatalf("Load() error = %v", err)
-	}
-	if cfg.ProxyDomain != "proxy.example.com" || cfg.ProxyHarborURL != "https://harbor.example.com" {
-		t.Errorf("proxy values = %q/%q", cfg.ProxyDomain, cfg.ProxyHarborURL)
-	}
-	if cfg.ProxyHarborAdminSecret != "harbor-admin" || cfg.ProxyRegistries != "docker.io,ghcr.io" {
-		t.Errorf("proxy secret/registries = %q/%q", cfg.ProxyHarborAdminSecret, cfg.ProxyRegistries)
-	}
-	if cfg.HarborChartVersion != "1.19.4" || cfg.RegistryProxyChartVersion != "0.1.11" {
-		t.Errorf("chart versions = %q/%q", cfg.HarborChartVersion, cfg.RegistryProxyChartVersion)
-	}
-	if cfg.ProxyBasePath != "/proxy" || cfg.ProxyTLSSecret != "demo-harbor-tls" {
-		t.Errorf("proxy path/TLS = %q/%q", cfg.ProxyBasePath, cfg.ProxyTLSSecret)
-	}
-}
-
-func TestLoadProxyHostAliases(t *testing.T) {
-	clearEnv(t)
-	t.Setenv("PROXY_HOST_ALIASES", `[{"ip":"203.0.113.10","hostnames":["harbor.example.test"]}]`)
-	cfg, err := Load(requiredArgs())
-	if err != nil {
-		t.Fatalf("Load() error = %v", err)
-	}
-	if len(cfg.ProxyHostAliases) != 1 {
-		t.Fatalf("ProxyHostAliases = %+v", cfg.ProxyHostAliases)
-	}
-	alias := cfg.ProxyHostAliases[0]
-	if alias.IP != "203.0.113.10" || len(alias.Hostnames) != 1 || alias.Hostnames[0] != "harbor.example.test" {
-		t.Errorf("ProxyHostAliases[0] = %+v", alias)
 	}
 }
 
@@ -549,20 +337,6 @@ func TestLoadClusterIDFallbackFlag(t *testing.T) {
 	}
 }
 
-func TestLoadInvalidEnvPort(t *testing.T) {
-	clearEnv(t)
-	t.Setenv("MANAGER_GRPC_DOMAIN", "manager-grpc.example.com")
-	t.Setenv("MANAGER_API_URL", "https://manager-api.example.com")
-	t.Setenv("NGINX_STATIC_URL", "https://static.example.com")
-	t.Setenv("MANAGER_API_CREDENTIALS_SECRET", "dragonfly-manager-api")
-	t.Setenv("WEBHOOK_PORT", "not-a-number")
-
-	_, err := Load(nil)
-	if err == nil || !strings.Contains(err.Error(), "WEBHOOK_PORT") {
-		t.Fatalf("Load() error = %v, want an error mentioning WEBHOOK_PORT", err)
-	}
-}
-
 func TestLoadInvalidExtrasIngressBoolEnv(t *testing.T) {
 	clearEnv(t)
 	t.Setenv("EXTRAS_INGRESS_GRPC_ENABLED", "not-a-bool")
@@ -580,17 +354,5 @@ func TestLoadInvalidManagerGRPCPortEnv(t *testing.T) {
 	_, err := Load(requiredArgs())
 	if err == nil || !strings.Contains(err.Error(), "MANAGER_GRPC_PORT") {
 		t.Fatalf("Load() error = %v, want an error mentioning MANAGER_GRPC_PORT", err)
-	}
-}
-
-func TestLoadProxyRegistriesAllowAny(t *testing.T) {
-	clearEnv(t)
-	t.Setenv("PROXY_REGISTRIES", "*")
-	cfg, err := Load(requiredArgs())
-	if err != nil {
-		t.Fatalf("Load() error = %v", err)
-	}
-	if cfg.ProxyRegistries != "*" {
-		t.Errorf("ProxyRegistries = %q, want *", cfg.ProxyRegistries)
 	}
 }
