@@ -2,6 +2,7 @@ package machinebootstrap
 
 import (
 	"errors"
+	"os/exec"
 	"strings"
 	"testing"
 
@@ -139,8 +140,8 @@ func TestReconcileInsertsBeforeDoInstall(t *testing.T) {
 	if blockAt < 0 || doInstallAt < 0 || blockAt > doInstallAt {
 		t.Fatalf("bootstrap block is not before do_install: %q", value)
 	}
-	if !strings.Contains(value[blockAt:doInstallAt], ") || true") {
-		t.Fatalf("bootstrap block is not best-effort: %q", value)
+	if !strings.Contains(value[blockAt:doInstallAt], "bash /tmp/d7y-p2p-install.sh || true") {
+		t.Fatalf("bootstrap block is not best-effort under bash: %q", value)
 	}
 	if strings.Contains(value, "p2p-install.sh?cfg=") {
 		t.Fatalf("bootstrap block still downloads p2p-install.sh: %q", value)
@@ -175,18 +176,48 @@ func TestReconcileFallsBackToLastExitZero(t *testing.T) {
 }
 
 func TestInlineBlockIsSelfContainedAndBestEffort(t *testing.T) {
-	block := inlineInstallBlock("STATIC_URL='http://static.example.com'\n")
-	if !strings.HasPrefix(block, bootstrap.Marker+"\n(\n") {
+	block := inlineInstallBlock("STATIC_URL=http://static.example.com\n")
+	if !strings.HasPrefix(block, bootstrap.Marker+"\nif command -v bash >/dev/null 2>&1; then\n") {
 		t.Fatalf("block start = %q", block)
 	}
-	if !strings.HasSuffix(block, ") || true\n") {
-		t.Fatalf("block end = %q", block)
+	for _, want := range []string{
+		"cat > /tmp/d7y-p2p-install.sh <<'D7Y_P2P_EOF'",
+		"\nD7Y_P2P_EOF\nbash /tmp/d7y-p2p-install.sh || true\nfi\n",
+	} {
+		if !strings.Contains(block, want) {
+			t.Fatalf("block missing %q: %q", want, block)
+		}
+	}
+	if strings.Contains(block, "\n(\n") || strings.Contains(block, ") || true") {
+		t.Fatalf("block still uses the old subshell wrapper: %q", block)
 	}
 	if strings.HasPrefix(p2pInstallBody, "#!") {
 		t.Fatal("embedded script body still starts with a shebang")
 	}
 	if strings.Contains(block, "p2p-install.sh?cfg=") {
 		t.Fatal("embedded block still downloads p2p-install.sh")
+	}
+}
+
+func TestInlineBlockParsesUnderPOSIXShell(t *testing.T) {
+	if _, err := exec.LookPath("sh"); err != nil {
+		t.Skip("sh is not available")
+	}
+	block := inlineInstallBlockFor("echo p2p-ok\n", "STATIC_URL=http://static.example.com\n")
+	cmd := exec.Command("sh", "-n")
+	cmd.Stdin = strings.NewReader(block)
+	if out, err := cmd.CombinedOutput(); err != nil {
+		t.Fatalf("sh -n rejected the block: %v\n%s", err, out)
+	}
+}
+
+func TestInlineBlockDelimiterCollision(t *testing.T) {
+	block := inlineInstallBlockFor("echo D7Y_P2P_EOF\n", "")
+	if !strings.Contains(block, "cat > /tmp/d7y-p2p-install.sh <<'D7Y_P2P_EOF_1'") {
+		t.Fatalf("block did not choose a suffixed delimiter: %q", block)
+	}
+	if !strings.Contains(block, "\nD7Y_P2P_EOF_1\nbash /tmp/d7y-p2p-install.sh || true") {
+		t.Fatalf("block did not close with the suffixed delimiter: %q", block)
 	}
 }
 
@@ -216,7 +247,7 @@ func TestReconcileAppendsWithoutExitZero(t *testing.T) {
 		t.Fatalf("reconcile() error = %v", err)
 	}
 	value := string(secrets.secret.Data[bootstrapValueKey])
-	if !strings.HasSuffix(value, ") || true\n") {
+	if !strings.HasSuffix(value, "fi\n") {
 		t.Errorf("bootstrap value = %q, want the block appended", value)
 	}
 }

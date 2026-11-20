@@ -1,16 +1,32 @@
 package machinebootstrap
 
 import (
+	"fmt"
 	"strings"
 
 	"github.com/gorizond/d7y-cattle-operator/pkg/bootstrap"
 )
 
 // inlineInstallBlock wraps the env-file assignments and the embedded script in
-// a best-effort POSIX subshell. Marker is the first line for idempotency.
+// a POSIX heredoc, then executes the literal body under bash. Marker is the
+// first line for idempotency.
 func inlineInstallBlock(env string) string {
-	body := strings.TrimSpace(p2pInstallBody)
-	return bootstrap.Marker + "\n(\n" + quoteEnv(env) + "\n" + body + "\n) || true\n"
+	return inlineInstallBlockFor(p2pInstallBody, env)
+}
+
+func inlineInstallBlockFor(rawBody, env string) string {
+	body := strings.TrimSpace(rawBody)
+	delimiter := "D7Y_P2P_EOF"
+	for suffix := 1; strings.Contains(body, delimiter); suffix++ {
+		delimiter = fmt.Sprintf("D7Y_P2P_EOF_%d", suffix)
+	}
+	return bootstrap.Marker + "\n" +
+		"if command -v bash >/dev/null 2>&1; then\n" +
+		"cat > /tmp/d7y-p2p-install.sh <<'" + delimiter + "'\n" +
+		quoteEnv(env) + body + "\n" +
+		delimiter + "\n" +
+		"bash /tmp/d7y-p2p-install.sh || true\n" +
+		"fi\n"
 }
 
 func quoteEnv(env string) string {

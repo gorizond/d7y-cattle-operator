@@ -2,8 +2,11 @@
 
 The operator embeds `assets/p2p-install.sh` and injects it, with the bootstrap
 env-file assignments, into the Rancher node-driver machine bootstrap Secret.
-The block is wrapped in `( ... ) || true`, so a P2P failure cannot prevent the
-surrounding Rancher install script from calling `do_install "$@"`.
+The block is written to `/tmp/d7y-p2p-install.sh` with a POSIX heredoc and
+executed as `bash /tmp/d7y-p2p-install.sh || true`, so a P2P failure cannot
+prevent the surrounding Rancher install script from calling `do_install "$@"`.
+The surrounding cloud-init shell is `dash`; the heredoc body is literal and is
+not parsed by dash.
 
 The same embedded script is the single source of truth for the host setup; the
 `p2p-static` chart serves only the static `/bin` and `/nydus` assets.
