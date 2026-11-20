@@ -66,13 +66,15 @@ flowchart TB
     O --> HELM["Shared Fleet HelmOps<br/>keydb - manager - control - data - extras - containerd-mirror"]
     MC["RKE machine config (CREATE)"] --> W["machine-config webhook<br/>CREATE-only rke-machine-config.cattle.io"] --> PAY["bootstrap payload<br/>userData / postBootScript = p2p-install.sh"]
   end
-  subgraph DOWN["Downstream RKE2 cluster"]
-    HELM --> K["KeyDB"]
-    HELM --> MGR["Manager + MySQL"]
+  subgraph DOWN["Downstream clusters (roles may be split)"]
+    HELM --> K["KeyDB (per Cluster)"]
+    HELM --> MGR["Manager + MySQL<br/>(manager role: any Cluster)"]
     HELM --> SCH["Scheduler"]
     HELM --> SC["seedClient"]
+    HELM --> SEED2["Other seed Clusters<br/>own scheduler + seed + scheduler ID"]
     HELM --> CL["dfdaemon client"]
-    HELM --> EX["extras<br/>Traefik manager gRPC/REST<br/>scheduler TCP + VPA"]
+    HELM --> EXM["extras: manager gRPC/REST"]
+    HELM --> EXS["extras: scheduler TCP"]
     HELM --> CM["containerd-mirror<br/>certs.d/_default to 127.0.0.1:4001"]
   end
   subgraph NODE["Node"]
@@ -82,10 +84,13 @@ flowchart TB
   PODS["Pods"] --> CTD["containerd"] --> CL
   CL --> P2P["Dragonfly P2P"] --> SCH
   P2P --> SC
-  EX -->|"gRPC 65003 mTLS / REST 8080 JWT"| MGR
-  EX -->|"TCP 8002 TLS passthrough"| SCH
-  CLIENT["External clients"] --> PUB["d7y-scheduler.&lt;cluster-id&gt;.&lt;domain&gt;"] --> EX
-  CLIENT -->|"manager gRPC/REST"| EX
+  EXM -->|"gRPC 65003 mTLS / REST 8080 JWT"| MGR
+  EXS -->|"TCP 8002 TLS passthrough"| SCH
+  CLIENT["External clients"] --> PUB["d7y-scheduler.&lt;cluster-id&gt;.&lt;domain&gt;"]
+  CLIENT -->|"manager gRPC/REST"| EXM
+  PUB --> EXS
+  BOOT["New downstream nodes<br/>before RKE2"] -->|"d7y-scheduler.&lt;cluster-id&gt;.&lt;domain&gt;"| PUB
+  DNS["external-dns or wildcard zone"] -.->|"publishes"| PUB
 ```
 
 ### Data flow
@@ -97,6 +102,15 @@ flowchart TB
 5. The machine-config webhook injects `p2p-install.sh` into new RKE2 node configs; the host installs nydus and starts dfdaemon bootstrap.
 6. Node containerd pulls through dfdaemon, which uses Dragonfly P2P and the scheduler/seed peers.
 7. Extras publish manager gRPC/REST and the public scheduler endpoint; the operator updates Cluster status conditions.
+8. A new Cluster is annotated with the scheduler ID of the seed Cluster that serves it; its nodes resolve the public scheduler alias before RKE2 and pull images via P2P, while the seed scheduler/seed is pre-created in an existing seed Cluster.
+
+### Multi-cluster topology
+
+- The manager is a role, not a fixed management-cluster component: any Cluster with the `d7y-operator-manager` label runs the shared `d7y-manager`; the operator itself stays on the Rancher management cluster. The manager is the shared registration and scheduler-ID authority.
+- Each seed Cluster runs its own scheduler and seed client under its scheduler cluster ID; the manager allocates IDs and preserves user-owned IDs.
+- With N downstream/seed Clusters there are N scheduler IDs. The scheduler/seed for a new Cluster's ID is provisioned in a seed Cluster reachable before the new Cluster's RKE2, because it cannot run in a Cluster before that Cluster's own RKE2 exists. The new nodes bootstrap before their RKE2 against `d7y-scheduler.<cluster-id>.<domain>`; the alias must be published by external-dns (or covered by a wildcard DNS zone).
+- The machine-config webhook injects `p2p-install.sh`; the host dfdaemon bootstrap starts before RKE2 and pulls node/RKE2 images via Dragonfly P2P from the scheduler/seed. This accelerates provisioning before the Kubernetes node starts. If the alias is unreachable, the script is fail-open and falls back to direct registry pulls.
+- The manager can live on any Cluster (including a seed Cluster); manager and seed roles may be split across different Clusters, each with its own KeyDB/extras release.
 
 ## Follow-ups
 
