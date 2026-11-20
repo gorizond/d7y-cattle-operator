@@ -188,7 +188,7 @@ grep -q 'HostSNI(`203.0.113.10`)' "$tmp/scheduler-tcp-ip.yaml" || fail "schedule
 
 # The operator chart must not own Ingress, VPA, or PVC resources.
 helm template t "$operator" >"$tmp/operator.yaml"
-for env_name in EXTRAS_INGRESS_CONTROLLER EXTRAS_INGRESS_CLASS_NAME EXTRAS_INGRESS_GRPC_ENABLED EXTRAS_INGRESS_REST_ENABLED EXTRAS_INGRESS_TLS_SECRET EXTRAS_TRAEFIK_SERVERS_TRANSPORT_ENABLED P2P_DOMAIN P2P_CLUSTER_ID PROXY_BASIC_AUTH_ENABLED PROXY_BASIC_AUTH_USERNAME PROXY_UPSTREAM_CREDENTIALS_SECRET; do
+for env_name in EXTRAS_INGRESS_CONTROLLER EXTRAS_INGRESS_CLASS_NAME EXTRAS_INGRESS_GRPC_ENABLED EXTRAS_INGRESS_REST_ENABLED EXTRAS_INGRESS_TLS_SECRET EXTRAS_TRAEFIK_SERVERS_TRANSPORT_ENABLED P2P_DOMAIN P2P_CLUSTER_ID; do
   grep -q "name: $env_name" "$tmp/operator.yaml" || fail "operator deployment missing $env_name"
 done
 if grep -Eq '^kind: (Ingress|VerticalPodAutoscaler|PersistentVolumeClaim)$' "$tmp/operator.yaml"; then

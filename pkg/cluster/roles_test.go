@@ -18,9 +18,8 @@ func TestResolveRoles(t *testing.T) {
 		{
 			name: "label missing",
 			annotations: map[string]string{
-				AnnotationManager:          "true",
-				AnnotationSeed:             "true",
-				AnnotationAdmissionExclude: "ns-a",
+				AnnotationManager: "true",
+				AnnotationSeed:    "true",
 			},
 			want: Roles{},
 		},
@@ -47,66 +46,6 @@ func TestResolveRoles(t *testing.T) {
 			want:        Roles{Enabled: true, Seed: true},
 		},
 		{
-			name:        "harbor role",
-			labels:      map[string]string{LabelEnabled: "true"},
-			annotations: map[string]string{AnnotationHarbor: "true", AnnotationHarborDomain: "harbor.example.com"},
-			want:        Roles{Enabled: true, Harbor: true, HarborDomain: "harbor.example.com"},
-		},
-		{
-			name:        "proxy role is independent",
-			labels:      map[string]string{LabelEnabled: "true"},
-			annotations: map[string]string{AnnotationProxy: "true", AnnotationHarborURL: "https://external.example.com"},
-			want:        Roles{Enabled: true, Proxy: true, HarborURL: "https://external.example.com"},
-		},
-		{
-			name:        "admission role is independent",
-			labels:      map[string]string{LabelEnabled: "true"},
-			annotations: map[string]string{AnnotationAdmission: "true"},
-			want:        Roles{Enabled: true, Admission: true},
-		},
-		{
-			name:        "admission exclude empty annotation",
-			labels:      map[string]string{LabelEnabled: "true"},
-			annotations: map[string]string{AnnotationAdmission: "true", AnnotationAdmissionExclude: ""},
-			want:        Roles{Enabled: true, Admission: true},
-		},
-		{
-			name:        "admission exclude one namespace",
-			labels:      map[string]string{LabelEnabled: "true"},
-			annotations: map[string]string{AnnotationAdmission: "true", AnnotationAdmissionExclude: "ns-a"},
-			want:        Roles{Enabled: true, Admission: true, AdmissionExclude: []string{"ns-a"}},
-		},
-		{
-			name:        "admission exclude comma and spaces",
-			labels:      map[string]string{LabelEnabled: "true"},
-			annotations: map[string]string{AnnotationAdmission: "true", AnnotationAdmissionExclude: " ns-a, ns-b ,ns-c "},
-			want:        Roles{Enabled: true, Admission: true, AdmissionExclude: []string{"ns-a", "ns-b", "ns-c"}},
-		},
-		{
-			name:        "admission exclude duplicates preserve order",
-			labels:      map[string]string{LabelEnabled: "true"},
-			annotations: map[string]string{AnnotationAdmission: "true", AnnotationAdmissionExclude: "ns-b,ns-a,ns-b"},
-			want:        Roles{Enabled: true, Admission: true, AdmissionExclude: []string{"ns-b", "ns-a"}},
-		},
-		{
-			name:        "admission exclude invalid skipped",
-			labels:      map[string]string{LabelEnabled: "true"},
-			annotations: map[string]string{AnnotationAdmission: "true", AnnotationAdmissionExclude: "ns-a,Bad_NS,ns-b"},
-			want:        Roles{Enabled: true, Admission: true, AdmissionExclude: []string{"ns-a", "ns-b"}},
-		},
-		{
-			name:        "admission exclude blank entries",
-			labels:      map[string]string{LabelEnabled: "true"},
-			annotations: map[string]string{AnnotationAdmission: "true", AnnotationAdmissionExclude: " , ,ns-a, , "},
-			want:        Roles{Enabled: true, Admission: true, AdmissionExclude: []string{"ns-a"}},
-		},
-		{
-			name:        "all current toggles",
-			labels:      map[string]string{LabelEnabled: "true"},
-			annotations: map[string]string{AnnotationHarbor: "true", AnnotationHarborDomain: "harbor.example.com", AnnotationProxy: "true", AnnotationAdmission: "true", AnnotationSeed: "true"},
-			want:        Roles{Enabled: true, Harbor: true, HarborDomain: "harbor.example.com", Proxy: true, Admission: true, Seed: true},
-		},
-		{
 			name:   "both roles",
 			labels: map[string]string{LabelEnabled: "true"},
 			annotations: map[string]string{
@@ -129,25 +68,6 @@ func TestResolveRoles(t *testing.T) {
 				t.Errorf("ResolveRoles() = %+v, want %+v", got, test.want)
 			}
 		})
-	}
-}
-
-func TestHarborValidation(t *testing.T) {
-	for _, value := range []string{"harbor.example.com", "harbor.example.test"} {
-		if err := validateHarborDomain(value); err != nil {
-			t.Errorf("validateHarborDomain(%q) error = %v", value, err)
-		}
-	}
-	for _, value := range []string{"", "https://harbor.example.com", "harbor.example.com:443", "Bad_Domain"} {
-		if err := validateHarborDomain(value); err == nil {
-			t.Errorf("validateHarborDomain(%q) = nil, want error", value)
-		}
-	}
-	if err := validateHarborURL("https://harbor.example.com"); err != nil {
-		t.Errorf("validateHarborURL() error = %v", err)
-	}
-	if err := validateHarborURL("http://harbor.example.com"); err == nil {
-		t.Error("validateHarborURL(http) = nil, want error")
 	}
 }
 

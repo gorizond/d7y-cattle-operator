@@ -5,15 +5,6 @@ import (
 	"testing"
 )
 
-func TestRegistryProxyChartVersion(t *testing.T) {
-	if RegistryProxyChartVersion != "0.1.15" {
-		t.Errorf("RegistryProxyChartVersion = %q, want 0.1.15", RegistryProxyChartVersion)
-	}
-	if RegistryProxyMirrorProject != "mirror" {
-		t.Errorf("RegistryProxyMirrorProject = %q, want mirror", RegistryProxyMirrorProject)
-	}
-}
-
 func TestHelmOpSerializesPromotedFields(t *testing.T) {
 	data, err := json.Marshal(Manager(testCluster()))
 	if err != nil {

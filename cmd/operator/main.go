@@ -6,7 +6,6 @@ import (
 	"net/http"
 	"net/url"
 	"os"
-	"strings"
 
 	lassoclient "github.com/rancher/lasso/pkg/client"
 	provisioning "github.com/rancher/rancher/pkg/generated/controllers/provisioning.cattle.io"
@@ -120,44 +119,13 @@ func run() error {
 			Name:    cfg.MirrorChartName,
 			Version: cfg.MirrorChartVersion,
 		},
-		HarborChart: helmop.Chart{
-			Repo:    cfg.HarborChartRepo,
-			Name:    cfg.HarborChartName,
-			Version: cfg.HarborChartVersion,
-		},
-		RegistryProxyChart: helmop.Chart{
-			Repo:    cfg.RegistryProxyChartRepo,
-			Name:    cfg.RegistryProxyChartName,
-			Version: cfg.RegistryProxyChartVersion,
-		},
-		AdmissionChart: helmop.Chart{
-			Repo:    cfg.AdmissionChartRepo,
-			Name:    cfg.AdmissionChartName,
-			Version: cfg.AdmissionChartVersion,
-		},
-		HarborIngressClass:             "traefik",
-		ProxyDomain:                    cfg.ProxyDomain,
-		ProxyHarborURL:                 cfg.ProxyHarborURL,
-		ProxyHarborAdminSecret:         cfg.ProxyHarborAdminSecret,
-		ProxyRegistries:                splitCSV(cfg.ProxyRegistries),
-		ProxyBasePath:                  cfg.ProxyBasePath,
-		ProxyTLSSecret:                 cfg.ProxyTLSSecret,
-		ProxyBasicAuthEnabled:          cfg.ProxyBasicAuthEnabled,
-		ProxyBasicAuthUsername:         cfg.ProxyBasicAuthUsername,
-		ProxyUpstreamCredentialsSecret: cfg.ProxyUpstreamCredentialsSecret,
-		ProxyHostAliases:               cfg.ProxyHostAliases,
-		AdmissionImagePullSecret:       cfg.AdmissionImagePullSecret,
-		AdmissionServiceAccount:        cfg.AdmissionServiceAccount,
-		AdmissionNetworkOnly:           cfg.AdmissionNetworkOnly,
-		OperatorImageRepository:        cfg.OperatorImageRepository,
-		OperatorImageTag:               cfg.OperatorImageTag,
-		ExtrasIngressController:        cfg.ExtrasIngressController,
-		ExtrasIngressClassName:         cfg.ExtrasIngressClassName,
-		ExtrasIngressGRPCEnabled:       cfg.ExtrasIngressGRPCEnabled,
-		ExtrasIngressRESTEnabled:       cfg.ExtrasIngressRESTEnabled,
-		ExtrasIngressTLSSecret:         cfg.ExtrasIngressTLSSecret,
-		ExtrasTraefikTransport:         cfg.ExtrasTraefikTransport,
-		VPAEnabled:                     vpaEnabled,
+		ExtrasIngressController:  cfg.ExtrasIngressController,
+		ExtrasIngressClassName:   cfg.ExtrasIngressClassName,
+		ExtrasIngressGRPCEnabled: cfg.ExtrasIngressGRPCEnabled,
+		ExtrasIngressRESTEnabled: cfg.ExtrasIngressRESTEnabled,
+		ExtrasIngressTLSSecret:   cfg.ExtrasIngressTLSSecret,
+		ExtrasTraefikTransport:   cfg.ExtrasTraefikTransport,
+		VPAEnabled:               vpaEnabled,
 	})
 
 	if err := start.All(ctx, 1, coreFactory, provisioningFactory, admissionFactory, apiextensionsFactory); err != nil {
@@ -174,7 +142,7 @@ func run() error {
 		MTLSSecretName:    cfg.MTLSSecretName,
 		ManagerGRPCDomain: cfg.ManagerGRPCDomain,
 		StaticURL:         cfg.NginxStaticURL,
-		SmartProxyURL:     proxyPublicURL(cfg.ProxyDomain, cfg.ProxyBasePath),
+		SmartProxyURL:     "",
 		NydusMirrorURL:    cfg.NydusMirrorURL,
 		SchedulerDomain:   cfg.P2PDomain,
 		ClusterIDFallback: cfg.ClusterIDFallback,
@@ -188,29 +156,6 @@ func run() error {
 
 	slog.Info("webhook server listening", "port", cfg.WebhookPort)
 	return webhook.Serve(ctx, fmt.Sprintf(":%d", cfg.WebhookPort), mux, certLoader)
-}
-
-func splitCSV(raw string) []string {
-	var values []string
-	for _, item := range strings.Split(raw, ",") {
-		if item = strings.TrimSpace(item); item != "" {
-			values = append(values, item)
-		}
-	}
-	return values
-}
-
-func proxyPublicURL(domain, basePath string) string {
-	if domain == "" {
-		return ""
-	}
-	if basePath == "" {
-		return "https://" + domain
-	}
-	if !strings.HasPrefix(basePath, "/") {
-		basePath = "/" + basePath
-	}
-	return "https://" + domain + strings.TrimRight(basePath, "/")
 }
 
 func hostFromURL(raw string) (string, error) {

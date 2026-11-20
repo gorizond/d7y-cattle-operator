@@ -2,11 +2,9 @@
 package config
 
 import (
-	"encoding/json"
 	"errors"
 	"flag"
 	"fmt"
-	"net"
 	"net/url"
 	"os"
 	"regexp"
@@ -14,8 +12,6 @@ import (
 	"strings"
 
 	"k8s.io/apimachinery/pkg/util/validation"
-
-	"github.com/gorizond/d7y-cattle-operator/pkg/helmop"
 )
 
 // Defaults shared with the Helm chart.
@@ -31,21 +27,6 @@ const (
 	DefaultMirrorChartRepo               = "https://gorizond.github.io/d7y-cattle-operator"
 	DefaultMirrorChartName               = "containerd-mirror"
 	DefaultMirrorChartVersion            = "0.1.0"
-	DefaultHarborChartRepo               = "https://helm.goharbor.io"
-	DefaultHarborChartName               = "harbor"
-	DefaultHarborChartVersion            = "1.19.4"
-	DefaultRegistryProxyChartRepo        = "https://gorizond.github.io/d7y-cattle-operator"
-	DefaultRegistryProxyChartName        = "registry-proxy"
-	DefaultRegistryProxyChartVersion     = "0.1.23"
-	DefaultAdmissionChartRepo            = "https://gorizond.github.io/d7y-cattle-operator"
-	DefaultAdmissionChartName            = "admission-webhook"
-	DefaultAdmissionChartVersion         = "0.1.2"
-	DefaultAdmissionNetworkOnly          = true
-	DefaultProxyHarborAdminSecret        = "harbor-admin"
-	DefaultProxyBasicAuthEnabled         = false
-	DefaultProxyBasicAuthUsername        = "d7y-proxy"
-	DefaultProxyRegistries               = "*"
-	DefaultProxyBasePath                 = ""
 	DefaultExtrasIngressController       = "nginx"
 	DefaultExtrasIngressClassName        = ""
 	DefaultExtrasIngressGRPCEnabled      = true
@@ -62,60 +43,36 @@ var chartVersionPattern = regexp.MustCompile(`^v?[0-9]+\.[0-9]+\.[0-9]+(?:[-+][0
 
 // Config is the operator configuration derived from flags and environment variables.
 type Config struct {
-	ManagerGRPCDomain              string
-	ManagerGRPCPort                int
-	ManagerAPIURL                  string
-	P2PDomain                      string
-	ClusterIDFallback              string
-	NginxStaticURL                 string
-	NydusMirrorURL                 string
-	OperatorImageRepository        string
-	OperatorImageTag               string
-	MTLSSecretName                 string
-	ManagerAPICredentialsSecret    string
-	DragonflyChartRepo             string
-	DragonflyChartName             string
-	DragonflyChartVersion          string
-	ExtrasChartRepo                string
-	ExtrasChartName                string
-	ExtrasChartVersion             string
-	MirrorChartRepo                string
-	MirrorChartName                string
-	MirrorChartVersion             string
-	HarborChartRepo                string
-	HarborChartName                string
-	HarborChartVersion             string
-	RegistryProxyChartRepo         string
-	RegistryProxyChartName         string
-	RegistryProxyChartVersion      string
-	AdmissionChartRepo             string
-	AdmissionChartName             string
-	AdmissionChartVersion          string
-	AdmissionImagePullSecret       string
-	AdmissionServiceAccount        string
-	AdmissionNetworkOnly           bool
-	ProxyDomain                    string
-	ProxyHarborURL                 string
-	ProxyHarborAdminSecret         string
-	ProxyBasicAuthEnabled          bool
-	ProxyBasicAuthUsername         string
-	ProxyUpstreamCredentialsSecret string
-	ProxyRegistries                string
-	ProxyBasePath                  string
-	ProxyTLSSecret                 string
-	ProxyHostAliases               []helmop.HostAlias
-	ExtrasIngressController        string
-	ExtrasIngressClassName         string
-	ExtrasIngressGRPCEnabled       bool
-	ExtrasIngressRESTEnabled       bool
-	ExtrasIngressTLSSecret         string
-	ExtrasTraefikTransport         bool
-	Namespace                      string
-	WebhookPort                    int
-	WebhookCertDir                 string
-	WebhookServiceName             string
-	LeaderElect                    bool
-	Kubeconfig                     string
+	ManagerGRPCDomain           string
+	ManagerGRPCPort             int
+	ManagerAPIURL               string
+	NginxStaticURL              string
+	NydusMirrorURL              string
+	P2PDomain                   string
+	ClusterIDFallback           string
+	MTLSSecretName              string
+	ManagerAPICredentialsSecret string
+	DragonflyChartRepo          string
+	DragonflyChartName          string
+	DragonflyChartVersion       string
+	ExtrasChartRepo             string
+	ExtrasChartName             string
+	ExtrasChartVersion          string
+	MirrorChartRepo             string
+	MirrorChartName             string
+	MirrorChartVersion          string
+	ExtrasIngressController     string
+	ExtrasIngressClassName      string
+	ExtrasIngressGRPCEnabled    bool
+	ExtrasIngressRESTEnabled    bool
+	ExtrasIngressTLSSecret      string
+	ExtrasTraefikTransport      bool
+	Namespace                   string
+	WebhookPort                 int
+	WebhookCertDir              string
+	WebhookServiceName          string
+	LeaderElect                 bool
+	Kubeconfig                  string
 }
 
 // Load parses args (without the program name) and validates the result.
@@ -141,27 +98,16 @@ func Load(args []string) (*Config, error) {
 	if err != nil {
 		return nil, err
 	}
-	defaultAdmissionNetworkOnly, err := envBool("ADMISSION_NETWORK_ONLY", DefaultAdmissionNetworkOnly)
-	if err != nil {
-		return nil, err
-	}
-	defaultProxyBasicAuthEnabled, err := envBool("PROXY_BASIC_AUTH_ENABLED", DefaultProxyBasicAuthEnabled)
-	if err != nil {
-		return nil, err
-	}
 
 	cfg := &Config{}
-	proxyHostAliases := envOr("PROXY_HOST_ALIASES", "")
 	fs := flag.NewFlagSet("d7y-cattle-operator", flag.ContinueOnError)
 	fs.StringVar(&cfg.ManagerGRPCDomain, "manager-grpc-domain", envOr("MANAGER_GRPC_DOMAIN", ""), "public hostname of the manager gRPC endpoint (no scheme)")
 	fs.IntVar(&cfg.ManagerGRPCPort, "manager-grpc-port", defaultManagerGRPCPort, "public port of the manager gRPC endpoint")
 	fs.StringVar(&cfg.ManagerAPIURL, "manager-api-url", envOr("MANAGER_API_URL", ""), "public HTTPS URL of the manager REST API")
+	fs.StringVar(&cfg.NginxStaticURL, "nginx-static-url", envOr("NGINX_STATIC_URL", ""), "base URL of the static asset server (http or https)")
+	fs.StringVar(&cfg.NydusMirrorURL, "nydus-mirror-url", envOr("NYDUS_MIRROR_URL", ""), "optional HTTPS mirror path for nydus blobs")
 	fs.StringVar(&cfg.P2PDomain, "p2p-domain", envOr("P2P_DOMAIN", ""), "base domain for the per-cluster scheduler alias d7y-scheduler.<cluster>.<domain>")
 	fs.StringVar(&cfg.ClusterIDFallback, "p2p-cluster-id", envOr("P2P_CLUSTER_ID", ""), "fallback cluster ID when provisioning Cluster status.clusterName is empty")
-	fs.StringVar(&cfg.NginxStaticURL, "nginx-static-url", envOr("NGINX_STATIC_URL", ""), "base URL of the static asset server (http or https)")
-	fs.StringVar(&cfg.NydusMirrorURL, "nydus-mirror-url", envOr("NYDUS_MIRROR_URL", ""), "optional HTTPS mirror path for nydus blobs (for example https://proxy.example.test/docker.io)")
-	fs.StringVar(&cfg.OperatorImageRepository, "operator-image-repository", envOr("OPERATOR_IMAGE_REPOSITORY", ""), "operator image repository passed to the admission webhook")
-	fs.StringVar(&cfg.OperatorImageTag, "operator-image-tag", envOr("OPERATOR_IMAGE_TAG", ""), "operator image tag passed to the admission webhook")
 	fs.StringVar(&cfg.MTLSSecretName, "mtls-secret-name", envOr("MTLS_SECRET_NAME", DefaultMTLSSecretName), "name of the mTLS Secret")
 	fs.StringVar(&cfg.ManagerAPICredentialsSecret, "manager-api-credentials-secret", envOr("MANAGER_API_CREDENTIALS_SECRET", ""), "name of the Secret holding manager API credentials")
 	fs.StringVar(&cfg.DragonflyChartRepo, "dragonfly-chart-repo", envOr("DRAGONFLY_CHART_REPO", DefaultDragonflyChartRepo), "Helm repository URL of the Dragonfly chart")
@@ -173,28 +119,6 @@ func Load(args []string) (*Config, error) {
 	fs.StringVar(&cfg.MirrorChartRepo, "containerd-mirror-chart-repo", envOr("CONTAINERD_MIRROR_CHART_REPO", DefaultMirrorChartRepo), "Helm repository URL of the containerd-mirror chart")
 	fs.StringVar(&cfg.MirrorChartName, "containerd-mirror-chart-name", envOr("CONTAINERD_MIRROR_CHART_NAME", DefaultMirrorChartName), "containerd-mirror chart name")
 	fs.StringVar(&cfg.MirrorChartVersion, "containerd-mirror-chart-version", envOr("CONTAINERD_MIRROR_CHART_VERSION", DefaultMirrorChartVersion), "containerd-mirror chart version")
-	fs.StringVar(&cfg.HarborChartRepo, "harbor-chart-repo", envOr("HARBOR_CHART_REPO", DefaultHarborChartRepo), "Helm repository URL of the Harbor chart")
-	fs.StringVar(&cfg.HarborChartName, "harbor-chart-name", envOr("HARBOR_CHART_NAME", DefaultHarborChartName), "Harbor chart name")
-	fs.StringVar(&cfg.HarborChartVersion, "harbor-chart-version", envOr("HARBOR_CHART_VERSION", DefaultHarborChartVersion), "Harbor chart version")
-	fs.StringVar(&cfg.RegistryProxyChartRepo, "registry-proxy-chart-repo", envOr("REGISTRY_PROXY_CHART_REPO", DefaultRegistryProxyChartRepo), "Helm repository URL of the registry-proxy chart")
-	fs.StringVar(&cfg.RegistryProxyChartName, "registry-proxy-chart-name", envOr("REGISTRY_PROXY_CHART_NAME", DefaultRegistryProxyChartName), "registry-proxy chart name")
-	fs.StringVar(&cfg.RegistryProxyChartVersion, "registry-proxy-chart-version", envOr("REGISTRY_PROXY_CHART_VERSION", DefaultRegistryProxyChartVersion), "registry-proxy chart version")
-	fs.StringVar(&cfg.AdmissionChartRepo, "admission-chart-repo", envOr("ADMISSION_CHART_REPO", DefaultAdmissionChartRepo), "Helm repository URL of the admission-webhook chart")
-	fs.StringVar(&cfg.AdmissionChartName, "admission-chart-name", envOr("ADMISSION_CHART_NAME", DefaultAdmissionChartName), "admission-webhook chart name")
-	fs.StringVar(&cfg.AdmissionChartVersion, "admission-chart-version", envOr("ADMISSION_CHART_VERSION", DefaultAdmissionChartVersion), "admission-webhook chart version")
-	fs.StringVar(&cfg.AdmissionImagePullSecret, "admission-image-pull-secret", envOr("ADMISSION_IMAGE_PULL_SECRET", ""), "Secret injected as imagePullSecrets by the admission webhook (empty: network-only)")
-	fs.StringVar(&cfg.AdmissionServiceAccount, "admission-service-account", envOr("ADMISSION_SERVICE_ACCOUNT", ""), "serviceAccountName injected by the admission webhook")
-	fs.BoolVar(&cfg.AdmissionNetworkOnly, "admission-network-only", defaultAdmissionNetworkOnly, "disable credential injection in the admission webhook")
-	fs.StringVar(&cfg.ProxyDomain, "proxy-domain", envOr("PROXY_DOMAIN", ""), "public registry proxy domain (DNS name, no scheme)")
-	fs.StringVar(&cfg.ProxyHarborURL, "proxy-harbor-url", envOr("PROXY_HARBOR_URL", ""), "existing/external Harbor base URL for the proxy")
-	fs.StringVar(&cfg.ProxyHarborAdminSecret, "proxy-harbor-admin-secret", envOr("PROXY_HARBOR_ADMIN_SECRET", DefaultProxyHarborAdminSecret), "name of the Harbor admin Secret in the operator namespace")
-	fs.StringVar(&cfg.ProxyRegistries, "proxy-registries", envOr("PROXY_REGISTRIES", DefaultProxyRegistries), "comma-separated upstream registry allowlist")
-	fs.StringVar(&cfg.ProxyBasePath, "proxy-base-path", envOr("PROXY_BASE_PATH", DefaultProxyBasePath), "public proxy base path (empty disables the path prefix; e.g. /proxy)")
-	fs.StringVar(&cfg.ProxyTLSSecret, "proxy-tls-secret", envOr("PROXY_TLS_SECRET", ""), "TLS Secret name for the proxy ingress (empty uses the ingress controller default)")
-	fs.BoolVar(&cfg.ProxyBasicAuthEnabled, "proxy-basic-auth-enabled", defaultProxyBasicAuthEnabled, "enable client Basic auth on registry proxy /v2 reads")
-	fs.StringVar(&cfg.ProxyBasicAuthUsername, "proxy-basic-auth-username", envOr("PROXY_BASIC_AUTH_USERNAME", DefaultProxyBasicAuthUsername), "registry proxy client Basic auth username")
-	fs.StringVar(&cfg.ProxyUpstreamCredentialsSecret, "proxy-upstream-credentials-secret", envOr("PROXY_UPSTREAM_CREDENTIALS_SECRET", ""), "Secret in the operator namespace with a credentials.yaml key for private upstream registries")
-	fs.StringVar(&proxyHostAliases, "proxy-host-aliases", proxyHostAliases, "JSON list of {ip, hostnames} entries added to the registry proxy pod /etc/hosts")
 	fs.StringVar(&cfg.ExtrasIngressController, "extras-ingress-controller", envOr("EXTRAS_INGRESS_CONTROLLER", DefaultExtrasIngressController), "extras Ingress controller: nginx or traefik")
 	fs.StringVar(&cfg.ExtrasIngressClassName, "extras-ingress-class-name", envOr("EXTRAS_INGRESS_CLASS_NAME", DefaultExtrasIngressClassName), "extras Ingress class name (empty uses the cluster default)")
 	fs.BoolVar(&cfg.ExtrasIngressGRPCEnabled, "extras-ingress-grpc-enabled", defaultGRPCEnabled, "render the extras gRPC Ingress")
@@ -202,7 +126,7 @@ func Load(args []string) (*Config, error) {
 	fs.StringVar(&cfg.ExtrasIngressTLSSecret, "extras-ingress-tls-secret", envOr("EXTRAS_INGRESS_TLS_SECRET", DefaultExtrasIngressTLSSecret), "extras Ingress TLS Secret name (empty disables TLS)")
 	fs.BoolVar(&cfg.ExtrasTraefikTransport, "extras-traefik-servers-transport-enabled", defaultTraefikTransport, "render the Traefik ServersTransport for the REST Ingress")
 	fs.StringVar(&cfg.Namespace, "namespace", envOr("POD_NAMESPACE", DefaultNamespace), "namespace where the operator stores its Secret")
-	fs.IntVar(&cfg.WebhookPort, "webhook-port", defaultWebhookPort, "admission webhook port")
+	fs.IntVar(&cfg.WebhookPort, "webhook-port", defaultWebhookPort, "machine-config webhook port")
 	fs.StringVar(&cfg.WebhookCertDir, "webhook-cert-dir", envOr("WEBHOOK_CERT_DIR", DefaultWebhookCertDir), "directory containing the webhook tls.crt and tls.key")
 	fs.StringVar(&cfg.WebhookServiceName, "webhook-service-name", envOr("WEBHOOK_SERVICE_NAME", DefaultWebhookServiceName), "webhook Service name used for the serving certificate SANs")
 	fs.BoolVar(&cfg.LeaderElect, "leader-elect", false, "enable leader election")
@@ -210,11 +134,6 @@ func Load(args []string) (*Config, error) {
 
 	if err := fs.Parse(args); err != nil {
 		return nil, err
-	}
-	if raw := strings.TrimSpace(proxyHostAliases); raw != "" {
-		if err := json.Unmarshal([]byte(raw), &cfg.ProxyHostAliases); err != nil {
-			return nil, fmt.Errorf("--proxy-host-aliases: %w", err)
-		}
 	}
 	if err := cfg.Validate(); err != nil {
 		return nil, err
@@ -239,15 +158,8 @@ func (c *Config) Validate() error {
 	} else if err := validateURL(c.ManagerAPIURL, "https"); err != nil {
 		add("--manager-api-url: %v", err)
 	}
-	if c.P2PDomain == "" {
-		add("--p2p-domain is required")
-	} else if msgs := validation.IsDNS1123Subdomain(c.P2PDomain); len(msgs) > 0 {
-		add("--p2p-domain: %s", strings.Join(msgs, "; "))
-	}
-	if c.ClusterIDFallback != "" {
-		if msgs := validation.IsDNS1123Label(c.ClusterIDFallback); len(msgs) > 0 {
-			add("--p2p-cluster-id: %s", strings.Join(msgs, "; "))
-		}
+	if c.ManagerGRPCPort < 1 || c.ManagerGRPCPort > 65535 {
+		add("--manager-grpc-port: %d is outside 1-65535", c.ManagerGRPCPort)
 	}
 	if c.NginxStaticURL == "" {
 		add("--nginx-static-url is required")
@@ -259,8 +171,15 @@ func (c *Config) Validate() error {
 			add("--nydus-mirror-url: %v", err)
 		}
 	}
-	if c.ManagerGRPCPort < 1 || c.ManagerGRPCPort > 65535 {
-		add("--manager-grpc-port: %d is outside 1-65535", c.ManagerGRPCPort)
+	if c.P2PDomain == "" {
+		add("--p2p-domain is required")
+	} else if msgs := validation.IsDNS1123Subdomain(c.P2PDomain); len(msgs) > 0 {
+		add("--p2p-domain: %s", strings.Join(msgs, "; "))
+	}
+	if c.ClusterIDFallback != "" {
+		if msgs := validation.IsDNS1123Label(c.ClusterIDFallback); len(msgs) > 0 {
+			add("--p2p-cluster-id: %s", strings.Join(msgs, "; "))
+		}
 	}
 	if c.MTLSSecretName == "" {
 		add("--mtls-secret-name is required")
@@ -310,115 +229,6 @@ func (c *Config) Validate() error {
 	}
 	if !chartVersionPattern.MatchString(c.MirrorChartVersion) {
 		add("--containerd-mirror-chart-version: %q is not a valid chart version", c.MirrorChartVersion)
-	}
-	if c.HarborChartRepo == "" {
-		add("--harbor-chart-repo is required")
-	} else if err := validateURL(c.HarborChartRepo, "http", "https"); err != nil {
-		add("--harbor-chart-repo: %v", err)
-	}
-	if c.HarborChartName == "" {
-		add("--harbor-chart-name is required")
-	} else if msgs := validation.IsDNS1123Label(c.HarborChartName); len(msgs) > 0 {
-		add("--harbor-chart-name: %s", strings.Join(msgs, "; "))
-	}
-	if !chartVersionPattern.MatchString(c.HarborChartVersion) {
-		add("--harbor-chart-version: %q is not a valid chart version", c.HarborChartVersion)
-	}
-	if c.RegistryProxyChartRepo == "" {
-		add("--registry-proxy-chart-repo is required")
-	} else if err := validateURL(c.RegistryProxyChartRepo, "http", "https"); err != nil {
-		add("--registry-proxy-chart-repo: %v", err)
-	}
-	if c.RegistryProxyChartName == "" {
-		add("--registry-proxy-chart-name is required")
-	} else if msgs := validation.IsDNS1123Label(c.RegistryProxyChartName); len(msgs) > 0 {
-		add("--registry-proxy-chart-name: %s", strings.Join(msgs, "; "))
-	}
-	if !chartVersionPattern.MatchString(c.RegistryProxyChartVersion) {
-		add("--registry-proxy-chart-version: %q is not a valid chart version", c.RegistryProxyChartVersion)
-	}
-	if c.AdmissionChartRepo == "" {
-		add("--admission-chart-repo is required")
-	} else if err := validateURL(c.AdmissionChartRepo, "http", "https"); err != nil {
-		add("--admission-chart-repo: %v", err)
-	}
-	if c.AdmissionChartName == "" {
-		add("--admission-chart-name is required")
-	} else if msgs := validation.IsDNS1123Label(c.AdmissionChartName); len(msgs) > 0 {
-		add("--admission-chart-name: %s", strings.Join(msgs, "; "))
-	}
-	if !chartVersionPattern.MatchString(c.AdmissionChartVersion) {
-		add("--admission-chart-version: %q is not a valid chart version", c.AdmissionChartVersion)
-	}
-	if c.AdmissionImagePullSecret != "" {
-		if msgs := validation.IsDNS1123Subdomain(c.AdmissionImagePullSecret); len(msgs) > 0 {
-			add("--admission-image-pull-secret: %s", strings.Join(msgs, "; "))
-		}
-	}
-	if c.AdmissionServiceAccount != "" {
-		if msgs := validation.IsDNS1123Subdomain(c.AdmissionServiceAccount); len(msgs) > 0 {
-			add("--admission-service-account: %s", strings.Join(msgs, "; "))
-		}
-	}
-	if c.ProxyDomain != "" {
-		if msgs := validation.IsDNS1123Subdomain(c.ProxyDomain); len(msgs) > 0 {
-			add("--proxy-domain: %s", strings.Join(msgs, "; "))
-		}
-	}
-	if c.ProxyHarborURL != "" {
-		if err := validateURL(c.ProxyHarborURL, "https"); err != nil {
-			add("--proxy-harbor-url: %v", err)
-		}
-	}
-	if c.ProxyHarborAdminSecret == "" {
-		add("--proxy-harbor-admin-secret is required")
-	} else if msgs := validation.IsDNS1123Subdomain(c.ProxyHarborAdminSecret); len(msgs) > 0 {
-		add("--proxy-harbor-admin-secret: %s", strings.Join(msgs, "; "))
-	}
-	if c.ProxyBasePath != "" {
-		if !strings.HasPrefix(c.ProxyBasePath, "/") || strings.ContainsAny(c.ProxyBasePath, "?#") ||
-			strings.Contains(c.ProxyBasePath, "..") || strings.HasSuffix(c.ProxyBasePath, "/") && c.ProxyBasePath != "/" {
-			add("--proxy-base-path: must start with /, have no query, and no trailing slash")
-		}
-	}
-	if c.ProxyTLSSecret != "" {
-		if msgs := validation.IsDNS1123Subdomain(c.ProxyTLSSecret); len(msgs) > 0 {
-			add("--proxy-tls-secret: %s", strings.Join(msgs, "; "))
-		}
-	}
-	for i, alias := range c.ProxyHostAliases {
-		if net.ParseIP(alias.IP) == nil {
-			add("--proxy-host-aliases[%d].ip: %q is not a valid IP address", i, alias.IP)
-		}
-		if len(alias.Hostnames) == 0 {
-			add("--proxy-host-aliases[%d].hostnames: at least one hostname is required", i)
-		}
-		for _, hostname := range alias.Hostnames {
-			if msgs := validation.IsDNS1123Subdomain(hostname); len(msgs) > 0 {
-				add("--proxy-host-aliases[%d].hostnames: %s: %s", i, hostname, strings.Join(msgs, "; "))
-			}
-		}
-	}
-	for _, registry := range strings.Split(c.ProxyRegistries, ",") {
-		registry = strings.TrimSpace(registry)
-		if registry == "" {
-			add("--proxy-registries: contains an empty registry")
-			continue
-		}
-		if registry == "*" {
-			continue
-		}
-		if msgs := validation.IsDNS1123Subdomain(registry); len(msgs) > 0 {
-			add("--proxy-registries: %s: %s", registry, strings.Join(msgs, "; "))
-		}
-	}
-	if c.ProxyBasicAuthEnabled && strings.TrimSpace(c.ProxyBasicAuthUsername) == "" {
-		add("--proxy-basic-auth-username is required when --proxy-basic-auth-enabled is true")
-	}
-	if c.ProxyUpstreamCredentialsSecret != "" {
-		if msgs := validation.IsDNS1123Subdomain(c.ProxyUpstreamCredentialsSecret); len(msgs) > 0 {
-			add("--proxy-upstream-credentials-secret: %s", strings.Join(msgs, "; "))
-		}
 	}
 	switch c.ExtrasIngressController {
 	case "nginx", "traefik":
@@ -487,8 +297,6 @@ func validateURL(raw string, allowedSchemes ...string) error {
 	return fmt.Errorf("unsupported scheme %q (allowed: %s)", u.Scheme, strings.Join(allowedSchemes, ", "))
 }
 
-// validateNydusMirrorURL requires an absolute http(s) URL with the registry
-// mirror path, for example https://proxy.example.test/docker.io.
 func validateNydusMirrorURL(raw string) error {
 	if err := validateURL(raw, "http", "https"); err != nil {
 		return err

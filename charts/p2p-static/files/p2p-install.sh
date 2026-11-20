@@ -29,7 +29,7 @@ NYDUS_SNAPSHOTTER_REPO="${NYDUS_SNAPSHOTTER_REPO:-gorizond/nydus-snapshotter}"
 NYDUS_SNAPSHOTTER_VERSION="${NYDUS_SNAPSHOTTER_VERSION:-v0.16.0-p2p.2}"
 NYDUS_SNAPSHOTTER_ASSET="${NYDUS_SNAPSHOTTER_ASSET:-nydus-snapshotter-linux-amd64}"
 NYDUS_SNAPSHOTTER_BINARY="containerd-nydus-grpc"
-# Optional HTTPS registry-proxy mirror path for nydus blobs, for example
+# Optional HTTPS mirror path for nydus blobs, for example
 # https://proxy.example.test/docker.io. Empty keeps the dfdaemon proxy block in
 # the generated nydusd backend; setting it makes nydusd fetch blobs directly
 # from the mirror path and removes that proxy block.
@@ -1200,7 +1200,7 @@ log "certificates written to ${CERT_DIR}"
 log "dfget.yaml written with scheduler cluster ID ${SCHEDULER_CLUSTER_ID}"
 log "dynconfig written with scheduler ${SCHEDULER_HOST}:${SCHEDULER_PORT}"
 log "nydus ${NYDUS_VERSION} fscache and fusedev configs written to ${NYDUS_DIR}; nydus-fs-select chooses the driver at snapshotter start"
-log "nydus fscache requires RAFS v6 images; the registry-proxy nydusify conversion must pass --fs-version 6 (fs_version=6; proxy-owned, not this chart)"
+log "nydus fscache requires RAFS v6 images; the nydusify conversion must pass --fs-version 6 (fs_version=6; proxy-owned, not this chart)"
 if [ -n "${NYDUS_MIRROR_URL:-}" ]; then
   log "nydus mirror ${NYDUS_MIRROR_URL} installed for fusedev; fscache keeps the dfdaemon proxy"
 else

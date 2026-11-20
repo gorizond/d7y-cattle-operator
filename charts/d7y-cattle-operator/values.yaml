@@ -38,9 +38,8 @@ nginx:
   staticURL: ""
 
 nydus:
-  # HTTPS mirror path for nydus blobs served by the registry proxy, for example
-  # https://proxy.example.test/docker.io. Empty keeps the dfdaemon proxy
-  # fallback in the generated nydusd backend. No domain is hardcoded.
+  # Optional HTTPS mirror path for nydus blobs in the bootstrap payload.
+  # Empty keeps the dfdaemon proxy fallback. No domain is hardcoded.
   mirrorURL: ""
 
 # Scheduler DNS and internal Service identities. The public LB IP is resolved at
@@ -83,64 +82,6 @@ extras:
     tlsSecret: ""
     traefikServersTransportEnabled: true
 
-# Harbor chart (external). Redis is the existing <cluster>-keydb HelmOp.
-harbor:
-  chart:
-    repo: https://helm.goharbor.io
-    name: harbor
-    version: 1.19.4
-
-# Smart registry proxy chart. Stateless, no PVC.
-registryProxy:
-  chart:
-    repo: https://gorizond.github.io/d7y-cattle-operator
-    name: registry-proxy
-    version: 0.1.23
-
-# Opt-in admission webhook chart (p2p.dragonfly.io/admission). Independent of
-# Harbor/proxy/seed: it only needs proxy.domain and is never auto-installed.
-admission:
-  chart:
-    repo: https://gorizond.github.io/d7y-cattle-operator
-    name: admission-webhook
-    version: 0.1.2
-  # Optional credential injection for proxy pulls. With networkOnly=true (the
-  # default) no imagePullSecrets/serviceAccountName are injected.
-  networkOnly: true
-  imagePullSecret: ""
-  serviceAccountName: ""
-
-# External/existing Harbor and the public proxy endpoint. proxy.domain is the
-# operator-wide public proxy DNS name (no scheme); leave empty to disable the
-# proxy HelmOp even if a cluster has the proxy annotation.
-proxy:
-  domain: ""
-  harborURL: ""
-  # Secret in the operator/local namespace. It is copied per cluster and must
-  # contain HARBOR_ADMIN_PASSWORD before the Harbor/proxy HelmOps are applied.
-  harborAdminSecret: harbor-admin
-  # "*" allows any explicit registry; proxy auth/network is the boundary.
-  registries: "*"
-  # Optional public proxy path prefix (for example /proxy); empty serves the
-  # domain root, as used by a dedicated proxy domain.
-  basePath: ""
-  # Reuse the Harbor cert-manager Secret; empty uses the ingress default.
-  tlsSecret: ""
-  # Optional /etc/hosts entries for the registry proxy pod, e.g. a
-  # same-cluster Harbor reached through the Traefik ClusterIP.
-  hostAliases: []
-  # - ip: 203.0.113.10
-  #   hostnames:
-  #     - harbor.example.test
-  # Optional client Basic auth for proxy /v2 reads. Keep disabled until the
-  # node registries.yaml carries the matching auth; /api/convert keeps using
-  # the webhook secret.
-  basicAuthEnabled: false
-  basicAuthUsername: d7y-proxy
-  # Optional Secret in the operator namespace with a credentials.yaml key.
-  # Empty keeps private-upstream credentials disabled.
-  upstreamCredentialsSecret: ""
-
 # Strict node-local containerd registry mirror for seed/data clusters.
 containerdMirror:
   chart:
@@ -149,9 +90,9 @@ containerdMirror:
     version: 0.1.1
 
 webhook:
-  # Admission webhook server and MutatingWebhookConfiguration.
+  # Machine-config webhook server and CREATE-only MutatingWebhookConfiguration.
   enabled: true
-  # Admission webhook port served by the operator.
+  # Webhook port served by the operator.
   port: 9443
   # Directory where needacert mounts tls.crt/tls.key.
   certDir: /etc/webhook/certs

@@ -39,6 +39,8 @@ app.kubernetes.io/instance: {{ .Release.Name }}
 {{- end }}
 {{- end }}
 
+
+
 {{- define "d7y-cattle-operator.webhookName" -}}
 {{- printf "%s-webhook" (include "d7y-cattle-operator.fullname" .) | trunc 63 | trimSuffix "-" -}}
 {{- end -}}
