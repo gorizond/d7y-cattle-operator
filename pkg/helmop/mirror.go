@@ -14,7 +14,7 @@ func Mirror(c Cluster) *fleetv1alpha1.HelmOp {
 		c,
 		c.MirrorChart,
 		"containerd-mirror",
-		mirrorValues(),
+		mirrorValues(c),
 		[]string{DataName(c.Name)},
 	)
 }
@@ -29,16 +29,23 @@ func SharedMirror(c Cluster) *fleetv1alpha1.HelmOp {
 		c,
 		c.MirrorChart,
 		"containerd-mirror",
-		mirrorValues(),
+		mirrorValues(c),
 		[]string{SharedDataName()},
 		SharedSelector(),
 	)
 }
 
-func mirrorValues() map[string]any {
+func mirrorValues(c Cluster) map[string]any {
 	return map[string]any{
 		"namespace": MirrorTargetNamespace,
-		"port":      MirrorPort,
+		"port":      mirrorPort(c),
 		"hostPath":  MirrorCertsDir,
 	}
+}
+
+func mirrorPort(c Cluster) int {
+	if c.MirrorPort > 0 {
+		return c.MirrorPort
+	}
+	return MirrorPort
 }

@@ -9,14 +9,15 @@ import (
 )
 
 const (
-	conditionRolesResolved      condition.Cond = "d7y.io/RolesResolved"
-	conditionKeyDBReady         condition.Cond = "d7y.io/KeyDBReady"
-	conditionControlReady       condition.Cond = "d7y.io/ControlReady"
-	conditionDataReady          condition.Cond = "d7y.io/DataReady"
-	conditionRegistered         condition.Cond = "d7y.io/Registered"
-	conditionRegistrationFailed condition.Cond = "d7y.io/RegistrationFailed"
-	conditionRetrying           condition.Cond = "d7y.io/Retrying"
-	conditionIDMismatch         condition.Cond = "d7y.io/IdMismatch"
+	conditionRolesResolved        condition.Cond = "d7y.io/RolesResolved"
+	conditionKeyDBReady           condition.Cond = "d7y.io/KeyDBReady"
+	conditionContainerdHostsReady condition.Cond = "d7y.io/ContainerdHostsReady"
+	conditionControlReady         condition.Cond = "d7y.io/ControlReady"
+	conditionDataReady            condition.Cond = "d7y.io/DataReady"
+	conditionRegistered           condition.Cond = "d7y.io/Registered"
+	conditionRegistrationFailed   condition.Cond = "d7y.io/RegistrationFailed"
+	conditionRetrying             condition.Cond = "d7y.io/Retrying"
+	conditionIDMismatch           condition.Cond = "d7y.io/IdMismatch"
 )
 
 // statusBuilder accumulates all condition changes for one reconcile pass and
@@ -78,6 +79,7 @@ func (s *statusBuilder) registrationFailure(retrying bool, err error) bool {
 func (s *statusBuilder) managedDisabled(reason, message string) {
 	s.rolesResolved(false, false, false)
 	s.set(conditionKeyDBReady, false, reason, message)
+	s.set(conditionContainerdHostsReady, false, reason, message)
 	s.seedUnavailable(reason, message)
 	s.seedDisabled()
 }
@@ -90,7 +92,7 @@ func (s *statusBuilder) seedUnavailable(reason, message string) {
 func hasManagedStatus(cluster *provv1.Cluster) bool {
 	for _, cond := range cluster.Status.Conditions {
 		switch condition.Cond(cond.Type) {
-		case conditionRolesResolved, conditionKeyDBReady, conditionControlReady,
+		case conditionRolesResolved, conditionKeyDBReady, conditionContainerdHostsReady, conditionControlReady,
 			conditionDataReady, conditionRegistered, conditionRegistrationFailed,
 			conditionRetrying, conditionIDMismatch:
 			return true

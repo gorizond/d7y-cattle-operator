@@ -25,6 +25,7 @@ func TestReconcileSetsRoleConditions(t *testing.T) {
 
 	for _, name := range []string{
 		string(conditionRolesResolved), string(conditionKeyDBReady),
+		string(conditionContainerdHostsReady),
 		string(conditionControlReady), string(conditionDataReady),
 		string(conditionRegistered),
 	} {
@@ -223,7 +224,7 @@ func TestStatusUpdateErrorIsReturned(t *testing.T) {
 
 func TestOperatorConditionTypesAreNamespaced(t *testing.T) {
 	for _, cond := range []condition.Cond{
-		conditionRolesResolved, conditionKeyDBReady, conditionControlReady,
+		conditionRolesResolved, conditionKeyDBReady, conditionContainerdHostsReady, conditionControlReady,
 		conditionDataReady, conditionRegistered,
 		conditionRegistrationFailed, conditionRetrying, conditionIDMismatch,
 	} {

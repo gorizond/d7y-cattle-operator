@@ -8,6 +8,7 @@ import (
 var envKeys = []string{
 	"MANAGER_GRPC_DOMAIN",
 	"MANAGER_GRPC_PORT",
+	"CONTAINERD_MIRROR_PORT",
 	"MANAGER_API_URL",
 	"P2P_DOMAIN",
 	"P2P_CLUSTER_ID",
@@ -64,6 +65,9 @@ func TestLoadDefaults(t *testing.T) {
 
 	if cfg.ManagerGRPCPort != DefaultManagerGRPCPort {
 		t.Errorf("ManagerGRPCPort = %d, want %d", cfg.ManagerGRPCPort, DefaultManagerGRPCPort)
+	}
+	if cfg.ContainerdMirrorPort != DefaultContainerdMirrorPort {
+		t.Errorf("ContainerdMirrorPort = %d, want %d", cfg.ContainerdMirrorPort, DefaultContainerdMirrorPort)
 	}
 	if cfg.ClusterIDFallback != "" {
 		t.Errorf("ClusterIDFallback = %q, want empty", cfg.ClusterIDFallback)
@@ -221,6 +225,7 @@ func TestLoadEnvOverride(t *testing.T) {
 	t.Setenv("CONTAINERD_MIRROR_CHART_REPO", "https://mirror.env.example.com")
 	t.Setenv("CONTAINERD_MIRROR_CHART_NAME", "containerd-mirror-env")
 	t.Setenv("CONTAINERD_MIRROR_CHART_VERSION", "2.3.4")
+	t.Setenv("CONTAINERD_MIRROR_PORT", "4101")
 	t.Setenv("EXTRAS_INGRESS_CONTROLLER", "traefik")
 	t.Setenv("EXTRAS_INGRESS_CLASS_NAME", "traefik")
 	t.Setenv("EXTRAS_INGRESS_GRPC_ENABLED", "false")
@@ -241,6 +246,9 @@ func TestLoadEnvOverride(t *testing.T) {
 	}
 	if cfg.ManagerGRPCPort != 8443 {
 		t.Errorf("ManagerGRPCPort = %d", cfg.ManagerGRPCPort)
+	}
+	if cfg.ContainerdMirrorPort != 4101 {
+		t.Errorf("ContainerdMirrorPort = %d, want 4101", cfg.ContainerdMirrorPort)
 	}
 	if cfg.ManagerAPIURL != "https://api.env.example.com" {
 		t.Errorf("ManagerAPIURL = %q", cfg.ManagerAPIURL)

@@ -84,6 +84,9 @@ extras:
 
 # Strict node-local containerd registry mirror for seed/data clusters.
 containerdMirror:
+  # Node-local dfdaemon/containerd mirror port used in the hosts.toml files
+  # delivered to every managed cluster. Must match the mirror chart.
+  port: 4001
   chart:
     repo: https://gorizond.github.io/d7y-cattle-operator
     name: containerd-mirror

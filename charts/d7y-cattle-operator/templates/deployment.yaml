@@ -58,6 +58,8 @@ spec:
               value: {{ .Values.extras.chart.name | quote }}
             - name: EXTRAS_CHART_VERSION
               value: {{ .Values.extras.chart.version | quote }}
+            - name: CONTAINERD_MIRROR_PORT
+              value: {{ .Values.containerdMirror.port | quote }}
             - name: CONTAINERD_MIRROR_CHART_REPO
               value: {{ .Values.containerdMirror.chart.repo | quote }}
             - name: CONTAINERD_MIRROR_CHART_NAME

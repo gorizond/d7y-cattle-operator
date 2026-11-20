@@ -43,3 +43,21 @@ func TestOperatorChartHasNoIngressOrVPA(t *testing.T) {
 		}
 	}
 }
+
+func TestOperatorRBACWritesContainerdHosts(t *testing.T) {
+	data, err := os.ReadFile("../../charts/d7y-cattle-operator/templates/rbac.yaml")
+	if err != nil {
+		t.Fatalf("read RBAC template: %v", err)
+	}
+	text := string(data)
+	for _, want := range []string{
+		`resources: ["configmaps"]`,
+		`verbs: ["get", "list", "create", "update", "patch"]`,
+		`resources: ["clusters"]`,
+		`verbs: ["get", "list", "watch", "update", "patch"]`,
+	} {
+		if !strings.Contains(text, want) {
+			t.Errorf("operator RBAC missing %q", want)
+		}
+	}
+}

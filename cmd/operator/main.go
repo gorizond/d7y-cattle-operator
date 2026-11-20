@@ -84,6 +84,7 @@ func run() error {
 	}
 
 	secretController := coreFactory.Core().V1().Secret()
+	configMapController := coreFactory.Core().V1().ConfigMap()
 	serviceController := coreFactory.Core().V1().Service()
 	eventController := coreFactory.Core().V1().Event()
 	clusterController := provisioningFactory.Provisioning().V1().Cluster()
@@ -93,11 +94,12 @@ func run() error {
 
 	ctx := signals.SetupSignalContext()
 	webhook.Register(ctx, secretController, serviceController, mutatingWebhookController, validatingWebhookController, crdController)
-	cluster.Register(ctx, clusterController, secretController, eventController, helmOps, bundles, cluster.Options{
+	cluster.Register(ctx, clusterController, secretController, configMapController, eventController, helmOps, bundles, cluster.Options{
 		OperatorNamespace:           cfg.Namespace,
 		MTLSSecretName:              cfg.MTLSSecretName,
 		ManagerGRPCDomain:           cfg.ManagerGRPCDomain,
 		ManagerGRPCPort:             cfg.ManagerGRPCPort,
+		ContainerdMirrorPort:        cfg.ContainerdMirrorPort,
 		ManagerAPIHost:              apiHost,
 		ManagerAPIURL:               cfg.ManagerAPIURL,
 		ManagerAPICredentialsSecret: cfg.ManagerAPICredentialsSecret,
