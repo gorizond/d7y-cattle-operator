@@ -11,13 +11,24 @@ if [ "$P2P_ROOT" = "/" ]; then
 fi
 ROOT="${P2P_ROOT%/}"
 
+# The same installer supports RKE2 and k3s. Keep the RKE2 defaults when the
+# distro marker is absent so pre-RKE2 nodes behave exactly as before.
+DISTRO="rke2"
+if [ -d "${ROOT}/var/lib/rancher/k3s" ]; then
+  DISTRO="k3s"
+fi
+DISTRO_SERVICE_TARGETS="rke2-server.service rke2-agent.service"
+if [ "$DISTRO" = "k3s" ]; then
+  DISTRO_SERVICE_TARGETS="k3s.service"
+fi
+
 CERT_DIR="/etc/dragonfly/certs"
 DFGET_CONFIG="/etc/dragonfly/dfget.yaml"
 DYNCONFIG="/etc/dragonfly/dynconfig.yaml"
 NYDUS_DIR="/etc/nydus"
 # Static-store assets for nydusd/nydus-image/nydus-overlayfs. The host
 # snapshotter is a separate patched release, see below.
-NYDUS_VERSION="${NYDUS_VERSION:-v0.16.0}"
+NYDUS_VERSION="${NYDUS_VERSION:-v2.4.5}"
 NYDUS_BINARIES="nydusd
 nydus-image
 nydus-overlayfs"
@@ -29,6 +40,11 @@ NYDUS_SNAPSHOTTER_REPO="${NYDUS_SNAPSHOTTER_REPO:-gorizond/nydus-snapshotter}"
 NYDUS_SNAPSHOTTER_VERSION="${NYDUS_SNAPSHOTTER_VERSION:-v0.16.0-p2p.2}"
 NYDUS_SNAPSHOTTER_ASSET="${NYDUS_SNAPSHOTTER_ASSET:-nydus-snapshotter-linux-amd64}"
 NYDUS_SNAPSHOTTER_BINARY="containerd-nydus-grpc"
+# Optional official Nydus release fallback for the daemon binaries when the
+# static store is not populated. The tarball contains nydusd, nydus-image, and
+# nydus-overlayfs.
+NYDUS_ALLOW_GITHUB="${NYDUS_ALLOW_GITHUB:-1}"
+NYDUS_GITHUB_REPO="${NYDUS_GITHUB_REPO:-dragonflyoss/nydus}"
 # Optional HTTPS mirror path for nydus blobs, for example
 # https://proxy.example.test/docker.io. Empty keeps the dfdaemon proxy block in
 # the generated nydusd backend; setting it makes nydusd fetch blobs directly
@@ -43,7 +59,7 @@ SCHEDULER_PORT=443
 PREFLIGHT_TIMEOUT="${P2P_PREFLIGHT_TIMEOUT:-3}"
 BIN_DIR="${ROOT}/usr/local/bin"
 SERVICE_DIR="${ROOT}/etc/systemd/system"
-RKE2_CONTAINERD_DIR="${ROOT}/var/lib/rancher/rke2/agent/etc/containerd"
+RKE2_CONTAINERD_DIR="${ROOT}/var/lib/rancher/${DISTRO}/agent/etc/containerd"
 NYDUS_DROPIN_DIR="${RKE2_CONTAINERD_DIR}/config-v3.toml.d"
 NYDUS_DROPIN="${NYDUS_DROPIN_DIR}/90-nydus.toml"
 
@@ -78,7 +94,7 @@ write_file() {
 
 detect_containerd_major() {
   local candidate version
-  candidate="${ROOT}/var/lib/rancher/rke2/bin/containerd"
+  candidate="${ROOT}/var/lib/rancher/${DISTRO}/bin/containerd"
   if [ ! -x "$candidate" ]; then
     candidate="$(command -v containerd || true)"
   fi
@@ -89,8 +105,8 @@ detect_containerd_major() {
       *) printf '1'; return ;;
     esac
   fi
-  # New VMs usually run this script before RKE2 installs containerd. The
-  # target RKE2 releases use containerd 2.x, so prefer the v3 drop-in path.
+  # New VMs usually run this script before RKE2/k3s installs containerd. The
+  # target releases use containerd 2.x, so prefer the v3 drop-in path.
   log "warning: containerd version not detected; using the containerd 2.x v3 config"
   printf '2'
 }
@@ -98,6 +114,47 @@ detect_containerd_major() {
 # Prefer the versioned nydus asset layout, then the legacy unversioned /bin
 # layout. The static store is populated externally; both layouts are served by
 # the p2p-static chart.
+NYDUS_GITHUB_DIR=""
+
+nydus_github_tarball_url() {
+  local base="https://github.com/${NYDUS_GITHUB_REPO}/releases"
+  if [ "$NYDUS_VERSION" = "latest" ]; then
+    printf '%s/latest/download/nydus-static-latest-linux-amd64.tgz' "$base"
+  else
+    printf '%s/download/%s/nydus-static-%s-linux-amd64.tgz' "$base" "$NYDUS_VERSION" "$NYDUS_VERSION"
+  fi
+}
+
+ensure_nydus_github_assets() {
+  local dir url tarball
+  if [ -n "$NYDUS_GITHUB_DIR" ]; then
+    return 0
+  fi
+  if [ "${NYDUS_ALLOW_GITHUB:-1}" != "1" ]; then
+    log "nydus static store unavailable and NYDUS_ALLOW_GITHUB=0; not trying GitHub"
+    return 1
+  fi
+  dir="${TMP}/nydus-github"
+  tarball="${dir}/nydus-static.tgz"
+  mkdir -p "$dir"
+  url="$(nydus_github_tarball_url)"
+  if ! curl -fL --retry 3 --connect-timeout 10 --max-time 300 -o "$tarball" "$url"; then
+    log "nydus GitHub release unavailable: ${url}"
+    return 1
+  fi
+  if ! tar -xzf "$tarball" -C "$dir"; then
+    log "nydus GitHub release tarball is invalid: ${url}"
+    return 1
+  fi
+  if [ ! -d "${dir}/nydus-static" ]; then
+    log "nydus GitHub release tarball has no nydus-static directory: ${url}"
+    return 1
+  fi
+  NYDUS_GITHUB_DIR="${dir}/nydus-static"
+  log "nydus binaries using GitHub release ${NYDUS_VERSION}"
+  return 0
+}
+
 download_nydus_asset() {
   local name out url
   name="$1"
@@ -107,9 +164,15 @@ download_nydus_asset() {
       if [ ! -s "$out" ]; then
         die "downloaded ${name} is empty"
       fi
+      log "nydus ${name}: using static store"
       return 0
     fi
   done
+  if ensure_nydus_github_assets && [ -s "${NYDUS_GITHUB_DIR}/${name}" ]; then
+    cp "${NYDUS_GITHUB_DIR}/${name}" "$out"
+    log "nydus ${name}: using GitHub release ${NYDUS_VERSION}"
+    return 0
+  fi
   return 1
 }
 
@@ -203,7 +266,7 @@ case "$MANAGER_ADDR" in
 esac
 case "$MANAGER_ADDR" in
   *:*) ;;
-  *) MANAGER_ADDR="${MANAGER_ADDR}:65003" ;;
+  *) MANAGER_ADDR="${MANAGER_ADDR}:443" ;;
 esac
 
 case "$STATIC_URL" in
@@ -852,13 +915,13 @@ TOML
   CONTAINERD_CONFIG_PATH="$TEMPLATE_PATH"
 fi
 
-write_file "${SERVICE_DIR}/dfdaemon-bootstrap.service" 0644 <<'UNIT'
+write_file "${SERVICE_DIR}/dfdaemon-bootstrap.service" 0644 <<UNIT
 [Unit]
 Description=Dragonfly bootstrap dfdaemon
 Documentation=https://d7y.io
 After=network-online.target
 Wants=network-online.target
-Before=rke2-server.service rke2-agent.service
+Before=${DISTRO_SERVICE_TARGETS}
 ConditionPathExists=/etc/dragonfly/dfget.yaml
 
 [Service]
@@ -875,13 +938,13 @@ UNIT
 # A boot helper starts the host bootstrap even if the previous shutdown left it
 # disabled after the switch. Wants= starts it regardless of enablement; the
 # switch can then disable it when the in-cluster client takes over.
-write_file "${SERVICE_DIR}/dfdaemon-bootstrap-boot.service" 0644 <<'UNIT'
+write_file "${SERVICE_DIR}/dfdaemon-bootstrap-boot.service" 0644 <<UNIT
 [Unit]
 Description=Start host dfdaemon bootstrap before RKE2
 Documentation=https://d7y.io
 After=local-fs.target
 Wants=dfdaemon-bootstrap.service
-Before=dfdaemon-bootstrap.service rke2-server.service rke2-agent.service
+Before=dfdaemon-bootstrap.service ${DISTRO_SERVICE_TARGETS}
 ConditionPathExists=/etc/dragonfly/dfget.yaml
 
 [Service]
@@ -905,7 +968,12 @@ UNIT="${DFDAEMON_UNIT:-dfdaemon-bootstrap.service}"
 MARKER="${BOOTSTRAP_SWITCH_MARKER:-/var/lib/dragonfly/bootstrap-switched}"
 NAMESPACE="${DFDAEMON_NAMESPACE:-dragonfly-system}"
 CLIENT_PORT="${DFDAEMON_CLIENT_PORT:-4003}"
-CRICTL="${CRICTL:-/var/lib/rancher/rke2/bin/crictl}"
+DISTRO="rke2"
+if [ -d /var/lib/rancher/k3s ]; then
+  DISTRO="k3s"
+fi
+CRICTL="${CRICTL:-/var/lib/rancher/${DISTRO}/bin/crictl}"
+# RKE2 and k3s both expose the containerd socket at /run/k3s.
 SOCKET="${CONTAINERD_SOCKET:-/run/k3s/containerd/containerd.sock}"
 
 log() {
@@ -1011,13 +1079,13 @@ WantedBy=timers.target
 UNIT
 
 {
-  cat <<'UNIT'
+  cat <<UNIT
 [Unit]
 Description=Dragonfly host nydus snapshotter
 Documentation=https://d7y.io
 After=network-online.target
 Wants=network-online.target
-Before=rke2-server.service rke2-agent.service
+Before=${DISTRO_SERVICE_TARGETS}
 ConditionPathExists=/etc/nydus/config.toml
 
 [Service]

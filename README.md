@@ -462,7 +462,7 @@ yet:
   enabled. A later successful run (or an existing seed cluster) installs the
   full public-P2P configuration.
 - Nydus is installed on the host: the patched `containerd-nydus-grpc`
-  snapshotter release `v0.16.0-p2p.2` plus static-store `v0.16.0` `nydusd`,
+  snapshotter release `v0.16.0-p2p.2` plus static-store `v2.4.5` `nydusd`,
   `nydus-image`, and `nydus-overlayfs` assets. It is the global CRI
   snapshotter. `enable_oci_tar` is not set (it is not a nydus field). A daily
   host timer runs `nydus-updater` to refresh the static assets and restart the
@@ -613,7 +613,7 @@ The installer defaults are `NYDUS_SNAPSHOTTER_REPO=gorizond/nydus-snapshotter`,
 `NYDUS_SNAPSHOTTER_ASSET=nydus-snapshotter-linux-amd64`; override them for
 another fork release. The other nydus daemon assets (`nydusd`, `nydus-image`,
 `nydus-overlayfs`) stay pinned in the static store at `NYDUS_VERSION`
-(`v0.16.0`). A missing release asset falls back to the direct registry so RKE2
+(`v2.4.5`). A missing release asset falls back to the direct registry so RKE2
 can still start. There is no MITM proxy or local CA on the node.
 
 The `containerd-mirror` chart is created only for seed clusters
@@ -721,7 +721,7 @@ control/data without blocking manager/KeyDB.
 `charts/p2p-static` serves `/p2p-install.sh` and the static asset volume through
 Nginx. The bootstrap payload is a base64url **env-file** (no JSON, no `jq`, no
 python on the node). The script installs the host-only patched nydus
-snapshotter (`v0.16.0-p2p.2`) plus the static `v0.16.0` daemon assets
+snapshotter (`v0.16.0-p2p.2`) plus the static `v2.4.5` daemon assets
 (including `nydus-overlayfs`), writes the global nydus containerd drop-in
 `config-v3.toml.d/90-nydus.toml`, starts it before RKE2, and installs a daily
 host updater. There is no in-cluster nydus DaemonSet or HelmOp. See
@@ -760,7 +760,7 @@ that predates those fields would affect REST only.
 
 Nydus runs only on the host, installed by `p2p-install.sh`; the operator no
 longer creates a nydus chart, DaemonSet, HelmOp, RuntimeClass, or VPA. The
-script installs the patched `v0.16.0-p2p.2` snapshotter plus static `v0.16.0`
+script installs the patched `v0.16.0-p2p.2` snapshotter plus static `v2.4.5`
 daemon assets (including `nydus-overlayfs`), writes `/etc/nydus/config.toml`
 (multiple/fusedev, `[experimental]` `enable_referrer_detect`/
 `enable_index_detect`, no tarfs), the registry-backend `nydusd-config.json`,

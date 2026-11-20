@@ -78,7 +78,7 @@ The Ingress is optional and does not manage TLS or DNS.
 env-file, not JSON:
 
 ```text
-MANAGER_GRPC=https://manager-grpc.example.test:65003
+MANAGER_GRPC=https://manager-grpc.example.test:443
 STATIC_URL=http://rancher-static.example.test
 SCHEDULER_HOST=d7y-scheduler.c-m-example.example.test
 SCHEDULER_CLUSTER_ID=2
@@ -110,6 +110,24 @@ are never logged; `tls.key` is written with mode `0600`.
 For local testing, set `P2P_ROOT=/tmp/root`, `SKIP_DOWNLOAD=1`, and
 `SKIP_PREFLIGHT=1`; the script will write its files below that root and skip
 network/systemd/module actions.
+
+## RKE2 and k3s
+
+`p2p-install.sh` detects the node distro from `/var/lib/rancher/k3s`:
+RKE2 uses `/var/lib/rancher/rke2/...` and orders before
+`rke2-server.service rke2-agent.service`; k3s uses
+`/var/lib/rancher/k3s/...`, its `crictl`, and `k3s.service`. The containerd
+socket is `/run/k3s/containerd/containerd.sock` on both distros. A missing
+marker keeps the existing RKE2 behavior.
+
+## Static binary fallback
+
+The static store remains the primary source for `nydusd`, `nydus-image`, and
+`nydus-overlayfs`. If both `${STATIC_URL}/nydus/<version>/<binary>` and
+`${STATIC_URL}/bin/<binary>` return 404, the installer downloads the official
+`dragonflyoss/nydus` `nydus-static-<version>-linux-amd64.tgz` release and
+extracts the same three binaries. The fallback is enabled by default
+(`NYDUS_ALLOW_GITHUB=1`) and logs whether the static store or GitHub was used.
 
 ## Containerd design
 
@@ -333,7 +351,7 @@ Never print or commit robot secrets; the installer writes and the rendered
 chart contains only the public mirror URL.
 
 The other daemon binaries (`nydusd`, `nydus-image`, `nydus-overlayfs`) stay
-pinned in the static store at `NYDUS_VERSION` (`v0.16.0`). The updater prefers
+pinned in the static store at `NYDUS_VERSION` (`v2.4.5`). The updater prefers
 `${STATIC_URL}/nydus/${NYDUS_VERSION}/<binary>` and falls back to
 `${STATIC_URL}/bin/<binary>` for the legacy unversioned layout.
 
@@ -385,7 +403,7 @@ self-test, and a `helm template` render check.
 - Base-template merge and drop-in import behaviour need a live pilot, including
   `containerd config dump` after a manual `rke2-agent`/`rke2-server` restart.
 - The static `/bin` (or `/nydus/<version>`) volume must be populated externally
-  with trusted `v0.16.0` daemon assets; the script checks executability but not
+  with trusted `v2.4.5` daemon assets; the script checks executability but not
   signatures. The patched snapshotter release is checksum-verified.
 - The patched `containerd-nydus-grpc` certs.d behavior and the host-unit start
   order need pilot verification.

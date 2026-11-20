@@ -45,7 +45,7 @@ func TestCreateInjectsPayload(t *testing.T) {
 		t.Fatalf("decode cfg: %v", err)
 	}
 	env := string(raw)
-	if !strings.Contains(env, "MANAGER_GRPC=https://grpc.example.com:65003") ||
+	if !strings.Contains(env, "MANAGER_GRPC=https://grpc.example.com:443") ||
 		!strings.Contains(env, "STATIC_URL=http://static.example.com") ||
 		!strings.Contains(env, "SCHEDULER_HOST=d7y-scheduler.c-m-test.example.com") ||
 		!strings.Contains(env, "SCHEDULER_CLUSTER_ID=2") ||
