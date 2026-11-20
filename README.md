@@ -3,11 +3,11 @@
 Kubernetes operator that runs [Dragonfly](https://d7y.io) P2P on Rancher-managed
 RKE2 clusters.
 
-**Status**: v0.1.67 (2026-11-20). The operator implements the Cluster controller,
+**Status**: v0.2.0 (2026-11-20). The operator implements the Cluster controller,
 role resolution, KeyDB, manager, seed role, manager registration,
-`dragonfly-extras`, the fail-open `p2p-static` bootstrap, manager root
-credentials, and host nydus. The manager/seed/nydus stack has live pilot
-verification; remaining items are listed under Follow-ups.
+`dragonfly-extras`, the fail-open `p2p-static` bootstrap, the CREATE-only
+machine-config webhook, manager root credentials, and host nydus. Harbor,
+registry-proxy, and the pod-image admission webhook are out of scope.
 
 ## What it does today
 
@@ -54,6 +54,49 @@ bootstrap payload for the kept `p2p-static` chart.
   change.
 - Runs until it receives `SIGINT`/`SIGTERM`.
 
+## How it works
+
+```mermaid
+flowchart TB
+  subgraph MGMT["Management cluster"]
+    C["Provisioning Cluster<br/>labels + annotations"] --> O["d7y-cattle-operator<br/>reconcile"]
+    O --> TLS["dragonfly-p2p-mtls<br/>CA + leaf, DNS + public IP SANs"]
+    O --> CRED["dragonfly-manager-api<br/>username / password / jwt-key"]
+    O --> REG["Manager REST API<br/>register scheduler + seed peer<br/>allocate scheduler ID"]
+    O --> HELM["Shared Fleet HelmOps<br/>keydb - manager - control - data - extras - containerd-mirror"]
+  end
+  subgraph DOWN["Downstream RKE2 cluster"]
+    HELM --> K["KeyDB"]
+    HELM --> MGR["Manager + MySQL"]
+    HELM --> SCH["Scheduler"]
+    HELM --> SC["seedClient"]
+    HELM --> CL["dfdaemon client"]
+    HELM --> EX["extras<br/>Traefik manager gRPC/REST<br/>scheduler TCP + VPA"]
+    HELM --> CM["containerd-mirror<br/>certs.d/_default to 127.0.0.1:4001"]
+  end
+  subgraph NODE["Node"]
+    W["Machine-config webhook<br/>CREATE-only rke-machine-config.cattle.io"] --> P["p2p-install.sh<br/>host nydus + dfdaemon bootstrap"]
+  end
+  C -.-> W
+  P --> CL
+  PODS["Pods"] --> CTD["containerd"] --> CL
+  CL --> P2P["Dragonfly P2P"] --> SCH
+  P2P --> SC
+  MGR -->|"gRPC 65003 mTLS / REST 8080 JWT"| EX
+  SCH -->|"public TCP 443 TLS passthrough"| EX
+  EX -->|"d7y-scheduler.&lt;cluster-id&gt;.&lt;domain&gt;"| PUB["Scheduler public endpoint"]
+```
+
+### Data flow
+
+1. Label the provisioning Cluster with `d7y-operator-cattle: "true"` and add role annotations.
+2. The operator reconciles the Cluster and resolves manager/seed roles.
+3. It ensures the `dragonfly-p2p-mtls` and `dragonfly-manager-api` Secrets, registers the scheduler and seed peer with the manager REST API, and allocates the scheduler ID when needed.
+4. It creates or updates the shared Fleet HelmOps for keydb, manager, control, data, extras, and containerd-mirror.
+5. The machine-config webhook injects `p2p-install.sh` into new RKE2 node configs; the host installs nydus and starts dfdaemon bootstrap.
+6. Node containerd pulls through dfdaemon, which uses Dragonfly P2P and the scheduler/seed peers.
+7. Extras publish manager gRPC/REST and the public scheduler endpoint; the operator updates Cluster status conditions.
+
 ## Follow-ups
 
 - Remaining pilot work: cold cross-node P2P, fscache/EROFS on a kernel with
@@ -94,7 +137,8 @@ chart. The release tag (`v<chart version>`) and the default image tag
 (`v<chart version>`) are kept in sync by the release workflow.
 
 The operator reads credentials only from Secret names. No secret values are passed
-are required by the configuration contract. When the named Secret is absent, the
+through flags or chart values; `managerApiCredentialsSecret` is required by the
+configuration contract. When the named Secret is absent, the
 operator creates it in its own namespace with a generated manager root password
 and JWT signing key; see [Manager root credentials](#manager-root-credentials).
 
@@ -120,13 +164,18 @@ and JWT signing key; see [Manager root credentials](#manager-root-credentials).
 | `extras.ingress.restEnabled` | `EXTRAS_INGRESS_REST_ENABLED` | Render the REST Ingress when the manager role is active; default `true` |
 | `extras.ingress.tlsSecret` | `EXTRAS_INGRESS_TLS_SECRET` | Ingress TLS Secret; empty disables the TLS block |
 | `extras.ingress.traefikServersTransportEnabled` | `EXTRAS_TRAEFIK_SERVERS_TRANSPORT_ENABLED` | Render the REST Traefik `ServersTransport`; default `true` |
+| `webhook.enabled` | — | Render the machine-config webhook; default `true` |
+| `webhook.port` | `WEBHOOK_PORT` | Webhook port; default `9443` |
+| `webhook.certDir` | `WEBHOOK_CERT_DIR` | needacert TLS directory; default `/etc/webhook/certs` |
+| `webhook.failurePolicy` | — | Machine-config webhook failure policy; default `Ignore` |
 
 Defaults: `mtlsSecretName=dragonfly-p2p-mtls`, `dragonfly.chart.name=dragonfly`,
 `dragonfly.chart.repo=https://gorizond.github.io/dragonflyoss-helm-charts`,
 `dragonfly.chart.version=1.10.1-patch.2`, `extras.chart.name=dragonfly-extras`,
 `extras.chart.version=0.1.10`, `extras.ingress.controller=nginx`,
 `extras.ingress.grpcEnabled=true`, `extras.ingress.restEnabled=true`,
-`manager.grpcPort=443`, `webhook.port=9443`,
+`manager.grpcPort=443`, `webhook.enabled=true`, `webhook.port=9443`,
+`webhook.failurePolicy=Ignore`,
 `leaderElect=false`. The public scheduler IP(s) are resolved from DNS at
 reconcile time; there is no scheduler IP value. `scheduler.domain` has no
 default and is required. `scheduler.clusterID` is only a fallback for an
@@ -531,7 +580,7 @@ The operator only acts on Clusters labeled `d7y-operator-cattle: "true"`.
 |---|---|---|
 | `p2p.dragonfly.io/manager` | `"true"` | Manager role: manager and its database, KeyDB as external Redis |
 | `p2p.dragonfly.io/seed` | `"true"` | Seed role: scheduler, seed client/client (nydus runs on the host) |
-| `p2p.dragonfly.io/scheduler-cluster-id` | integer | Scheduler cluster ID; required by the seed role until MR-3 auto-allocates it |
+| `p2p.dragonfly.io/scheduler-cluster-id` | integer | Scheduler cluster ID; the seed role requires one, and when absent the operator auto-allocates it and writes both `scheduler-cluster-id` and the durable `scheduler-cluster-id-auto` marker. User-owned IDs are never overwritten. |
 | `p2p.dragonfly.io/scheduler-replicas` | integer | Scheduler replicas (default `1`) |
 | `p2p.dragonfly.io/seedclient-replicas` | integer | Seed client replicas (default `1`) |
 | `p2p.dragonfly.io/monitoring` | label selector, `true`, or `enabled` | Enable metrics and ServiceMonitors for manager/scheduler/seedClient/client when the selector matches the Cluster labels; empty, invalid, or non-matching disables. Requires the Prometheus Operator ServiceMonitor CRD. |
@@ -667,28 +716,6 @@ a daily updater for the static binaries. Do not add
 with `containerd config dump`, the v0.16.0-p2p.2 unit flags, and the host restart
 procedure. Tarfs is intentionally disabled; enabling it requires kernel >= 6.4
 and a matching nydusd. Ordinary-OCI Zran is not claimed.
-
-## MR roadmap
-
-| MR | Scope | Status |
-|---|---|---|
-| MR-1 | Scaffold, PKI, mTLS Secret, chart/CI skeleton | merged |
-| MR-2 | KeyDB, manager, control, data, extras HelmOps | merged |
-| MR-3 | Scheduler ID allocation, manager REST client, registration | merged |
-| MR-4a | `p2p-static` chart and bootstrap payload | merged |
-| MR-4b | CREATE-only admission webhook and userData injection | merged |
-| MR-5 | Status conditions, chart version guard, release workflow, docs | merged |
-| MR-6 | Traefik extras REST Ingress, per-Ingress toggles, manager-only canary | merged |
-| MR-7 | Operator-managed gRPC ingress (nginx and Traefik) | merged |
-| MR-8 | Edge TLS termination, h2c backend, and CA-only Secret for Traefik clientAuth | merged |
-| MR-9 | Render the CA-only Secret in the extras chart instead of Fleet downstreamResources | merged |
-| MR-10 | Patched Dragonfly chart and end-to-end gRPC TLS (HTTPS backend + ServersTransport) | merged |
-| MR-11 | Smart registry proxy direct refs, admission webhook, universal Harbor registries, source OCI first pull, release-derived image tag | merged |
-| MR-12 | Operator-generated manager root password/JWT key and Harbor Dragonfly preheat distribution | merged |
-| MR-13 | Harbor preheat PAT conflict recovery | merged |
-| MR-14 | Harbor preheat NotFound recovery, name-addressed updates, and 32-hex Harbor core secret | merged |
-
-Remaining pilot work is listed under [Follow-ups](#follow-ups).
 
 ## Development
 
