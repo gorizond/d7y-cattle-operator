@@ -92,15 +92,6 @@ containerdMirror:
     name: containerd-mirror
     version: 0.1.1
 
-webhook:
-  # Machine-config webhook server and CREATE-only MutatingWebhookConfiguration.
-  enabled: true
-  # Webhook port served by the operator.
-  port: 9443
-  # Directory where needacert mounts tls.crt/tls.key.
-  certDir: /etc/webhook/certs
-  failurePolicy: Ignore
-
 leaderElect: false
 
 resources:

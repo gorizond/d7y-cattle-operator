@@ -1,6 +1,4 @@
-#!/usr/bin/env bash
-# d7y-cattle-operator:p2p-install
-# Bootstrap a new RKE2 node before the RKE2 services start.
+# Bootstrap a new RKE2/k3s node before the Kubernetes services start.
 set -Eeuo pipefail
 IFS=$'\n\t'
 
@@ -214,44 +212,9 @@ download_nydus_snapshotter_asset() {
   return 0
 }
 
-# The nginx sub_filter replaces the single placeholder below with $arg_cfg.
-# Keep exactly one placeholder so sub_filter_once produces one payload insertion.
-if [ "$#" -ge 1 ] && [ -n "${1:-}" ]; then
-  CFG="$1"
-elif [ -n "${QUERY_STRING:-}" ]; then
-  CFG="${QUERY_STRING##*cfg=}"
-  CFG="${CFG%%&*}"
-else
-  CFG="__CFG__"
-fi
-
-if [ -z "$CFG" ]; then
-  die "missing cfg payload"
-fi
-if ! printf '%s' "$CFG" | tr '_-' '/+' | base64 -d > "$TMP/payload.env" 2>/dev/null; then
-  die "cfg is not valid base64url"
-fi
-if [ ! -s "$TMP/payload.env" ]; then
-  die "cfg decoded to an empty payload"
-fi
-
-while IFS= read -r line || [ -n "$line" ]; do
-  case "$line" in
-    ""|\#*) continue ;;
-  esac
-  key="${line%%=*}"
-  value="${line#*=}"
-  value="${value%$'\r'}"
-  case "$key" in
-    MANAGER_GRPC|STATIC_URL|SMART_PROXY_URL|NYDUS_MIRROR_URL|NYDUS_CLUSTER_ID|SCHEDULER_HOST|SCHEDULER_CLUSTER_ID|NYDUS_VERSION|CA_CRT_B64|CLIENT_CRT_B64|CLIENT_KEY_B64)
-      printf -v "$key" '%s' "$value"
-      ;;
-  esac
-done < "$TMP/payload.env"
-
 for key in MANAGER_GRPC STATIC_URL SCHEDULER_HOST SCHEDULER_CLUSTER_ID CA_CRT_B64 CLIENT_CRT_B64 CLIENT_KEY_B64; do
   if [ -z "${!key:-}" ]; then
-    die "cfg is missing $key"
+    die "bootstrap env is missing $key"
   fi
 done
 
@@ -334,13 +297,9 @@ if [ "$SCHEDULER_CLUSTER_ID" -lt 1 ] 2>/dev/null; then
   die "scheduler_cluster_id must be a positive integer"
 fi
 
-# nydusd bootstrap id/domain_id. Precedence: optional payload/env value (or the
-# chart nydus.clusterId render), then the scheduler cluster ID, then hostname.
-NYDUS_CLUSTER_ID_DEFAULT="__NYDUS_CLUSTER_ID__"
-case "$NYDUS_CLUSTER_ID_DEFAULT" in
-  __NYDUS_*) NYDUS_CLUSTER_ID_DEFAULT="" ;;
-esac
-NYDUS_CLUSTER_ID="${NYDUS_CLUSTER_ID:-$NYDUS_CLUSTER_ID_DEFAULT}"
+# nydusd bootstrap id/domain_id. Precedence: optional env value, then the
+# scheduler cluster ID, then hostname.
+NYDUS_CLUSTER_ID="${NYDUS_CLUSTER_ID:-}"
 if [ -z "$NYDUS_CLUSTER_ID" ]; then
   NYDUS_CLUSTER_ID="$SCHEDULER_CLUSTER_ID"
 fi
@@ -515,8 +474,8 @@ EOF
 # same selection logic.
 
 # nydusd fscache bootstrap. This is the canonical shape shipped as
-# files/nydusd-config.fscache.json; the ids come from the chart value or the
-# bootstrap payload, never from a hardcoded cluster name. The Dragonfly local
+# nydusd-config.fscache.json; the ids come from the environment or the
+# scheduler cluster ID, never from a hardcoded cluster name. The Dragonfly local
 # proxy URL/ping stay at 127.0.0.1:4001/4003 with fallback enabled.
 write_file "${ROOT}${NYDUS_DIR}/nydusd-config.fscache.json" 0644 <<JSON
 {
@@ -636,7 +595,7 @@ fi
 # The selector is the single writer of /etc/nydus/config.toml. Both modes stay
 # installed; at every snapshotter start it probes the running kernel and picks
 # the driver that can actually mount images. Keep this heredoc byte-identical
-# to files/nydus-fs-select.sh (files/test.sh compares the installed copy).
+# to the canonical nydus-fs-select.sh asset (test.sh compares the installed copy).
 write_file "${BIN_DIR}/nydus-fs-select" 0755 <<'SELECTOR'
 #!/usr/bin/env bash
 # Select the nydus snapshotter filesystem driver at service start.

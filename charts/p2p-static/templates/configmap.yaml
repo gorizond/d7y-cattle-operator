@@ -22,15 +22,6 @@ data:
             return 200 "ok\n";
         }
 
-        location = /p2p-install.sh {
-            alias /etc/nginx/conf.d/p2p-install.sh.tmpl;
-            default_type text/x-shellscript;
-            sub_filter_types text/x-shellscript;
-            sub_filter '__CFG__' "$arg_cfg";
-            sub_filter_once on;
-            add_header Cache-Control "no-store" always;
-        }
-
         location /bin/ {
             try_files $uri =404;
             autoindex off;
@@ -45,5 +36,3 @@ data:
             return 404;
         }
     }
-  p2p-install.sh.tmpl: |-
-{{ .Files.Get "files/p2p-install.sh" | replace "__NYDUS_CLUSTER_ID__" (default "" .Values.nydus.clusterId) | indent 4 }}

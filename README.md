@@ -5,15 +5,13 @@ RKE2 clusters.
 
 **Status**: v0.2.0 (2026-11-20). The operator implements the Cluster controller,
 role resolution, KeyDB, manager, seed role, manager registration,
-`dragonfly-extras`, the fail-open `p2p-static` bootstrap, the CREATE-only
-machine-config webhook, manager root credentials, and host nydus. Harbor,
-registry-proxy, and the pod-image admission webhook are out of scope.
+`dragonfly-extras`, the fail-open p2p host bootstrap, manager root
+credentials, and host nydus. Harbor, registry-proxy, and pod-image admission
+webhooks are out of scope.
 
 ## What it does today
 
-Pod image-mutation admission, Harbor, and registry-proxy add-ons are out of scope.
-The CREATE-only machine-config webhook is kept: it injects the `p2p-install.sh`
-bootstrap payload for the kept `p2p-static` chart.
+Pod image-mutation admission, Harbor, and registry-proxy add-ons are out of scope. The operator embeds `pkg/machinebootstrap/assets/p2p-install.sh` and injects it, with the bootstrap env-file, into the Rancher machine-bootstrap Secret.
 
 - Parses and validates the operator configuration from flags/environment variables.
 - Ensures a single mTLS CA and leaf certificate Secret (`dragonfly-p2p-mtls` by
@@ -60,7 +58,7 @@ bootstrap payload for the kept `p2p-static` chart.
 flowchart LR
   subgraph LOCAL["Local cluster (Rancher + Fleet)"]
     OP["d7y-cattle-operator"] --> FLEET["Fleet"]
-    MC["Node template<br/>rke-machine-config.cattle.io"]
+    MC["Machine bootstrap Secret<br/>rke.cattle.io/bootstrap"]
   end
 
   subgraph ROW["Downstream clusters"]
@@ -104,8 +102,8 @@ flowchart LR
 
   FLEET -->|"HelmOps"| D1
   FLEET -->|"HelmOps"| D2
-  OP -.->|"webhook: patches userData"| MC
-  MC -->|"userData = p2p-install.sh"| N3
+  OP -.->|"machine-bootstrap Secret: adds inline p2p block"| MC
+  MC -->|"cloud-init from bootstrap Secret"| N3
   MGR -.->|"register scheduler/seed"| SCH1
   %% invisible rank balance: keeps A and B side by side
   SCH1 ~~~ MGR
@@ -141,15 +139,15 @@ Color legend: gray = workload pods, blue = dfdaemon, green = scheduler, purple =
 
 ### At a glance
 
-- The operator runs on the local Rancher/Fleet cluster. It reconciles every Cluster labelled `d7y-operator-cattle: "true"` and creates the Fleet HelmOps for KeyDB, manager, scheduler/seed, extras, and the containerd mirror. Its CREATE-only machine-config webhook patches the node template `userData` with `p2p-install.sh`.
+- The operator runs on the local Rancher/Fleet cluster. It reconciles every Cluster labelled `d7y-operator-cattle: "true"` and creates the Fleet HelmOps for KeyDB, manager, scheduler/seed, extras, and the containerd mirror. Its machine-bootstrap Secret controller inserts the self-contained p2p install block into the node-driver bootstrap script that Rancher merges into cloud-init, before the Rancher `do_install "$@"` call.
 - Every running downstream node has a dfdaemon pod, with nydus on the host; pods pull through the node-local proxy and Dragonfly distributes blobs P2P. The diagram shows a scheduler pod per seed cluster and the manager pod on a node in downstream cluster B.
-- The orange dashed node in downstream cluster A consumes that patched `userData` before RKE2: it has only the host dfdaemon and nydus and is already joining P2P. The scheduler alias `d7y-scheduler.<cluster-id>.<domain>` is published by external-dns (or a wildcard zone) and used before RKE2 to bootstrap node/RKE2 image pulls.
+- The orange dashed node in downstream cluster A consumes that bootstrap Secret through cloud-init before RKE2: it has only the host dfdaemon and nydus and is already joining P2P. The scheduler alias `d7y-scheduler.<cluster-id>.<domain>` is published by external-dns (or a wildcard zone) and used before RKE2 to bootstrap node/RKE2 image pulls.
 
 ### Multi-cluster topology
 
 - The manager is a role, not a fixed local component: the diagram places the purple manager pod on a node in downstream cluster B, while any Cluster with `d7y-operator-manager` can run it; the operator stays on the local Rancher cluster. Green scheduler pods are per seed Cluster, and blue dfdaemon pods run on every running node. Manager and seed roles may be split across different Clusters, each with its own KeyDB/extras release.
 - N downstream/seed Clusters have N scheduler IDs. Each seed Cluster runs its own scheduler + seed under its ID. The scheduler/seed for a new Cluster's ID runs in a seed Cluster reachable before the new Cluster's RKE2 (it cannot run in that Cluster before its own RKE2 exists); external-dns or a wildcard zone publishes `d7y-scheduler.<cluster-id>.<domain>`. In downstream cluster A, the orange dashed node is the pre-RKE2 bootstrap stage: its host dfdaemon joins P2P before RKE2 and any Kubernetes Pods exist.
-- `p2p-install.sh` from the patched node-template `userData` + the host dfdaemon bootstrap start before RKE2 and pull node/RKE2 images via Dragonfly P2P from the scheduler/seed. This accelerates provisioning before the Kubernetes node starts; if the alias is unreachable, the script is fail-open and pulls directly.
+- `p2p-install.sh` from the machine-bootstrap Secret + the host dfdaemon bootstrap start before RKE2 and pull node/RKE2 images via Dragonfly P2P from the scheduler/seed. This accelerates provisioning before the Kubernetes node starts; if the alias is unreachable, the script is fail-open and pulls directly.
 
 ## Follow-ups
 
@@ -203,7 +201,7 @@ and JWT signing key; see [Manager root credentials](#manager-root-credentials).
 | `manager.grpcDomain` | `MANAGER_GRPC_DOMAIN` | Public manager gRPC hostname, without scheme |
 | `manager.grpcPort` | `MANAGER_GRPC_PORT` | Public manager gRPC port used by schedulers; default `443` |
 | `manager.apiURL` | `MANAGER_API_URL` | Public manager REST API URL (`https://`) |
-| `nginx.staticURL` | `NGINX_STATIC_URL` | Base URL of the static asset server for the bootstrap payload; may be the manager host when the p2p-static manager route is enabled. The same route serves `/bin` and `/nydus` for the script assets. |
+| `nginx.staticURL` | `NGINX_STATIC_URL` | Base URL for the static nydus assets used by the embedded host script; may be the manager host when the p2p-static manager route is enabled. |
 | `nydus.mirrorURL` | `NYDUS_MIRROR_URL` | Optional HTTPS mirror path for nydus blobs in the bootstrap payload |
 | `scheduler.domain` | `P2P_DOMAIN` | Base domain for `d7y-scheduler.<fleet-cluster-id>.<domain>`; required |
 | `scheduler.clusterID` | `P2P_CLUSTER_ID` | Optional fallback when provisioning Cluster `status.clusterName` is empty |
@@ -218,19 +216,13 @@ and JWT signing key; see [Manager root credentials](#manager-root-credentials).
 | `extras.ingress.restEnabled` | `EXTRAS_INGRESS_REST_ENABLED` | Render the REST Ingress when the manager role is active; default `true` |
 | `extras.ingress.tlsSecret` | `EXTRAS_INGRESS_TLS_SECRET` | Ingress TLS Secret; empty disables the TLS block |
 | `extras.ingress.traefikServersTransportEnabled` | `EXTRAS_TRAEFIK_SERVERS_TRANSPORT_ENABLED` | Render the REST Traefik `ServersTransport`; default `true` |
-| `webhook.enabled` | — | Render the machine-config webhook; default `true` |
-| `webhook.port` | `WEBHOOK_PORT` | Webhook port; default `9443` |
-| `webhook.certDir` | `WEBHOOK_CERT_DIR` | needacert TLS directory; default `/etc/webhook/certs` |
-| `webhook.failurePolicy` | — | Machine-config webhook failure policy; default `Ignore` |
 
 Defaults: `mtlsSecretName=dragonfly-p2p-mtls`, `dragonfly.chart.name=dragonfly`,
 `dragonfly.chart.repo=https://gorizond.github.io/dragonflyoss-helm-charts`,
 `dragonfly.chart.version=1.10.1-patch.2`, `extras.chart.name=dragonfly-extras`,
 `extras.chart.version=0.1.10`, `extras.ingress.controller=nginx`,
 `extras.ingress.grpcEnabled=true`, `extras.ingress.restEnabled=true`,
-`manager.grpcPort=443`, `webhook.enabled=true`, `webhook.port=9443`,
-`webhook.failurePolicy=Ignore`,
-`leaderElect=false`. The public scheduler IP(s) are resolved from DNS at
+`manager.grpcPort=443`, `leaderElect=false`. The public scheduler IP(s) are resolved from DNS at
 reconcile time; there is no scheduler IP value. `scheduler.domain` has no
 default and is required. `scheduler.clusterID` is only a fallback for an
 unpopulated `status.clusterName`.
@@ -447,7 +439,7 @@ front; DaemonSets use the same public host from their local dynconfig.
 
 ### Fail-open node bootstrap
 
-The `p2p-static` bootstrap script (`p2p-install.sh`) is fail-open so the first
+The embedded p2p bootstrap is fail-open so the first
 node of a new cluster can join RKE2 even when the scheduler is not reachable
 yet:
 
@@ -718,15 +710,15 @@ control/data without blocking manager/KeyDB.
 
 ## Bootstrap static chart
 
-`charts/p2p-static` serves `/p2p-install.sh` and the static asset volume through
-Nginx. The bootstrap payload is a base64url **env-file** (no JSON, no `jq`, no
-python on the node). The script installs the host-only patched nydus
+`charts/p2p-static` serves the static `/bin` and `/nydus` asset volume through
+Nginx. The embedded host script is inlined into the machine bootstrap Secret;
+its payload is an env-file (no JSON, no `jq`, no python on the node). The script installs the host-only patched nydus
 snapshotter (`v0.16.0-p2p.2`) plus the static `v2.4.5` daemon assets
 (including `nydus-overlayfs`), writes the global nydus containerd drop-in
 `config-v3.toml.d/90-nydus.toml`, starts it before RKE2, and installs a daily
 host updater. There is no in-cluster nydus DaemonSet or HelmOp. See
-`charts/p2p-static/README.md` for values, payload keys, drop-ins, and pilot
-risks.
+`pkg/machinebootstrap/README.md` for the embedded script and
+`charts/p2p-static/README.md` for the static chart values and risks.
 
 ## Known pilot risk: extras target names
 

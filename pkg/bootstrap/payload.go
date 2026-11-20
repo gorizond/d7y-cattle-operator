@@ -9,9 +9,6 @@ import (
 	"strings"
 )
 
-// MaxEncodedSize is the maximum URL-safe payload accepted by the webhook.
-const MaxEncodedSize = 8 * 1024
-
 // Payload carries the values encoded into the bootstrap env-file.
 type Payload struct {
 	ManagerGRPC        string
@@ -23,19 +20,6 @@ type Payload struct {
 	CACert             []byte
 	ClientCert         []byte
 	ClientKey          []byte
-}
-
-// Encode validates the payload and returns base64url(env-file).
-func Encode(p Payload) (string, error) {
-	env, err := Env(p)
-	if err != nil {
-		return "", err
-	}
-	encoded := base64.URLEncoding.EncodeToString([]byte(env))
-	if len(encoded) > MaxEncodedSize {
-		return "", fmt.Errorf("bootstrap: encoded payload is %d bytes, limit is %d", len(encoded), MaxEncodedSize)
-	}
-	return encoded, nil
 }
 
 // Env returns the single-line env-file representation.
