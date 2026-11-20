@@ -231,10 +231,15 @@ func registryProxyValues(c Cluster, opts registryProxyOptions) map[string]any {
 			"credentialsFile":   "/etc/registry-proxy/secrets/upstream/credentials.yaml",
 		}
 	}
+	annotations := map[string]any{}
 	if c.ProxyRobotSecretRevision != "" {
-		values["podAnnotations"] = map[string]any{
-			"p2p.dragonfly.io/robot-secret-revision": c.ProxyRobotSecretRevision,
-		}
+		annotations["p2p.dragonfly.io/robot-secret-revision"] = c.ProxyRobotSecretRevision
+	}
+	if c.ProxyUpstreamSecretRevision != "" {
+		annotations["p2p.dragonfly.io/upstream-secret-revision"] = c.ProxyUpstreamSecretRevision
+	}
+	if len(annotations) > 0 {
+		values["podAnnotations"] = annotations
 	}
 	// Run the release's image instead of the chart's default tag: the
 	// operator image contains /registry-proxy, so the proxy stays in lockstep

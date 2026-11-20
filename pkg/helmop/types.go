@@ -363,6 +363,9 @@ type Cluster struct {
 	// ProxyUpstreamCredentialsSecret is the Secret name with credentials.yaml
 	// for private upstream registries.
 	ProxyUpstreamCredentialsSecret string
+	// ProxyUpstreamSecretRevision rolls proxy pods when upstream credentials
+	// rotate.
+	ProxyUpstreamSecretRevision string
 	// ProxyRobotSecretRevision rolls proxy pods when robot credentials rotate.
 	ProxyRobotSecretRevision string
 	// AdmissionEnabled is the independent p2p.dragonfly.io/admission role.
