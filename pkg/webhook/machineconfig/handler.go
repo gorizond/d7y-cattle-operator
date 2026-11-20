@@ -6,6 +6,7 @@
 package machineconfig
 
 import (
+	"encoding/json"
 	"fmt"
 	"log/slog"
 	"regexp"
@@ -176,7 +177,7 @@ func (h *Handler) Admit(resp *wranglerwebhook.Response, req *wranglerwebhook.Req
 		return nil
 	}
 
-	nodeConfig, err := nodeConfigValue(config.Object, nodeConfigKey)
+	nodeConfig, present, err := nodeConfigValue(config.Object, nodeConfigKey)
 	if err != nil {
 		h.event(req, "NodeConfigMalformed", err)
 		return nil
@@ -196,34 +197,44 @@ func (h *Handler) Admit(resp *wranglerwebhook.Response, req *wranglerwebhook.Req
 	if !changed {
 		return nil
 	}
-	if err := setNodeConfigValue(config.Object, nodeConfigKey, patched); err != nil {
-		h.event(req, "NodeConfigPatchFailed", err)
+	path := "/" + nodeConfigKey
+	if _, ok := config.Object["spec"].(map[string]any); ok {
+		path = "/spec/" + nodeConfigKey
+	}
+	op := "replace"
+	if !present {
+		op = "add"
+	}
+	patch, err := json.Marshal([]jsonPatchOperation{{
+		Op:    op,
+		Path:  path,
+		Value: patched,
+	}})
+	if err != nil {
+		h.event(req, "PatchCreateFailed", err)
 		return nil
 	}
-	if err := resp.CreatePatch(req, config); err != nil {
-		h.event(req, "PatchCreateFailed", err)
-	}
+	patchType := admissionv1.PatchTypeJSONPatch
+	resp.Patch = patch
+	resp.PatchType = &patchType
 	return nil
+}
+
+type jsonPatchOperation struct {
+	Op    string `json:"op"`
+	Path  string `json:"path"`
+	Value any    `json:"value"`
 }
 
 // nodeConfigValue reads the configured node field. RKE machine configs
 // (CloudblastConfig and the other rke-machine-config resources) have no spec
 // map and store the field at the top level; objects that do have a spec map
 // keep the legacy spec path.
-func nodeConfigValue(object map[string]any, key string) (string, error) {
+func nodeConfigValue(object map[string]any, key string) (string, bool, error) {
 	if _, ok := object["spec"].(map[string]any); ok {
-		value, _, err := unstructured.NestedString(object, "spec", key)
-		return value, err
+		return unstructured.NestedString(object, "spec", key)
 	}
-	value, _, err := unstructured.NestedString(object, key)
-	return value, err
-}
-
-func setNodeConfigValue(object map[string]any, key, value string) error {
-	if _, ok := object["spec"].(map[string]any); ok {
-		return unstructured.SetNestedField(object, value, "spec", key)
-	}
-	return unstructured.SetNestedField(object, value, key)
+	return unstructured.NestedString(object, key)
 }
 
 func schedulerHost(domain, clusterID string) string {
