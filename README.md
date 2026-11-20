@@ -104,8 +104,8 @@ flowchart LR
 
   FLEET -->|"HelmOps"| D1
   FLEET -->|"HelmOps"| D2
-  OP -.->|"webhook: patches userData"| MC
-  MC -->|"userData = p2p-install.sh"| N3
+  OP -.->|"machine-bootstrap Secret: adds p2p-install.sh"| MC
+  MC -->|"cloud-init from bootstrap Secret"| N3
   MGR -.->|"register scheduler/seed"| SCH1
   %% invisible rank balance: keeps A and B side by side
   SCH1 ~~~ MGR
@@ -141,15 +141,15 @@ Color legend: gray = workload pods, blue = dfdaemon, green = scheduler, purple =
 
 ### At a glance
 
-- The operator runs on the local Rancher/Fleet cluster. It reconciles every Cluster labelled `d7y-operator-cattle: "true"` and creates the Fleet HelmOps for KeyDB, manager, scheduler/seed, extras, and the containerd mirror. Its CREATE-only machine-config webhook patches the node template `userData` with `p2p-install.sh`.
+- The operator runs on the local Rancher/Fleet cluster. It reconciles every Cluster labelled `d7y-operator-cattle: "true"` and creates the Fleet HelmOps for KeyDB, manager, scheduler/seed, extras, and the containerd mirror. Its machine-bootstrap Secret controller adds `p2p-install.sh` to the node-driver bootstrap script that Rancher merges into cloud-init; the CREATE-only machine-config webhook only handles an explicitly selected node-config key (for example CloudBlast `postBootScript`) and leaves `userData` untouched.
 - Every running downstream node has a dfdaemon pod, with nydus on the host; pods pull through the node-local proxy and Dragonfly distributes blobs P2P. The diagram shows a scheduler pod per seed cluster and the manager pod on a node in downstream cluster B.
-- The orange dashed node in downstream cluster A consumes that patched `userData` before RKE2: it has only the host dfdaemon and nydus and is already joining P2P. The scheduler alias `d7y-scheduler.<cluster-id>.<domain>` is published by external-dns (or a wildcard zone) and used before RKE2 to bootstrap node/RKE2 image pulls.
+- The orange dashed node in downstream cluster A consumes that bootstrap Secret through cloud-init before RKE2: it has only the host dfdaemon and nydus and is already joining P2P. The scheduler alias `d7y-scheduler.<cluster-id>.<domain>` is published by external-dns (or a wildcard zone) and used before RKE2 to bootstrap node/RKE2 image pulls.
 
 ### Multi-cluster topology
 
 - The manager is a role, not a fixed local component: the diagram places the purple manager pod on a node in downstream cluster B, while any Cluster with `d7y-operator-manager` can run it; the operator stays on the local Rancher cluster. Green scheduler pods are per seed Cluster, and blue dfdaemon pods run on every running node. Manager and seed roles may be split across different Clusters, each with its own KeyDB/extras release.
 - N downstream/seed Clusters have N scheduler IDs. Each seed Cluster runs its own scheduler + seed under its ID. The scheduler/seed for a new Cluster's ID runs in a seed Cluster reachable before the new Cluster's RKE2 (it cannot run in that Cluster before its own RKE2 exists); external-dns or a wildcard zone publishes `d7y-scheduler.<cluster-id>.<domain>`. In downstream cluster A, the orange dashed node is the pre-RKE2 bootstrap stage: its host dfdaemon joins P2P before RKE2 and any Kubernetes Pods exist.
-- `p2p-install.sh` from the patched node-template `userData` + the host dfdaemon bootstrap start before RKE2 and pull node/RKE2 images via Dragonfly P2P from the scheduler/seed. This accelerates provisioning before the Kubernetes node starts; if the alias is unreachable, the script is fail-open and pulls directly.
+- `p2p-install.sh` from the machine-bootstrap Secret + the host dfdaemon bootstrap start before RKE2 and pull node/RKE2 images via Dragonfly P2P from the scheduler/seed. This accelerates provisioning before the Kubernetes node starts; if the alias is unreachable, the script is fail-open and pulls directly.
 
 ## Follow-ups
 

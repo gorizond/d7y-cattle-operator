@@ -1,8 +1,10 @@
 // Package machineconfig implements the CREATE-only machine-config webhook.
-// It patches one node-config field, userData by default, chosen per Cluster
-// with the p2p.dragonfly.io/node-config-key annotation. RKE machine configs
-// (for example CloudblastConfig) keep their fields at the top level; objects
-// with a spec map keep the legacy spec path.
+// It patches an explicit node-config field chosen per Cluster with the
+// p2p.dragonfly.io/node-config-key annotation. The default userData field is
+// intentionally not mutated: node-driver userData is handled by the
+// machine-bootstrap Secret controller. RKE machine configs (for example
+// CloudblastConfig) keep their fields at the top level; objects with a spec
+// map keep the legacy spec path.
 package machineconfig
 
 import (
@@ -40,10 +42,6 @@ const (
 	AnnotationNodeConfigKey = "p2p.dragonfly.io/node-config-key"
 
 	defaultNodeConfigKey = "userData"
-
-	// managerGRPCPort is the public Traefik websecure port. The manager
-	// backend still listens on 65003 behind the IngressRouteTCP.
-	managerGRPCPort = 443
 )
 
 var nodeConfigKeyPattern = regexp.MustCompile(`^[A-Za-z][A-Za-z0-9]*$`)
@@ -72,6 +70,7 @@ type Handler struct {
 	Namespace         string
 	MTLSSecretName    string
 	ManagerGRPCDomain string
+	ManagerGRPCPort   int
 	StaticURL         string
 	SmartProxyURL     string
 	NydusMirrorURL    string
@@ -134,24 +133,15 @@ func (h *Handler) Admit(resp *wranglerwebhook.Response, req *wranglerwebhook.Req
 			nodeConfigKey = key
 		}
 	}
+	// Node-driver userData is handled through the machine-bootstrap Secret;
+	// mutating it here makes Rancher's os.ReadFile(userData) fail on create.
+	if nodeConfigKey == defaultNodeConfigKey {
+		return nil
+	}
 
 	schedulerID := strings.TrimSpace(config.GetAnnotations()[AnnotationSchedulerCluster])
 	if schedulerID == "" && cluster != nil {
 		schedulerID = strings.TrimSpace(cluster.Annotations[AnnotationSchedulerCluster])
-	}
-	if schedulerID == "" {
-		h.event(req, "SchedulerClusterIDMissing", fmt.Errorf("scheduler cluster ID annotation is empty"))
-		return nil
-	}
-
-	clusterID := strings.TrimSpace(h.ClusterIDFallback)
-	if cluster != nil && strings.TrimSpace(cluster.Status.ClusterName) != "" {
-		clusterID = strings.TrimSpace(cluster.Status.ClusterName)
-	}
-	schedulerHostName := schedulerHost(h.SchedulerDomain, clusterID)
-	if schedulerHostName == "" {
-		h.event(req, "SchedulerHostUnavailable", fmt.Errorf("scheduler host is empty: P2P_DOMAIN and cluster ID are required"))
-		return nil
 	}
 
 	if h.Secrets == nil {
@@ -163,16 +153,14 @@ func (h *Handler) Admit(resp *wranglerwebhook.Response, req *wranglerwebhook.Req
 		h.event(req, "MTLSSecretUnavailable", err)
 		return nil
 	}
-	payload, err := bootstrap.Encode(bootstrap.Payload{
-		ManagerGRPC:        fmt.Sprintf("https://%s:%d", h.ManagerGRPCDomain, managerGRPCPort),
-		StaticURL:          h.StaticURL,
-		SmartProxyURL:      h.SmartProxyURL,
-		NydusMirrorURL:     h.NydusMirrorURL,
-		SchedulerHost:      schedulerHostName,
-		SchedulerClusterID: schedulerID,
-		CACert:             secret.Data["ca.crt"],
-		ClientCert:         secret.Data[corev1.TLSCertKey],
-		ClientKey:          secret.Data[corev1.TLSPrivateKeyKey],
+	line, err := bootstrap.BuildInstallLine(cluster, secret, schedulerID, bootstrap.InstallConfig{
+		ManagerGRPCDomain: h.ManagerGRPCDomain,
+		ManagerGRPCPort:   h.ManagerGRPCPort,
+		StaticURL:         h.StaticURL,
+		SmartProxyURL:     h.SmartProxyURL,
+		NydusMirrorURL:    h.NydusMirrorURL,
+		SchedulerDomain:   h.SchedulerDomain,
+		ClusterIDFallback: h.ClusterIDFallback,
 	})
 	if err != nil {
 		h.event(req, "PayloadBuildFailed", err)
@@ -184,14 +172,9 @@ func (h *Handler) Admit(resp *wranglerwebhook.Response, req *wranglerwebhook.Req
 		h.event(req, "NodeConfigMalformed", err)
 		return nil
 	}
-	line := bootstrap.InjectionLine(h.StaticURL, payload)
 	var patched string
 	var changed bool
-	if nodeConfigKey == defaultNodeConfigKey {
-		patched, changed, err = bootstrap.InjectUserData(nodeConfig, line)
-	} else {
-		patched, changed, err = bootstrap.InjectScript(nodeConfig, line)
-	}
+	patched, changed, err = bootstrap.InjectScript(nodeConfig, line)
 	if err != nil {
 		h.event(req, "NodeConfigPatchFailed", err)
 		return nil
@@ -237,15 +220,6 @@ func nodeConfigValue(object map[string]any, key string) (string, bool, error) {
 		return unstructured.NestedString(object, "spec", key)
 	}
 	return unstructured.NestedString(object, key)
-}
-
-func schedulerHost(domain, clusterID string) string {
-	domain = strings.TrimSpace(strings.Trim(domain, "."))
-	clusterID = strings.TrimSpace(clusterID)
-	if domain == "" || clusterID == "" {
-		return ""
-	}
-	return fmt.Sprintf("d7y-scheduler.%s.%s", clusterID, domain)
 }
 
 func (h *Handler) targetCluster(config *unstructured.Unstructured) (*provv1.Cluster, error) {

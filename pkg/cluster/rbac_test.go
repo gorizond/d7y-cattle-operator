@@ -61,3 +61,21 @@ func TestOperatorRBACWritesContainerdHosts(t *testing.T) {
 		}
 	}
 }
+
+func TestOperatorRBACMachineBootstrapAccess(t *testing.T) {
+	data, err := os.ReadFile("../../charts/d7y-cattle-operator/templates/rbac.yaml")
+	if err != nil {
+		t.Fatalf("read RBAC template: %v", err)
+	}
+	text := string(data)
+	for _, want := range []string{
+		`resources: ["secrets"]`,
+		`verbs: ["get", "list", "watch", "create", "update", "patch"]`,
+		`resources: ["machines"]`,
+		`verbs: ["get", "list", "watch"]`,
+	} {
+		if !strings.Contains(text, want) {
+			t.Errorf("operator RBAC missing %q", want)
+		}
+	}
+}

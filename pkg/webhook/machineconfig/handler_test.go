@@ -20,9 +20,10 @@ import (
 
 const testUserData = "#cloud-config\nruncmd:\n  - echo hi\n"
 
-func TestCreateInjectsPayload(t *testing.T) {
-	handler, _, _ := newTestHandler()
-	req := testRequest(admissionv1.Create, "c1-pool1", "Amazonec2Config", testUserData, nil, nil)
+func TestCreateExplicitKeyInjectsPayload(t *testing.T) {
+	handler, clusters, _ := newTestHandler()
+	clusters.clusters["fleet-default/c1"].Annotations[AnnotationNodeConfigKey] = "postBootScript"
+	req := testRequestWithNodeConfig(admissionv1.Create, "c1-pool1", "Amazonec2Config", "postBootScript", "#!/bin/bash\necho hi\n", nil, nil)
 	resp := &wranglerwebhook.Response{AdmissionResponse: admissionv1.AdmissionResponse{Allowed: true}}
 
 	if err := handler.Admit(resp, req); err != nil {
@@ -31,15 +32,15 @@ func TestCreateInjectsPayload(t *testing.T) {
 	if !resp.Allowed {
 		t.Fatal("response is not allowed")
 	}
-	userData := patchedUserData(t, resp)
-	if !strings.Contains(userData, "d7y-cattle-operator:p2p-install") {
-		t.Errorf("patched userData = %q", userData)
+	script := patchedNodeConfig(t, resp, "postBootScript")
+	if !strings.Contains(script, "d7y-cattle-operator:p2p-install") {
+		t.Errorf("patched script = %q", script)
 	}
-	if !strings.Contains(userData, "echo hi") {
-		t.Errorf("existing runcmd was lost: %q", userData)
+	if !strings.Contains(script, "echo hi") {
+		t.Errorf("existing script was lost: %q", script)
 	}
 
-	cfg := extractCFG(t, userData)
+	cfg := extractCFG(t, script)
 	raw, err := base64.URLEncoding.DecodeString(cfg)
 	if err != nil {
 		t.Fatalf("decode cfg: %v", err)
@@ -55,15 +56,16 @@ func TestCreateInjectsPayload(t *testing.T) {
 }
 
 func TestCreateInjectsSmartProxyURL(t *testing.T) {
-	handler, _, _ := newTestHandler()
+	handler, clusters, _ := newTestHandler()
 	handler.SmartProxyURL = "https://proxy.example.com"
-	req := testRequest(admissionv1.Create, "c1-pool1", "Amazonec2Config", testUserData, nil, nil)
+	clusters.clusters["fleet-default/c1"].Annotations[AnnotationNodeConfigKey] = "postBootScript"
+	req := testRequestWithNodeConfig(admissionv1.Create, "c1-pool1", "Amazonec2Config", "postBootScript", "#!/bin/bash\necho hi\n", nil, nil)
 	resp := &wranglerwebhook.Response{AdmissionResponse: admissionv1.AdmissionResponse{Allowed: true}}
 
 	if err := handler.Admit(resp, req); err != nil {
 		t.Fatalf("Admit() error = %v", err)
 	}
-	cfg := extractCFG(t, patchedUserData(t, resp))
+	cfg := extractCFG(t, patchedNodeConfig(t, resp, "postBootScript"))
 	raw, err := base64.URLEncoding.DecodeString(cfg)
 	if err != nil {
 		t.Fatalf("decode cfg: %v", err)
@@ -74,15 +76,16 @@ func TestCreateInjectsSmartProxyURL(t *testing.T) {
 }
 
 func TestCreateInjectsNydusMirrorURL(t *testing.T) {
-	handler, _, _ := newTestHandler()
+	handler, clusters, _ := newTestHandler()
 	handler.NydusMirrorURL = "https://proxy.example.com/docker.io"
-	req := testRequest(admissionv1.Create, "c1-pool1", "Amazonec2Config", testUserData, nil, nil)
+	clusters.clusters["fleet-default/c1"].Annotations[AnnotationNodeConfigKey] = "postBootScript"
+	req := testRequestWithNodeConfig(admissionv1.Create, "c1-pool1", "Amazonec2Config", "postBootScript", "#!/bin/bash\necho hi\n", nil, nil)
 	resp := &wranglerwebhook.Response{AdmissionResponse: admissionv1.AdmissionResponse{Allowed: true}}
 
 	if err := handler.Admit(resp, req); err != nil {
 		t.Fatalf("Admit() error = %v", err)
 	}
-	cfg := extractCFG(t, patchedUserData(t, resp))
+	cfg := extractCFG(t, patchedNodeConfig(t, resp, "postBootScript"))
 	raw, err := base64.URLEncoding.DecodeString(cfg)
 	if err != nil {
 		t.Fatalf("decode cfg: %v", err)
@@ -122,7 +125,8 @@ func TestNotApplicableNoPatch(t *testing.T) {
 func TestConfigAnnotationApplicability(t *testing.T) {
 	handler, clusters, _ := newTestHandler()
 	clusters.clusters["fleet-default/c1"].Labels = map[string]string{}
-	req := testRequest(admissionv1.Create, "c1-pool1", "Amazonec2Config", testUserData,
+	clusters.clusters["fleet-default/c1"].Annotations[AnnotationNodeConfigKey] = "postBootScript"
+	req := testRequestWithNodeConfig(admissionv1.Create, "c1-pool1", "Amazonec2Config", "postBootScript", "#!/bin/bash\necho hi\n",
 		map[string]string{LabelEnabled: "true"},
 		map[string]string{AnnotationSeed: "true", AnnotationSchedulerCluster: "7"})
 	resp := &wranglerwebhook.Response{AdmissionResponse: admissionv1.AdmissionResponse{Allowed: true}}
@@ -130,8 +134,7 @@ func TestConfigAnnotationApplicability(t *testing.T) {
 	if err := handler.Admit(resp, req); err != nil {
 		t.Fatalf("Admit() error = %v", err)
 	}
-	userData := patchedUserData(t, resp)
-	cfg := extractCFG(t, userData)
+	cfg := extractCFG(t, patchedNodeConfig(t, resp, "postBootScript"))
 	raw, err := base64.URLEncoding.DecodeString(cfg)
 	if err != nil {
 		t.Fatalf("decode cfg: %v", err)
@@ -143,9 +146,10 @@ func TestConfigAnnotationApplicability(t *testing.T) {
 }
 
 func TestRepeatInjectionNoPatch(t *testing.T) {
-	handler, _, _ := newTestHandler()
-	already := testUserData + "  - curl -sfL \"http://static.example.com/p2p-install.sh?cfg=x\" | bash  # d7y-cattle-operator:p2p-install\n"
-	req := testRequest(admissionv1.Create, "c1-pool1", "Amazonec2Config", already, nil, nil)
+	handler, clusters, _ := newTestHandler()
+	clusters.clusters["fleet-default/c1"].Annotations[AnnotationNodeConfigKey] = "postBootScript"
+	already := "#!/bin/bash\ncurl -sfL \"http://static.example.com/p2p-install.sh?cfg=x\" | bash  # d7y-cattle-operator:p2p-install\n"
+	req := testRequestWithNodeConfig(admissionv1.Create, "c1-pool1", "Amazonec2Config", "postBootScript", already, nil, nil)
 	resp := &wranglerwebhook.Response{AdmissionResponse: admissionv1.AdmissionResponse{Allowed: true}}
 
 	if err := handler.Admit(resp, req); err != nil {
@@ -156,7 +160,7 @@ func TestRepeatInjectionNoPatch(t *testing.T) {
 	}
 }
 
-func TestBase64UserDataPatched(t *testing.T) {
+func TestUserDataNoLongerPatched(t *testing.T) {
 	handler, _, _ := newTestHandler()
 	encoded := base64.StdEncoding.EncodeToString([]byte(testUserData))
 	req := testRequest(admissionv1.Create, "c1-pool1", "Amazonec2Config", encoded, nil, nil)
@@ -165,20 +169,16 @@ func TestBase64UserDataPatched(t *testing.T) {
 	if err := handler.Admit(resp, req); err != nil {
 		t.Fatalf("Admit() error = %v", err)
 	}
-	patched := patchedUserData(t, resp)
-	decoded, err := base64.StdEncoding.DecodeString(strings.TrimSpace(patched))
-	if err != nil {
-		t.Fatalf("patched userData is not base64: %v", err)
-	}
-	if !strings.Contains(string(decoded), "d7y-cattle-operator:p2p-install") {
-		t.Errorf("decoded patch = %q", decoded)
+	if len(resp.Patch) != 0 {
+		t.Errorf("userData returned patch %s, want none", resp.Patch)
 	}
 }
 
 func TestOversizePayloadNoPatch(t *testing.T) {
-	handler, _, events := newTestHandler()
+	handler, clusters, events := newTestHandler()
 	handler.Secrets.(*fakeSecrets).secret.Data["ca.crt"] = []byte(strings.Repeat("ca", 9000))
-	req := testRequest(admissionv1.Create, "c1-pool1", "Amazonec2Config", testUserData, nil, nil)
+	clusters.clusters["fleet-default/c1"].Annotations[AnnotationNodeConfigKey] = "postBootScript"
+	req := testRequestWithNodeConfig(admissionv1.Create, "c1-pool1", "Amazonec2Config", "postBootScript", "#!/bin/bash\necho hi\n", nil, nil)
 	resp := &wranglerwebhook.Response{AdmissionResponse: admissionv1.AdmissionResponse{Allowed: true}}
 
 	if err := handler.Admit(resp, req); err != nil {
@@ -266,7 +266,7 @@ func TestInvalidNodeConfigKeyNoPatch(t *testing.T) {
 	}
 }
 
-func TestAbsentClusterDefaultsToUserData(t *testing.T) {
+func TestAbsentClusterDoesNotPatchUserData(t *testing.T) {
 	handler, _, _ := newTestHandler()
 	req := testRequest(admissionv1.Create, "other-pool1", "Amazonec2Config", testUserData, nil,
 		map[string]string{AnnotationSeed: "true", AnnotationSchedulerCluster: "2"})
@@ -275,9 +275,8 @@ func TestAbsentClusterDefaultsToUserData(t *testing.T) {
 	if err := handler.Admit(resp, req); err != nil {
 		t.Fatalf("Admit() error = %v", err)
 	}
-	userData := patchedUserData(t, resp)
-	if !strings.Contains(userData, "d7y-cattle-operator:p2p-install") {
-		t.Errorf("default userData was not patched: %q", userData)
+	if len(resp.Patch) != 0 {
+		t.Errorf("default userData returned patch %s, want none", resp.Patch)
 	}
 }
 
@@ -312,6 +311,7 @@ func newTestHandler() (*Handler, *fakeClusters, *fakeEvents) {
 		Namespace:         "dragonfly-system",
 		MTLSSecretName:    "dragonfly-p2p-mtls",
 		ManagerGRPCDomain: "grpc.example.com",
+		ManagerGRPCPort:   443,
 		StaticURL:         "http://static.example.com",
 		SchedulerDomain:   "example.com",
 		ClusterIDFallback: "c-m-fallback",
@@ -385,11 +385,6 @@ func testRequestWithNodeConfig(operation admissionv1.Operation, name, kind, node
 		},
 		ObjTemplate: &unstructured.Unstructured{},
 	}
-}
-
-func patchedUserData(t *testing.T, resp *wranglerwebhook.Response) string {
-	t.Helper()
-	return patchedNodeConfig(t, resp, "userData")
 }
 
 type patchOperation struct {
