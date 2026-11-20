@@ -77,7 +77,6 @@ func (c *Controller) ensureContainerdHosts(cluster *provv1.Cluster) (*provv1.Clu
 
 func (c *Controller) ensureContainerdHostsConfigMap(cluster *provv1.Cluster, name string, port int) error {
 	controller := true
-	blockOwnerDeletion := true
 	desired := &corev1.ConfigMap{
 		ObjectMeta: metav1.ObjectMeta{
 			Name:      name,
@@ -87,12 +86,11 @@ func (c *Controller) ensureContainerdHostsConfigMap(cluster *provv1.Cluster, nam
 				containerdHostsAuthorized: cluster.Name,
 			},
 			OwnerReferences: []metav1.OwnerReference{{
-				APIVersion:         "provisioning.cattle.io/v1",
-				Kind:               "Cluster",
-				Name:               cluster.Name,
-				UID:                cluster.UID,
-				Controller:         &controller,
-				BlockOwnerDeletion: &blockOwnerDeletion,
+				APIVersion: "provisioning.cattle.io/v1",
+				Kind:       "Cluster",
+				Name:       cluster.Name,
+				UID:        cluster.UID,
+				Controller: &controller,
 			}},
 		},
 		Data: containerdHostsData(port),
