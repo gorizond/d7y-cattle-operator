@@ -76,6 +76,20 @@ entries:
     version: 0.1.0
   d7y-cattle-operator:
   - apiVersion: v2
+    appVersion: v0.3.2
+    created: "2026-11-20T20:06:52.035942411Z"
+    description: Dragonfly P2P operator for Rancher-managed RKE2 clusters
+    digest: 99ffd5aca1cb077ff043a677a7daf632f8a206cf31da211e07185a42e890009f
+    home: https://github.com/gorizond/d7y-cattle-operator
+    kubeVersion: '>=1.28.0-0'
+    name: d7y-cattle-operator
+    sources:
+    - https://github.com/gorizond/d7y-cattle-operator
+    type: application
+    urls:
+    - https://github.com/gorizond/d7y-cattle-operator/releases/download/d7y-cattle-operator-0.3.2/d7y-cattle-operator-0.3.2.tgz
+    version: 0.3.2
+  - apiVersion: v2
     appVersion: v0.3.1
     created: "2026-11-20T16:16:15.877998517Z"
     description: Dragonfly P2P operator for Rancher-managed RKE2 clusters
@@ -1171,6 +1185,20 @@ entries:
   p2p-static:
   - apiVersion: v2
     appVersion: 0.1.0
+    created: "2026-11-20T20:06:52.308610625Z"
+    description: Nginx static server for the Dragonfly P2P bootstrap script and binaries
+    digest: 25eccdcc400aaf06a5e187366f97b457897bf13bdba2dc4e89088d9be25db47a
+    home: https://github.com/gorizond/d7y-cattle-operator
+    kubeVersion: '>=1.28.0-0'
+    name: p2p-static
+    sources:
+    - https://github.com/gorizond/d7y-cattle-operator
+    type: application
+    urls:
+    - https://github.com/gorizond/d7y-cattle-operator/releases/download/p2p-static-0.1.5/p2p-static-0.1.5.tgz
+    version: 0.1.5
+  - apiVersion: v2
+    appVersion: 0.1.0
     created: "2026-11-20T15:42:30.617246064Z"
     description: Nginx static server for the Dragonfly P2P bootstrap script and binaries
     digest: ac961c1d76fab0ffd8c8f08b9a333e03fc12a5151682b49bc198c71f0b453e28
@@ -1534,4 +1562,4 @@ entries:
     urls:
     - https://github.com/gorizond/d7y-cattle-operator/releases/download/registry-proxy-0.1.0/registry-proxy-0.1.0.tgz
     version: 0.1.0
-generated: "2026-11-20T16:16:16.207042046Z"
+generated: "2026-11-20T20:06:52.308894113Z"
