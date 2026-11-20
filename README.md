@@ -203,7 +203,7 @@ and JWT signing key; see [Manager root credentials](#manager-root-credentials).
 | `manager.grpcDomain` | `MANAGER_GRPC_DOMAIN` | Public manager gRPC hostname, without scheme |
 | `manager.grpcPort` | `MANAGER_GRPC_PORT` | Public manager gRPC port used by schedulers; default `443` |
 | `manager.apiURL` | `MANAGER_API_URL` | Public manager REST API URL (`https://`) |
-| `nginx.staticURL` | `NGINX_STATIC_URL` | Base URL of the static asset server for the bootstrap payload |
+| `nginx.staticURL` | `NGINX_STATIC_URL` | Base URL of the static asset server for the bootstrap payload; may be the manager host when the p2p-static manager route is enabled. The same route serves `/bin` and `/nydus` for the script assets. |
 | `nydus.mirrorURL` | `NYDUS_MIRROR_URL` | Optional HTTPS mirror path for nydus blobs in the bootstrap payload |
 | `scheduler.domain` | `P2P_DOMAIN` | Base domain for `d7y-scheduler.<fleet-cluster-id>.<domain>`; required |
 | `scheduler.clusterID` | `P2P_CLUSTER_ID` | Optional fallback when provisioning Cluster `status.clusterName` is empty |

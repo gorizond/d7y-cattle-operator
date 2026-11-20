@@ -227,6 +227,28 @@ func TestCustomNodeConfigKeyPostBootScript(t *testing.T) {
 	}
 }
 
+func TestRootLevelCloudblastConfigPatched(t *testing.T) {
+	handler, clusters, _ := newTestHandler()
+	clusters.clusters["fleet-default/c1"].Annotations[AnnotationNodeConfigKey] = "postBootScript"
+	raw := "#!/bin/bash\necho hello\n"
+	req := testRootRequest(admissionv1.Create, "c1-pool1", "CloudblastConfig", "postBootScript", raw, map[string]string{
+		AnnotationCluster:          "c1",
+		AnnotationSchedulerCluster: "7",
+	})
+	resp := &wranglerwebhook.Response{AdmissionResponse: admissionv1.AdmissionResponse{Allowed: true}}
+
+	if err := handler.Admit(resp, req); err != nil {
+		t.Fatalf("Admit() error = %v", err)
+	}
+	patched := patchedRootNodeConfig(t, resp, "postBootScript")
+	if !strings.HasPrefix(patched, raw) {
+		t.Errorf("existing postBootScript was modified: %q", patched)
+	}
+	if !strings.Contains(patched, "d7y-cattle-operator:p2p-install") {
+		t.Errorf("patched postBootScript = %q", patched)
+	}
+}
+
 func TestInvalidNodeConfigKeyNoPatch(t *testing.T) {
 	handler, clusters, events := newTestHandler()
 	clusters.clusters["fleet-default/c1"].Annotations[AnnotationNodeConfigKey] = "bad-key"
@@ -296,6 +318,36 @@ func newTestHandler() (*Handler, *fakeClusters, *fakeEvents) {
 	}, clusters, events
 }
 
+func testRootRequest(operation admissionv1.Operation, name, kind, nodeConfigKey, nodeConfig string, annotations map[string]string) *wranglerwebhook.Request {
+	annotationMap := map[string]any{}
+	for key, value := range annotations {
+		annotationMap[key] = value
+	}
+	object := map[string]any{
+		"apiVersion": MachineConfigGroup + "/" + MachineConfigVersion,
+		"kind":       kind,
+		"metadata": map[string]any{
+			"name":        name,
+			"namespace":   "fleet-default",
+			"annotations": annotationMap,
+		},
+		nodeConfigKey: nodeConfig,
+	}
+	raw, _ := json.Marshal(object)
+	return &wranglerwebhook.Request{
+		AdmissionRequest: admissionv1.AdmissionRequest{
+			UID:       "uid",
+			Operation: operation,
+			Kind:      metav1.GroupVersionKind{Group: MachineConfigGroup, Version: MachineConfigVersion, Kind: kind},
+			Resource:  metav1.GroupVersionResource{Group: MachineConfigGroup, Version: MachineConfigVersion, Resource: "cloudblastconfigs"},
+			Namespace: "fleet-default",
+			Name:      name,
+			Object:    runtime.RawExtension{Raw: raw},
+		},
+		ObjTemplate: &unstructured.Unstructured{},
+	}
+}
+
 func testRequest(operation admissionv1.Operation, name, kind, userData string, extraLabels, extraAnnotations map[string]string) *wranglerwebhook.Request {
 	return testRequestWithNodeConfig(operation, name, kind, "userData", userData, extraLabels, extraAnnotations)
 }
@@ -338,6 +390,25 @@ func testRequestWithNodeConfig(operation admissionv1.Operation, name, kind, node
 func patchedUserData(t *testing.T, resp *wranglerwebhook.Response) string {
 	t.Helper()
 	return patchedNodeConfig(t, resp, "userData")
+}
+
+func patchedRootNodeConfig(t *testing.T, resp *wranglerwebhook.Response, key string) string {
+	t.Helper()
+	if len(resp.Patch) == 0 {
+		t.Fatal("response has no patch")
+	}
+	var patch map[string]any
+	if err := json.Unmarshal(resp.Patch, &patch); err != nil {
+		t.Fatalf("decode patch: %v", err)
+	}
+	if spec, ok := patch["spec"]; ok {
+		t.Fatalf("root-level patch created spec: %#v", spec)
+	}
+	nodeConfig, ok := patch[key].(string)
+	if !ok {
+		t.Fatalf("patch %s = %#v", key, patch[key])
+	}
+	return nodeConfig
 }
 
 func patchedNodeConfig(t *testing.T, resp *wranglerwebhook.Response, key string) string {

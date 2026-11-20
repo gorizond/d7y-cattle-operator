@@ -1,6 +1,8 @@
 // Package machineconfig implements the CREATE-only machine-config webhook.
-// It patches one spec field, userData by default, chosen per Cluster with the
-// p2p.dragonfly.io/node-config-key annotation.
+// It patches one node-config field, userData by default, chosen per Cluster
+// with the p2p.dragonfly.io/node-config-key annotation. RKE machine configs
+// (for example CloudblastConfig) keep their fields at the top level; objects
+// with a spec map keep the legacy spec path.
 package machineconfig
 
 import (
@@ -32,7 +34,8 @@ const (
 	AnnotationCluster          = "p2p.dragonfly.io/cluster"
 	AnnotationClusterName      = "p2p.dragonfly.io/cluster-name"
 	AnnotationClusterNamespace = "p2p.dragonfly.io/cluster-namespace"
-	// AnnotationNodeConfigKey selects a single spec field to patch on CREATE.
+	// AnnotationNodeConfigKey selects a single node-config field to patch on
+	// CREATE. RKE machine configs keep it at the top level.
 	AnnotationNodeConfigKey = "p2p.dragonfly.io/node-config-key"
 
 	defaultNodeConfigKey = "userData"
@@ -173,7 +176,7 @@ func (h *Handler) Admit(resp *wranglerwebhook.Response, req *wranglerwebhook.Req
 		return nil
 	}
 
-	nodeConfig, _, err := unstructured.NestedString(config.Object, "spec", nodeConfigKey)
+	nodeConfig, err := nodeConfigValue(config.Object, nodeConfigKey)
 	if err != nil {
 		h.event(req, "NodeConfigMalformed", err)
 		return nil
@@ -193,7 +196,7 @@ func (h *Handler) Admit(resp *wranglerwebhook.Response, req *wranglerwebhook.Req
 	if !changed {
 		return nil
 	}
-	if err := unstructured.SetNestedField(config.Object, patched, "spec", nodeConfigKey); err != nil {
+	if err := setNodeConfigValue(config.Object, nodeConfigKey, patched); err != nil {
 		h.event(req, "NodeConfigPatchFailed", err)
 		return nil
 	}
@@ -201,6 +204,26 @@ func (h *Handler) Admit(resp *wranglerwebhook.Response, req *wranglerwebhook.Req
 		h.event(req, "PatchCreateFailed", err)
 	}
 	return nil
+}
+
+// nodeConfigValue reads the configured node field. RKE machine configs
+// (CloudblastConfig and the other rke-machine-config resources) have no spec
+// map and store the field at the top level; objects that do have a spec map
+// keep the legacy spec path.
+func nodeConfigValue(object map[string]any, key string) (string, error) {
+	if _, ok := object["spec"].(map[string]any); ok {
+		value, _, err := unstructured.NestedString(object, "spec", key)
+		return value, err
+	}
+	value, _, err := unstructured.NestedString(object, key)
+	return value, err
+}
+
+func setNodeConfigValue(object map[string]any, key, value string) error {
+	if _, ok := object["spec"].(map[string]any); ok {
+		return unstructured.SetNestedField(object, value, "spec", key)
+	}
+	return unstructured.SetNestedField(object, value, key)
 }
 
 func schedulerHost(domain, clusterID string) string {

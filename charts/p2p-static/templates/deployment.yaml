@@ -13,6 +13,8 @@ spec:
     metadata:
       labels:
         {{- include "p2p-static.selectorLabels" . | nindent 8 }}
+      annotations:
+        checksum/config: {{ include (print $.Template.BasePath "/configmap.yaml") . | sha256sum }}
     spec:
       automountServiceAccountToken: false
       {{- with .Values.nodeSelector }}
@@ -29,7 +31,7 @@ spec:
           imagePullPolicy: {{ .Values.image.pullPolicy }}
           ports:
             - name: http
-              containerPort: 8080
+              containerPort: 80
               protocol: TCP
           readinessProbe:
             httpGet:

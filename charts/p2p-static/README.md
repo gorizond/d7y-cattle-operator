@@ -20,6 +20,39 @@ helm install p2p-static charts/p2p-static \
 populate it from GitOps/an init job. `static.sizeLimit` optionally caps the
 `emptyDir`.
 
+### Manager-host route
+
+The chart can serve the bootstrap script and its static assets on the manager
+host, using the manager's TLS Secret:
+
+```bash
+helm install p2p-static charts/p2p-static \
+  --namespace dragonfly-system \
+  --set manager.enabled=true \
+  --set manager.host=manager.example.com \
+  --set manager.tlsSecret=manager-tls
+```
+
+`manager.entryPoint` defaults to `websecure`; the IngressRoute uses
+`ingress.className` (default `traefik`). The route matches
+`Host("<manager-host>")` plus `PathPrefix("/p2p-install.sh")`,
+`PathPrefix("/bin")`, or `PathPrefix("/nydus")`, and forwards to the
+`p2p-static` Service. The manager REST API keeps its own `/api` paths; these
+prefixes do not overlap.
+
+The machine-config webhook uses `nginx.staticURL` for the bootstrap line. Set it
+to the same manager host (for example `https://manager.example.com`) and the
+CloudBlast `postBootScript` line becomes:
+
+```bash
+curl -sfL https://<manager-host>/p2p-install.sh?cfg=<base64url> | bash
+```
+
+The payload already contains the manager, static, and scheduler values plus the
+base64 client certificate and key. The same route serves `/bin` and `/nydus`,
+so the script can use `STATIC_URL=https://<manager-host>` for its static
+binaries. No secret values are rendered by the chart.
+
 The chart value `nydus.clusterId` is rendered into `p2p-install.sh`:
 
 ```bash
