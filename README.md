@@ -64,6 +64,7 @@ flowchart TB
     O --> CRED["dragonfly-manager-api<br/>username / password / jwt-key"]
     O --> REG["Manager REST API<br/>register scheduler + seed peer<br/>allocate scheduler ID"]
     O --> HELM["Shared Fleet HelmOps<br/>keydb - manager - control - data - extras - containerd-mirror"]
+    MC["RKE machine config (CREATE)"] --> W["machine-config webhook<br/>CREATE-only rke-machine-config.cattle.io"] --> PAY["bootstrap payload<br/>userData / postBootScript = p2p-install.sh"]
   end
   subgraph DOWN["Downstream RKE2 cluster"]
     HELM --> K["KeyDB"]
@@ -75,16 +76,15 @@ flowchart TB
     HELM --> CM["containerd-mirror<br/>certs.d/_default to 127.0.0.1:4001"]
   end
   subgraph NODE["Node"]
-    W["Machine-config webhook<br/>CREATE-only rke-machine-config.cattle.io"] --> P["p2p-install.sh<br/>host nydus + dfdaemon bootstrap"]
+    PAY -.-> P["p2p-install.sh on node<br/>host nydus + dfdaemon bootstrap"]
   end
-  C -.-> W
   P --> CL
   PODS["Pods"] --> CTD["containerd"] --> CL
   CL --> P2P["Dragonfly P2P"] --> SCH
   P2P --> SC
-  MGR -->|"gRPC 65003 mTLS / REST 8080 JWT"| EX
-  SCH -->|"public TCP 443 TLS passthrough"| EX
-  EX -->|"d7y-scheduler.&lt;cluster-id&gt;.&lt;domain&gt;"| PUB["Scheduler public endpoint"]
+  EX -->|"gRPC 65003 mTLS / REST 8080 JWT"| MGR
+  EX -->|"TCP 8002 TLS passthrough"| SCH
+  CLIENT["External clients"] --> PUB["d7y-scheduler.&lt;cluster-id&gt;.&lt;domain&gt;"] --> EX
 ```
 
 ### Data flow
