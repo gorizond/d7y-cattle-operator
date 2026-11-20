@@ -34,6 +34,9 @@ const (
 	DefaultExtrasIngressTLSSecret        = ""
 	DefaultExtrasTraefikTransportEnabled = true
 	DefaultNamespace                     = "dragonfly-system"
+	DefaultWebhookPort                   = 9443
+	DefaultWebhookCertDir                = "/etc/webhook/certs"
+	DefaultWebhookServiceName            = "d7y-cattle-operator-webhook"
 )
 
 var chartVersionPattern = regexp.MustCompile(`^v?[0-9]+\.[0-9]+\.[0-9]+(?:[-+][0-9A-Za-z.-]+)?$`)
@@ -43,10 +46,10 @@ type Config struct {
 	ManagerGRPCDomain           string
 	ManagerGRPCPort             int
 	ManagerAPIURL               string
-	P2PDomain                   string
-	ClusterIDFallback           string
 	NginxStaticURL              string
 	NydusMirrorURL              string
+	P2PDomain                   string
+	ClusterIDFallback           string
 	MTLSSecretName              string
 	ManagerAPICredentialsSecret string
 	DragonflyChartRepo          string
@@ -65,6 +68,9 @@ type Config struct {
 	ExtrasIngressTLSSecret      string
 	ExtrasTraefikTransport      bool
 	Namespace                   string
+	WebhookPort                 int
+	WebhookCertDir              string
+	WebhookServiceName          string
 	LeaderElect                 bool
 	Kubeconfig                  string
 }
@@ -72,6 +78,10 @@ type Config struct {
 // Load parses args (without the program name) and validates the result.
 // Each flag falls back to its environment variable when the flag is not set.
 func Load(args []string) (*Config, error) {
+	defaultWebhookPort, err := envInt("WEBHOOK_PORT", DefaultWebhookPort)
+	if err != nil {
+		return nil, err
+	}
 	defaultGRPCEnabled, err := envBool("EXTRAS_INGRESS_GRPC_ENABLED", DefaultExtrasIngressGRPCEnabled)
 	if err != nil {
 		return nil, err
@@ -94,6 +104,8 @@ func Load(args []string) (*Config, error) {
 	fs.StringVar(&cfg.ManagerGRPCDomain, "manager-grpc-domain", envOr("MANAGER_GRPC_DOMAIN", ""), "public hostname of the manager gRPC endpoint (no scheme)")
 	fs.IntVar(&cfg.ManagerGRPCPort, "manager-grpc-port", defaultManagerGRPCPort, "public port of the manager gRPC endpoint")
 	fs.StringVar(&cfg.ManagerAPIURL, "manager-api-url", envOr("MANAGER_API_URL", ""), "public HTTPS URL of the manager REST API")
+	fs.StringVar(&cfg.NginxStaticURL, "nginx-static-url", envOr("NGINX_STATIC_URL", ""), "base URL of the static asset server (http or https)")
+	fs.StringVar(&cfg.NydusMirrorURL, "nydus-mirror-url", envOr("NYDUS_MIRROR_URL", ""), "optional HTTPS mirror path for nydus blobs")
 	fs.StringVar(&cfg.P2PDomain, "p2p-domain", envOr("P2P_DOMAIN", ""), "base domain for the per-cluster scheduler alias d7y-scheduler.<cluster>.<domain>")
 	fs.StringVar(&cfg.ClusterIDFallback, "p2p-cluster-id", envOr("P2P_CLUSTER_ID", ""), "fallback cluster ID when provisioning Cluster status.clusterName is empty")
 	fs.StringVar(&cfg.MTLSSecretName, "mtls-secret-name", envOr("MTLS_SECRET_NAME", DefaultMTLSSecretName), "name of the mTLS Secret")
@@ -114,6 +126,9 @@ func Load(args []string) (*Config, error) {
 	fs.StringVar(&cfg.ExtrasIngressTLSSecret, "extras-ingress-tls-secret", envOr("EXTRAS_INGRESS_TLS_SECRET", DefaultExtrasIngressTLSSecret), "extras Ingress TLS Secret name (empty disables TLS)")
 	fs.BoolVar(&cfg.ExtrasTraefikTransport, "extras-traefik-servers-transport-enabled", defaultTraefikTransport, "render the Traefik ServersTransport for the REST Ingress")
 	fs.StringVar(&cfg.Namespace, "namespace", envOr("POD_NAMESPACE", DefaultNamespace), "namespace where the operator stores its Secret")
+	fs.IntVar(&cfg.WebhookPort, "webhook-port", defaultWebhookPort, "machine-config webhook port")
+	fs.StringVar(&cfg.WebhookCertDir, "webhook-cert-dir", envOr("WEBHOOK_CERT_DIR", DefaultWebhookCertDir), "directory containing the webhook tls.crt and tls.key")
+	fs.StringVar(&cfg.WebhookServiceName, "webhook-service-name", envOr("WEBHOOK_SERVICE_NAME", DefaultWebhookServiceName), "webhook Service name used for the serving certificate SANs")
 	fs.BoolVar(&cfg.LeaderElect, "leader-elect", false, "enable leader election")
 	fs.StringVar(&cfg.Kubeconfig, "kubeconfig", envOr("KUBECONFIG", ""), "path to a kubeconfig (in-cluster config when empty)")
 
@@ -145,6 +160,16 @@ func (c *Config) Validate() error {
 	}
 	if c.ManagerGRPCPort < 1 || c.ManagerGRPCPort > 65535 {
 		add("--manager-grpc-port: %d is outside 1-65535", c.ManagerGRPCPort)
+	}
+	if c.NginxStaticURL == "" {
+		add("--nginx-static-url is required")
+	} else if err := validateURL(c.NginxStaticURL, "http", "https"); err != nil {
+		add("--nginx-static-url: %v", err)
+	}
+	if c.NydusMirrorURL != "" {
+		if err := validateNydusMirrorURL(c.NydusMirrorURL); err != nil {
+			add("--nydus-mirror-url: %v", err)
+		}
 	}
 	if c.P2PDomain == "" {
 		add("--p2p-domain is required")
@@ -225,6 +250,17 @@ func (c *Config) Validate() error {
 	} else if msgs := validation.IsDNS1123Label(c.Namespace); len(msgs) > 0 {
 		add("--namespace: %s", strings.Join(msgs, "; "))
 	}
+	if c.WebhookPort < 1 || c.WebhookPort > 65535 {
+		add("--webhook-port: %d is outside 1-65535", c.WebhookPort)
+	}
+	if c.WebhookCertDir == "" {
+		add("--webhook-cert-dir is required")
+	}
+	if c.WebhookServiceName == "" {
+		add("--webhook-service-name is required")
+	} else if msgs := validation.IsDNS1123Label(c.WebhookServiceName); len(msgs) > 0 {
+		add("--webhook-service-name: %s", strings.Join(msgs, "; "))
+	}
 
 	if len(errs) > 0 {
 		return errors.New(strings.Join(errs, "; "))
@@ -259,6 +295,23 @@ func validateURL(raw string, allowedSchemes ...string) error {
 		}
 	}
 	return fmt.Errorf("unsupported scheme %q (allowed: %s)", u.Scheme, strings.Join(allowedSchemes, ", "))
+}
+
+func validateNydusMirrorURL(raw string) error {
+	if err := validateURL(raw, "http", "https"); err != nil {
+		return err
+	}
+	u, err := url.Parse(raw)
+	if err != nil {
+		return fmt.Errorf("invalid URL: %w", err)
+	}
+	if u.User != nil || u.RawQuery != "" || u.Fragment != "" {
+		return errors.New("must not contain credentials, a query, or a fragment")
+	}
+	if u.Path == "" || u.Path == "/" {
+		return errors.New("must include the registry mirror path (for example /docker.io)")
+	}
+	return nil
 }
 
 func envOr(key, fallback string) string {

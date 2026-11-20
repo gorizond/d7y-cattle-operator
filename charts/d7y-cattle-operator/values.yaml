@@ -33,6 +33,15 @@ manager:
   # Public HTTPS URL of the manager REST API.
   apiURL: ""
 
+nginx:
+  # Base URL of the static asset server (http or https).
+  staticURL: ""
+
+nydus:
+  # Optional HTTPS mirror path for nydus blobs in the bootstrap payload.
+  # Empty keeps the dfdaemon proxy fallback. No domain is hardcoded.
+  mirrorURL: ""
+
 # Scheduler DNS and internal Service identities. The public LB IP is resolved at
 # reconcile time from d7y-scheduler.<cluster-id>.<domain>; the service IP is
 # pinned as the non-headless scheduler client Service ClusterIP. The resolved
@@ -79,6 +88,15 @@ containerdMirror:
     repo: https://gorizond.github.io/d7y-cattle-operator
     name: containerd-mirror
     version: 0.1.1
+
+webhook:
+  # Machine-config webhook server and CREATE-only MutatingWebhookConfiguration.
+  enabled: true
+  # Webhook port served by the operator.
+  port: 9443
+  # Directory where needacert mounts tls.crt/tls.key.
+  certDir: /etc/webhook/certs
+  failurePolicy: Ignore
 
 leaderElect: false
 

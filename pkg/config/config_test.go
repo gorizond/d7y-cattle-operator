@@ -29,6 +29,11 @@ var envKeys = []string{
 	"EXTRAS_INGRESS_TLS_SECRET",
 	"EXTRAS_TRAEFIK_SERVERS_TRANSPORT_ENABLED",
 	"POD_NAMESPACE",
+	"NGINX_STATIC_URL",
+	"NYDUS_MIRROR_URL",
+	"WEBHOOK_PORT",
+	"WEBHOOK_CERT_DIR",
+	"WEBHOOK_SERVICE_NAME",
 	"KUBECONFIG",
 }
 
@@ -43,6 +48,7 @@ func requiredArgs() []string {
 	return []string{
 		"--manager-grpc-domain=manager-grpc.example.com",
 		"--manager-api-url=https://manager-api.example.com",
+		"--nginx-static-url=https://static.example.com",
 		"--p2p-domain=example.com",
 		"--manager-api-credentials-secret=dragonfly-manager-api",
 	}
@@ -222,6 +228,7 @@ func TestLoadEnvOverride(t *testing.T) {
 	t.Setenv("EXTRAS_INGRESS_TLS_SECRET", "dragonfly-p2p-mtls")
 	t.Setenv("EXTRAS_TRAEFIK_SERVERS_TRANSPORT_ENABLED", "false")
 	t.Setenv("POD_NAMESPACE", "env-namespace")
+	t.Setenv("NGINX_STATIC_URL", "http://static.env.example.com")
 	t.Setenv("KUBECONFIG", "/tmp/kubeconfig")
 
 	cfg, err := Load(nil)

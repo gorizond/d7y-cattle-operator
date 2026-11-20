@@ -15,11 +15,23 @@ rules:
   - apiGroups: ["fleet.cattle.io"]
     resources: ["helmops"]
     verbs: ["get", "list", "watch", "create", "update", "patch", "delete"]
-  # Bounded legacy HelmOp cleanup deletes the Fleet Bundle named after the
-  # HelmOp; Fleet itself purges BundleDeployments and the downstream release.
+  # Bounded admission cleanup deletes the Fleet Bundle named after the HelmOp;
+  # Fleet itself purges BundleDeployments and the downstream release.
   - apiGroups: ["fleet.cattle.io"]
     resources: ["bundles"]
     verbs: ["get", "list", "watch", "delete"]
+  - apiGroups: ["rke-machine-config.cattle.io"]
+    resources: ["*"]
+    verbs: ["get", "list", "watch"]
+  - apiGroups: [""]
+    resources: ["services"]
+    verbs: ["get", "list", "watch"]
+  - apiGroups: ["admissionregistration.k8s.io"]
+    resources: ["mutatingwebhookconfigurations", "validatingwebhookconfigurations"]
+    verbs: ["get", "list", "watch", "update", "patch"]
+  - apiGroups: ["apiextensions.k8s.io"]
+    resources: ["customresourcedefinitions"]
+    verbs: ["get", "list", "watch", "update", "patch"]
   - apiGroups: [""]
     resources: ["secrets"]
     verbs: ["get", "list", "watch", "create", "update"]

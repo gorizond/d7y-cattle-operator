@@ -34,6 +34,10 @@ spec:
               value: {{ .Values.manager.grpcPort | quote }}
             - name: MANAGER_API_URL
               value: {{ .Values.manager.apiURL | quote }}
+            - name: NGINX_STATIC_URL
+              value: {{ .Values.nginx.staticURL | quote }}
+            - name: NYDUS_MIRROR_URL
+              value: {{ .Values.nydus.mirrorURL | quote }}
             - name: P2P_DOMAIN
               value: {{ .Values.scheduler.domain | quote }}
             - name: P2P_CLUSTER_ID
@@ -76,6 +80,22 @@ spec:
               valueFrom:
                 fieldRef:
                   fieldPath: metadata.namespace
+            - name: WEBHOOK_PORT
+              value: {{ .Values.webhook.port | quote }}
+            - name: WEBHOOK_CERT_DIR
+              value: {{ .Values.webhook.certDir | quote }}
+            - name: WEBHOOK_SERVICE_NAME
+              value: {{ include "d7y-cattle-operator.webhookName" . }}
+          ports:
+            - name: webhook
+              containerPort: {{ .Values.webhook.port }}
+              protocol: TCP
+          {{- if .Values.webhook.enabled }}
+          volumeMounts:
+            - name: webhook-certs
+              mountPath: {{ .Values.webhook.certDir }}
+              readOnly: true
+          {{- end }}
           securityContext:
             allowPrivilegeEscalation: false
             readOnlyRootFilesystem: true
@@ -84,3 +104,10 @@ spec:
                 - ALL
           resources:
             {{- toYaml .Values.resources | nindent 12 }}
+      {{- if .Values.webhook.enabled }}
+      volumes:
+        - name: webhook-certs
+          secret:
+            secretName: {{ include "d7y-cattle-operator.webhookName" . }}-cert
+            optional: true
+      {{- end }}
