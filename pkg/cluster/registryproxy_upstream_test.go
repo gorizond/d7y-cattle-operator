@@ -55,12 +55,35 @@ func TestReconcileSharedRegistryProxyUpstreamCredentials(t *testing.T) {
 	if got := registryProxyDownstreamNames(t, op); !equalStrings(got, wantDownstream) {
 		t.Errorf("downstreamResources = %v, want %v", got, wantDownstream)
 	}
+	annotations, _ := valueAtPath(t, values, "podAnnotations").(map[string]any)
+	revision, _ := annotations["p2p.dragonfly.io/upstream-secret-revision"].(string)
+	if revision == "" {
+		t.Fatal("upstream-secret-revision annotation is empty")
+	}
 	replicated, err := controller.secrets.(*fakeSecretStore).Get("fleet-default", "upstream-creds", metav1.GetOptions{})
 	if err != nil {
 		t.Fatalf("get replicated upstream credentials Secret: %v", err)
 	}
 	if string(replicated.Data["credentials.yaml"]) != string(credentials) {
 		t.Errorf("replicated credentials.yaml = %q", replicated.Data["credentials.yaml"])
+	}
+
+	source, err := controller.secrets.(*fakeSecretStore).Get("dragonfly-system", "upstream-creds", metav1.GetOptions{})
+	if err != nil {
+		t.Fatalf("get source upstream Secret: %v", err)
+	}
+	source.Data["credentials.yaml"] = []byte("registry.gitlab.com:\n  access_key: user2\n  access_secret: token2\n")
+	if _, err := controller.secrets.(*fakeSecretStore).Update(source); err != nil {
+		t.Fatalf("rotate source upstream Secret: %v", err)
+	}
+	if _, err := controller.reconcile("", cluster); err != nil {
+		t.Fatalf("rotation reconcile() error = %v", err)
+	}
+	op = store.object("fleet-default/" + helmop.SharedRegistryProxyName())
+	annotations, _ = valueAtPath(t, helmValues(t, op), "podAnnotations").(map[string]any)
+	rotated, _ := annotations["p2p.dragonfly.io/upstream-secret-revision"].(string)
+	if rotated == "" || rotated == revision {
+		t.Errorf("upstream-secret-revision = %q, want a change from %q", rotated, revision)
 	}
 }
 
@@ -107,8 +130,14 @@ func TestReconcileSharedRegistryProxyUpstreamCredentialsDisabled(t *testing.T) {
 	if op == nil {
 		t.Fatal("shared registry proxy HelmOp was not created")
 	}
-	if _, ok := helmValues(t, op)["upstream"]; ok {
+	values := helmValues(t, op)
+	if _, ok := values["upstream"]; ok {
 		t.Error("upstream values rendered while credentials are disabled")
+	}
+	if annotations, ok := values["podAnnotations"].(map[string]any); ok {
+		if _, ok := annotations["p2p.dragonfly.io/upstream-secret-revision"]; ok {
+			t.Error("upstream-secret-revision rendered while credentials are disabled")
+		}
 	}
 	if got := registryProxyDownstreamNames(t, op); len(got) != 3 {
 		t.Errorf("downstreamResources = %v, want no upstream Secret", got)

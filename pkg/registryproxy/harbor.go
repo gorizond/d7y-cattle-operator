@@ -284,10 +284,13 @@ func (h *HarborClient) CleanupUnusedGenericRegistry(ctx context.Context, host st
 	return nil
 }
 
-// reconcileRegistryURL updates a same-type endpoint whose URL drifted. Failure
-// is non-fatal: Harbor keeps serving the existing endpoint.
+// reconcileRegistryURL updates a same-type endpoint whose URL drifted, and
+// also refreshes credentials on a matching URL when credentials are configured
+// (an existing endpoint may have been created without them). Failure is
+// non-fatal: Harbor keeps serving the existing endpoint.
 func (h *HarborClient) reconcileRegistryURL(ctx context.Context, existing, spec HarborRegistry, credentialsHost string) (HarborRegistry, error) {
-	if existing.URL == spec.URL {
+	credential := h.Credentials[credentialsHost]
+	if existing.URL == spec.URL && credential.AccessKey == "" {
 		return existing, nil
 	}
 	updated, err := h.updateRegistryURL(ctx, existing, spec, credentialsHost)

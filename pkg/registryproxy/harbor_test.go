@@ -395,6 +395,38 @@ func TestEnsureRegistrySendsPrivateUpstreamCredentials(t *testing.T) {
 	}
 }
 
+func TestEnsureRegistryRefreshesCredentialsOnMatchingURL(t *testing.T) {
+	accessKey := fmt.Sprintf("test-user-%d", time.Now().UnixNano())
+	accessSecret := fmt.Sprintf("test-secret-%d", time.Now().UnixNano())
+	fake := &fakeHarbor{registries: []HarborRegistry{{
+		ID: 2, Name: "registry.gitlab.com", Type: "docker-registry", URL: "https://registry.gitlab.com",
+	}}}
+	server := httptest.NewServer(fake.handler())
+	defer server.Close()
+	client := &HarborClient{
+		BaseURL: server.URL,
+		Credentials: map[string]HarborCredential{
+			"registry.gitlab.com": {AccessKey: accessKey, AccessSecret: accessSecret},
+		},
+	}
+
+	if _, err := client.EnsureRegistry(context.Background(), "registry.gitlab.com"); err != nil {
+		t.Fatalf("EnsureRegistry() error = %v", err)
+	}
+	fake.mu.Lock()
+	defer fake.mu.Unlock()
+	if fake.posts["registry_update"] != 1 || fake.posts["registry"] != 0 || fake.posts["registry_delete"] != 0 {
+		t.Errorf("registry POST/PUT/DELETE = %d/%d/%d, want 0/1/0",
+			fake.posts["registry"], fake.posts["registry_update"], fake.posts["registry_delete"])
+	}
+	if fake.lastRegistryBody["access_key"] != accessKey || fake.lastRegistryBody["access_secret"] != accessSecret {
+		t.Errorf("matching URL update did not include configured credentials: %v", fake.lastRegistryBody)
+	}
+	if fake.lastRegistryBody["url"] != "https://registry.gitlab.com" {
+		t.Errorf("update body url = %v", fake.lastRegistryBody["url"])
+	}
+}
+
 func TestEnsureSystemRobotUsesWildcardPull(t *testing.T) {
 	fake := &fakeHarbor{}
 	server := httptest.NewServer(fake.handler())
@@ -675,12 +707,13 @@ func TestEnsureRegistryLeavesMatchingEndpointsUntouched(t *testing.T) {
 	fake := &fakeHarbor{registries: []HarborRegistry{
 		{ID: 1, Name: "docker.io", Type: "docker-hub", URL: "https://hub.docker.com"},
 		{ID: 2, Name: "ghcr.io", Type: "docker-registry", URL: "https://ghcr.io"},
+		{ID: 3, Name: "registry.gitlab.com", Type: "docker-registry", URL: "https://registry.gitlab.com"},
 	}}
 	server := httptest.NewServer(fake.handler())
 	defer server.Close()
 	client := &HarborClient{BaseURL: server.URL}
 
-	for _, host := range []string{"docker.io", "ghcr.io"} {
+	for _, host := range []string{"docker.io", "ghcr.io", "registry.gitlab.com"} {
 		if _, err := client.EnsureRegistry(context.Background(), host); err != nil {
 			t.Fatalf("EnsureRegistry(%s) error = %v", host, err)
 		}

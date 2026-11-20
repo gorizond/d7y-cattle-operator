@@ -112,8 +112,11 @@ func (c *Controller) ensureSharedRegistryProxy(cluster *provv1.Cluster, hc helmo
 		}
 	}
 	hc.ProxyUpstreamCredentialsSecret = c.opts.ProxyUpstreamCredentialsSecret
-	// A rotated robot Secret must roll the proxy pods, which read the mounted
-	// credentials only at bootstrap.
+	if c.opts.ProxyUpstreamCredentialsSecret != "" {
+		hc.ProxyUpstreamSecretRevision = c.upstreamSecretRevision(cluster, c.opts.ProxyUpstreamCredentialsSecret)
+	}
+	// Rotated robot or upstream credentials must roll the proxy pods, which
+	// read the mounted Secrets only at bootstrap.
 	hc.ProxyRobotSecretRevision = c.robotSecretRevision(cluster, hc.ProxyRobotSecretName)
 	return c.applyHelmOp(cluster, helmop.SharedRegistryProxy(hc))
 }
@@ -154,6 +157,18 @@ func (c *Controller) ensureRegistryProxyRobotSecret(cluster *provv1.Cluster, hc 
 		return fmt.Errorf("ensure Harbor robot Secret %s/%s: %w", cluster.Namespace, hc.ProxyRobotSecretName, err)
 	}
 	return nil
+}
+
+// upstreamSecretRevision returns a short hash of the upstream credentials
+// file. It is only used as a pod-template annotation to roll the proxy after a
+// credential rotation; the hash is never logged and carries no Secret data.
+func (c *Controller) upstreamSecretRevision(cluster *provv1.Cluster, name string) string {
+	secret, err := c.secrets.Get(cluster.Namespace, name, metav1.GetOptions{})
+	if err != nil {
+		return ""
+	}
+	digest := sha256.Sum256(secret.Data["credentials.yaml"])
+	return hex.EncodeToString(digest[:])[:16]
 }
 
 // robotSecretRevision returns a short hash of the robot Secret values. It is
