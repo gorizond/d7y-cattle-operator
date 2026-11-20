@@ -19,7 +19,7 @@ payload() {
   ca="$(printf 'dummy-ca\n' | base64 | tr -d '\n')"
   cert="$(printf 'dummy-cert\n' | base64 | tr -d '\n')"
   key="$(printf 'dummy-key\n' | base64 | tr -d '\n')"
-  env="$(printf 'MANAGER_GRPC=https://manager-grpc.example.test:65003\nSTATIC_URL=http://static.example.test\nSCHEDULER_HOST=%s\nSCHEDULER_CLUSTER_ID=2\nCA_CRT_B64=%s\nCLIENT_CRT_B64=%s\nCLIENT_KEY_B64=%s\n' "$host" "$ca" "$cert" "$key")"
+  env="$(printf 'MANAGER_GRPC=https://manager-grpc.example.test:443\nSTATIC_URL=http://static.example.test\nSCHEDULER_HOST=%s\nSCHEDULER_CLUSTER_ID=2\nCA_CRT_B64=%s\nCLIENT_CRT_B64=%s\nCLIENT_KEY_B64=%s\n' "$host" "$ca" "$cert" "$key")"
   if [ -n "$mirror" ]; then
     env="${env}"$'\n'"NYDUS_MIRROR_URL=${mirror}"
   fi
@@ -221,7 +221,16 @@ if ! cmp -s "${WORK}/nydusd-config.fscache.expected.json" "$FSCACHE_JSON"; then
   echo "p2p-static self-test: nydusd fscache config does not match the canonical template" >&2
   exit 1
 fi
-assert_contains "${ROOT_ONE}/etc/nydus/updater.env" 'NYDUS_VERSION=v0.16.0'
+assert_contains "${ROOT_ONE}/etc/nydus/updater.env" 'NYDUS_VERSION=v2.4.5'
+
+ROOT_K3S="${WORK}/root-k3s"
+mkdir -p "${ROOT_K3S}/var/lib/rancher/k3s"
+P2P_ROOT="$ROOT_K3S" KERNEL_CONFIG_FILE="$N_KERNEL_CONFIG" SKIP_DOWNLOAD=1 SKIP_MODULES=1 SKIP_SYSTEMD=1 SKIP_PREFLIGHT=1 CONTAINERD_MAJOR=1 \
+  bash "$INSTALL" "$CFG" > "${WORK}/k3s.log" 2>&1
+assert_file "${ROOT_K3S}/var/lib/rancher/k3s/agent/etc/containerd/config.toml.tmpl"
+assert_contains "${ROOT_K3S}/etc/systemd/system/dfdaemon-bootstrap.service" 'Before=k3s.service'
+assert_not_contains "${ROOT_K3S}/etc/systemd/system/dfdaemon-bootstrap.service" 'rke2-server.service'
+assert_contains "${ROOT_K3S}/etc/systemd/system/nydus-snapshotter-bootstrap.service" 'Before=k3s.service'
 assert_file "${ROOT_ONE}/usr/local/bin/dfdaemon-bootstrap-switch"
 assert_file "${ROOT_ONE}/etc/systemd/system/dfdaemon-bootstrap-boot.service"
 assert_file "${ROOT_ONE}/etc/systemd/system/dfdaemon-bootstrap-switch.service"
@@ -328,7 +337,7 @@ assert_not_contains "$INSTALL" 'machineGlobalConfig'
 assert_not_contains "$INSTALL" 'enable_oci_tar'
 assert_contains "$INSTALL" 'fallback_direct'
 assert_contains "$INSTALL" 'SCHEDULER_PORT=443'
-assert_contains "$INSTALL" 'NYDUS_VERSION="${NYDUS_VERSION:-v0.16.0}"'
+assert_contains "$INSTALL" 'NYDUS_VERSION="${NYDUS_VERSION:-v2.4.5}"'
 assert_contains "$INSTALL" 'NYDUS_SNAPSHOTTER_REPO="${NYDUS_SNAPSHOTTER_REPO:-gorizond/nydus-snapshotter}"'
 assert_contains "$INSTALL" 'NYDUS_SNAPSHOTTER_VERSION="${NYDUS_SNAPSHOTTER_VERSION:-v0.16.0-p2p.2}"'
 assert_contains "$INSTALL" 'NYDUS_SNAPSHOTTER_ASSET="${NYDUS_SNAPSHOTTER_ASSET:-nydus-snapshotter-linux-amd64}"'

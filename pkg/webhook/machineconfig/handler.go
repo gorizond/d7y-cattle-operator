@@ -41,7 +41,9 @@ const (
 
 	defaultNodeConfigKey = "userData"
 
-	managerGRPCPort = 65003
+	// managerGRPCPort is the public Traefik websecure port. The manager
+	// backend still listens on 65003 behind the IngressRouteTCP.
+	managerGRPCPort = 443
 )
 
 var nodeConfigKeyPattern = regexp.MustCompile(`^[A-Za-z][A-Za-z0-9]*$`)
