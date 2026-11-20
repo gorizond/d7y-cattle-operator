@@ -78,7 +78,7 @@ func testController() (*Controller, *fakeSecrets, *fakeMachines, *fakeClusters, 
 	secret := &corev1.Secret{
 		ObjectMeta: metav1.ObjectMeta{Name: "machine-1-machine-bootstrap", Namespace: "fleet-default"},
 		Type:       bootstrapSecretType,
-		Data:       map[string][]byte{bootstrapValueKey: []byte("#!/bin/bash\necho start\nexit 0\necho after\nexit 0\n")},
+		Data:       map[string][]byte{bootstrapValueKey: []byte("#!/bin/bash\necho start\ndo_install \"$@\"\nexit 0\n")},
 	}
 	mtls := &corev1.Secret{
 		ObjectMeta: metav1.ObjectMeta{Name: "dragonfly-p2p-mtls", Namespace: "dragonfly-system"},
@@ -128,26 +128,25 @@ func testController() (*Controller, *fakeSecrets, *fakeMachines, *fakeClusters, 
 	return c, secrets, c.machines.(*fakeMachines), c.clusters.(*fakeClusters), events, cfg
 }
 
-func TestReconcileInsertsBeforeLastExit(t *testing.T) {
-	controller, secrets, _, _, events, cfg := testController()
-	mtls, _ := secrets.Get("dragonfly-system", "dragonfly-p2p-mtls")
-	line, err := bootstrap.BuildInstallLine(
-		&provv1.Cluster{ObjectMeta: metav1.ObjectMeta{Name: "c1", Namespace: "fleet-default", Annotations: map[string]string{"p2p.dragonfly.io/scheduler-cluster-id": "2"}}, Status: provv1.ClusterStatus{ClusterName: "c-m-test"}},
-		mtls, "", cfg,
-	)
-	if err != nil {
-		t.Fatalf("BuildInstallLine() error = %v", err)
-	}
+func TestReconcileInsertsBeforeDoInstall(t *testing.T) {
+	controller, secrets, _, _, events, _ := testController()
 	if _, err := controller.reconcile("fleet-default/machine-1-machine-bootstrap", secrets.secret.DeepCopy()); err != nil {
 		t.Fatalf("reconcile() error = %v", err)
 	}
 	value := string(secrets.secret.Data[bootstrapValueKey])
-	want := "#!/bin/bash\necho start\nexit 0\necho after\n" + line + "\nexit 0\n"
-	if value != want {
-		t.Fatalf("bootstrap value = %q, want %q", value, want)
+	blockAt := strings.Index(value, bootstrap.Marker)
+	doInstallAt := strings.Index(value, `do_install "$@"`)
+	if blockAt < 0 || doInstallAt < 0 || blockAt > doInstallAt {
+		t.Fatalf("bootstrap block is not before do_install: %q", value)
 	}
-	if strings.Count(value, bootstrap.Marker) != 1 {
-		t.Errorf("marker count = %d, want 1", strings.Count(value, bootstrap.Marker))
+	if !strings.Contains(value[blockAt:doInstallAt], ") || true") {
+		t.Fatalf("bootstrap block is not best-effort: %q", value)
+	}
+	if strings.Contains(value, "p2p-install.sh?cfg=") {
+		t.Fatalf("bootstrap block still downloads p2p-install.sh: %q", value)
+	}
+	if !strings.Contains(value, "MANAGER_GRPC='https://grpc.example.com:443'") {
+		t.Fatalf("bootstrap block is missing the inline manager env: %q", value)
 	}
 	if len(events.events) != 1 || events.events[0].Reason != "BootstrapInjected" {
 		t.Errorf("events = %+v, want BootstrapInjected", events.events)
@@ -158,6 +157,36 @@ func TestReconcileInsertsBeforeLastExit(t *testing.T) {
 	}
 	if secrets.updates != 1 {
 		t.Errorf("Secret updates = %d, want 1 (idempotent)", secrets.updates)
+	}
+}
+
+func TestReconcileFallsBackToLastExitZero(t *testing.T) {
+	controller, secrets, _, _, _, _ := testController()
+	secrets.secret.Data[bootstrapValueKey] = []byte("#!/bin/bash\necho start\nexit 0\necho after\nexit 0\n")
+	if _, err := controller.reconcile("", secrets.secret.DeepCopy()); err != nil {
+		t.Fatalf("reconcile() error = %v", err)
+	}
+	value := string(secrets.secret.Data[bootstrapValueKey])
+	lastExit := strings.LastIndex(value, "exit 0")
+	blockAt := strings.Index(value, bootstrap.Marker)
+	if blockAt < 0 || lastExit < 0 || blockAt > lastExit {
+		t.Fatalf("bootstrap block is not before the last exit 0: %q", value)
+	}
+}
+
+func TestInlineBlockIsSelfContainedAndBestEffort(t *testing.T) {
+	block := inlineInstallBlock("STATIC_URL='http://static.example.com'\n")
+	if !strings.HasPrefix(block, bootstrap.Marker+"\n(\n") {
+		t.Fatalf("block start = %q", block)
+	}
+	if !strings.HasSuffix(block, ") || true\n") {
+		t.Fatalf("block end = %q", block)
+	}
+	if strings.HasPrefix(p2pInstallBody, "#!") {
+		t.Fatal("embedded script body still starts with a shebang")
+	}
+	if strings.Contains(block, "p2p-install.sh?cfg=") {
+		t.Fatal("embedded block still downloads p2p-install.sh")
 	}
 }
 
@@ -187,8 +216,8 @@ func TestReconcileAppendsWithoutExitZero(t *testing.T) {
 		t.Fatalf("reconcile() error = %v", err)
 	}
 	value := string(secrets.secret.Data[bootstrapValueKey])
-	if !strings.HasSuffix(value, bootstrap.Marker+"\n") {
-		t.Errorf("bootstrap value = %q, want the line appended", value)
+	if !strings.HasSuffix(value, ") || true\n") {
+		t.Errorf("bootstrap value = %q, want the block appended", value)
 	}
 }
 

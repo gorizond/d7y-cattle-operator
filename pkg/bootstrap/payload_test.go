@@ -18,22 +18,14 @@ func testPayload() Payload {
 	}
 }
 
-func TestEncodeEnvPayload(t *testing.T) {
-	encoded, err := Encode(testPayload())
+func TestEnvPayload(t *testing.T) {
+	raw, err := Env(testPayload())
 	if err != nil {
-		t.Fatalf("Encode() error = %v", err)
+		t.Fatalf("Env() error = %v", err)
 	}
-	if strings.ContainsAny(encoded, "+/") {
-		t.Errorf("encoded payload is not URL-safe: %q", encoded)
-	}
-
-	raw, err := base64.URLEncoding.DecodeString(encoded)
-	if err != nil {
-		t.Fatalf("decode payload: %v", err)
-	}
-	lines := strings.Split(strings.TrimSpace(string(raw)), "\n")
+	lines := strings.Split(strings.TrimSpace(raw), "\n")
 	if len(lines) != 7 {
-		t.Fatalf("env lines = %d, want 7: %q", len(lines), string(raw))
+		t.Fatalf("env lines = %d, want 7: %q", len(lines), raw)
 	}
 	if lines[0] != "MANAGER_GRPC=https://manager-grpc.example.com:65003" {
 		t.Errorf("MANAGER_GRPC line = %q", lines[0])
@@ -75,39 +67,31 @@ func TestEncodeEnvPayload(t *testing.T) {
 	}
 }
 
-func TestEncodeSmartProxyURL(t *testing.T) {
+func TestEnvSmartProxyURL(t *testing.T) {
 	payload := testPayload()
 	payload.SmartProxyURL = "https://proxy.example.com/"
-	encoded, err := Encode(payload)
+	raw, err := Env(payload)
 	if err != nil {
-		t.Fatalf("Encode() error = %v", err)
+		t.Fatalf("Env() error = %v", err)
 	}
-	raw, err := base64.URLEncoding.DecodeString(encoded)
-	if err != nil {
-		t.Fatalf("decode payload: %v", err)
-	}
-	if !strings.Contains(string(raw), "SMART_PROXY_URL=https://proxy.example.com\n") {
+	if !strings.Contains(raw, "SMART_PROXY_URL=https://proxy.example.com\n") {
 		t.Errorf("payload = %q, want SMART_PROXY_URL without trailing slash", raw)
 	}
 }
 
-func TestEncodeNydusMirrorURL(t *testing.T) {
+func TestEnvNydusMirrorURL(t *testing.T) {
 	payload := testPayload()
 	payload.NydusMirrorURL = "https://proxy.example.com/docker.io/"
-	encoded, err := Encode(payload)
+	raw, err := Env(payload)
 	if err != nil {
-		t.Fatalf("Encode() error = %v", err)
+		t.Fatalf("Env() error = %v", err)
 	}
-	raw, err := base64.URLEncoding.DecodeString(encoded)
-	if err != nil {
-		t.Fatalf("decode payload: %v", err)
-	}
-	if !strings.Contains(string(raw), "NYDUS_MIRROR_URL=https://proxy.example.com/docker.io\n") {
+	if !strings.Contains(raw, "NYDUS_MIRROR_URL=https://proxy.example.com/docker.io\n") {
 		t.Errorf("payload = %q, want NYDUS_MIRROR_URL with the mirror path", raw)
 	}
 }
 
-func TestEncodeRejectsInvalid(t *testing.T) {
+func TestEnvRejectsInvalid(t *testing.T) {
 	cases := map[string]Payload{
 		"manager without https":  {ManagerGRPC: "http://manager", StaticURL: "http://static", SchedulerClusterID: "2", CACert: []byte("ca"), ClientCert: []byte("cert"), ClientKey: []byte("key")},
 		"static without scheme":  {ManagerGRPC: "https://manager", StaticURL: "static", SchedulerClusterID: "2", CACert: []byte("ca"), ClientCert: []byte("cert"), ClientKey: []byte("key")},
@@ -121,17 +105,9 @@ func TestEncodeRejectsInvalid(t *testing.T) {
 	}
 	for name, payload := range cases {
 		t.Run(name, func(t *testing.T) {
-			if _, err := Encode(payload); err == nil {
-				t.Fatal("Encode() error = nil, want an error")
+			if _, err := Env(payload); err == nil {
+				t.Fatal("Env() error = nil, want an error")
 			}
 		})
-	}
-}
-
-func TestEncodeSizeLimit(t *testing.T) {
-	payload := testPayload()
-	payload.CACert = []byte(strings.Repeat("ca", MaxEncodedSize))
-	if _, err := Encode(payload); err == nil || !strings.Contains(err.Error(), "limit") {
-		t.Fatalf("Encode() error = %v, want size limit error", err)
 	}
 }

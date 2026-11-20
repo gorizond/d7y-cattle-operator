@@ -12,6 +12,19 @@ fi
 WORK="$(mktemp -d)"
 trap 'rm -rf "$WORK"' EXIT
 
+RUNNER="${WORK}/run-install"
+cat > "$RUNNER" <<'RUNNER_EOF'
+#!/usr/bin/env bash
+set -Eeuo pipefail
+install="$1"
+cfg="$2"
+shift 2
+set -a
+eval "$(printf '%s' "$cfg" | tr '_-' '/+' | base64 -d)"
+exec bash "$install" "$@"
+RUNNER_EOF
+chmod +x "$RUNNER"
+
 payload() {
   local ca cert key env host mirror
   host="${1:-scheduler.example.test}"
@@ -79,7 +92,7 @@ CACHEFILES_DEVICE="${WORK}/dev-cachefiles"
 rm -f "$CACHEFILES_DEVICE"
 
 P2P_ROOT="$ROOT_ONE" KERNEL_CONFIG_FILE="$N_KERNEL_CONFIG" SKIP_DOWNLOAD=1 SKIP_MODULES=1 SKIP_SYSTEMD=1 SKIP_PREFLIGHT=1 CONTAINERD_MAJOR=1 \
-  bash "$INSTALL" "$CFG" > "${WORK}/run1.log" 2>&1
+  "$RUNNER" "$INSTALL" "$CFG" > "${WORK}/run1.log" 2>&1
 
 assert_file "${ROOT_ONE}/etc/dragonfly/certs/ca.crt"
 assert_file "${ROOT_ONE}/etc/dragonfly/certs/tls.crt"
@@ -226,7 +239,7 @@ assert_contains "${ROOT_ONE}/etc/nydus/updater.env" 'NYDUS_VERSION=v2.4.5'
 ROOT_K3S="${WORK}/root-k3s"
 mkdir -p "${ROOT_K3S}/var/lib/rancher/k3s"
 P2P_ROOT="$ROOT_K3S" KERNEL_CONFIG_FILE="$N_KERNEL_CONFIG" SKIP_DOWNLOAD=1 SKIP_MODULES=1 SKIP_SYSTEMD=1 SKIP_PREFLIGHT=1 CONTAINERD_MAJOR=1 \
-  bash "$INSTALL" "$CFG" > "${WORK}/k3s.log" 2>&1
+  "$RUNNER" "$INSTALL" "$CFG" > "${WORK}/k3s.log" 2>&1
 assert_file "${ROOT_K3S}/var/lib/rancher/k3s/agent/etc/containerd/config.toml.tmpl"
 assert_contains "${ROOT_K3S}/etc/systemd/system/dfdaemon-bootstrap.service" 'Before=k3s.service'
 assert_not_contains "${ROOT_K3S}/etc/systemd/system/dfdaemon-bootstrap.service" 'rke2-server.service'
@@ -351,7 +364,7 @@ assert_contains "$INSTALL" 'SMART_PROXY_URL'
 
 BEFORE="$(sha256sum "${ROOT_ONE}/etc/dragonfly/dfget.yaml" | cut -d' ' -f1)"
 P2P_ROOT="$ROOT_ONE" SKIP_DOWNLOAD=1 SKIP_MODULES=1 SKIP_SYSTEMD=1 SKIP_PREFLIGHT=1 CONTAINERD_MAJOR=1 \
-  bash "$INSTALL" "$CFG" > "${WORK}/run2.log" 2>&1
+  "$RUNNER" "$INSTALL" "$CFG" > "${WORK}/run2.log" 2>&1
 AFTER="$(sha256sum "${ROOT_ONE}/etc/dragonfly/dfget.yaml" | cut -d' ' -f1)"
 if [ "$BEFORE" != "$AFTER" ]; then
   echo "p2p-static self-test: second run changed dfget.yaml" >&2
@@ -360,7 +373,7 @@ fi
 
 ROOT_TWO="${WORK}/root-v2"
 P2P_ROOT="$ROOT_TWO" SKIP_DOWNLOAD=1 SKIP_MODULES=1 SKIP_SYSTEMD=1 SKIP_PREFLIGHT=1 CONTAINERD_MAJOR=2 \
-  bash "$INSTALL" "$CFG" > "${WORK}/run3.log" 2>&1
+  "$RUNNER" "$INSTALL" "$CFG" > "${WORK}/run3.log" 2>&1
 V3_DROPIN="${ROOT_TWO}/var/lib/rancher/rke2/agent/etc/containerd/config-v3.toml.d/90-nydus.toml"
 assert_file "$V3_DROPIN"
 assert_contains "$V3_DROPIN" "snapshotter = 'nydus'"
@@ -377,7 +390,7 @@ fi
 ROOT_MIRROR="${WORK}/root-mirror"
 MIRROR_CFG="$(payload scheduler.example.test https://proxy.example.test/docker.io/)"
 P2P_ROOT="$ROOT_MIRROR" KERNEL_CONFIG_FILE="$N_KERNEL_CONFIG" SKIP_DOWNLOAD=1 SKIP_MODULES=1 SKIP_SYSTEMD=1 SKIP_PREFLIGHT=1 CONTAINERD_MAJOR=1 \
-  bash "$INSTALL" "$MIRROR_CFG" > "${WORK}/mirror.log" 2>&1
+  "$RUNNER" "$INSTALL" "$MIRROR_CFG" > "${WORK}/mirror.log" 2>&1
 for mirror_host in docker.io index.docker.io _default; do
   MIRROR_FILE="${ROOT_MIRROR}/etc/nydus/mirrors/${mirror_host}/hosts.toml"
   assert_file "$MIRROR_FILE"
@@ -401,7 +414,7 @@ assert_not_contains "${WORK}/mirror.log" 'dummy-key'
 
 ROOT_BAD_MIRROR="${WORK}/root-bad-mirror"
 if P2P_ROOT="$ROOT_BAD_MIRROR" SKIP_DOWNLOAD=1 SKIP_MODULES=1 SKIP_SYSTEMD=1 SKIP_PREFLIGHT=1 CONTAINERD_MAJOR=1 \
-  bash "$INSTALL" "$(payload scheduler.example.test ftp://proxy.example.test/docker.io)" > "${WORK}/bad-mirror.log" 2>&1; then
+  "$RUNNER" "$INSTALL" "$(payload scheduler.example.test ftp://proxy.example.test/docker.io)" > "${WORK}/bad-mirror.log" 2>&1; then
   echo "p2p-static self-test: invalid nydus mirror URL was accepted" >&2
   exit 1
 fi
@@ -410,7 +423,7 @@ assert_contains "${WORK}/bad-mirror.log" 'nydus_mirror_url must use http:// or h
 ROOT_FALLBACK="${WORK}/root-fallback"
 FALLBACK_CFG="$(payload scheduler.unreachable.invalid)"
 P2P_ROOT="$ROOT_FALLBACK" SKIP_DOWNLOAD=1 SKIP_MODULES=1 SKIP_SYSTEMD=1 CONTAINERD_MAJOR=1 \
-  P2P_PREFLIGHT_TIMEOUT=1 bash "$INSTALL" "$FALLBACK_CFG" > "${WORK}/fallback.log" 2>&1
+  P2P_PREFLIGHT_TIMEOUT=1 "$RUNNER" "$INSTALL" "$FALLBACK_CFG" > "${WORK}/fallback.log" 2>&1
 FALLBACK_TEMPLATE="${ROOT_FALLBACK}/var/lib/rancher/rke2/agent/etc/containerd/config.toml.tmpl"
 assert_file "$FALLBACK_TEMPLATE"
 assert_contains "$FALLBACK_TEMPLATE" 'snapshotter = "overlayfs"'
@@ -434,7 +447,7 @@ FALLBACK_DROPIN="${ROOT_FALLBACK2}/var/lib/rancher/rke2/agent/etc/containerd/con
 mkdir -p "$(dirname "$FALLBACK_DROPIN")"
 printf 'stale nydus drop-in\n' > "$FALLBACK_DROPIN"
 P2P_ROOT="$ROOT_FALLBACK2" SKIP_DOWNLOAD=1 SKIP_MODULES=1 SKIP_SYSTEMD=1 CONTAINERD_MAJOR=2 \
-  P2P_PREFLIGHT_TIMEOUT=1 bash "$INSTALL" "$FALLBACK_CFG" > "${WORK}/fallback2.log" 2>&1
+  P2P_PREFLIGHT_TIMEOUT=1 "$RUNNER" "$INSTALL" "$FALLBACK_CFG" > "${WORK}/fallback2.log" 2>&1
 if [ -f "$FALLBACK_DROPIN" ]; then
   echo "p2p-static self-test: v2 fallback did not remove the nydus drop-in" >&2
   exit 1
@@ -491,7 +504,7 @@ ROOT_RELEASE="${WORK}/root-release"
 P2P_ROOT="$ROOT_RELEASE" SKIP_MODULES=1 SKIP_SYSTEMD=1 SKIP_PREFLIGHT=1 CONTAINERD_MAJOR=1 \
   NYDUS_SNAPSHOTTER_VERSION=v9.9.9 NYDUS_SNAPSHOTTER_REPO=example-org/example-repo \
   PATH="${FAKE_BIN}:${PATH}" CURL_LOG="$CURL_LOG" CURL_ASSET_DIR="$CURL_ASSET_DIR" \
-  bash "$INSTALL" "$CFG" > "${WORK}/release.log" 2>&1
+  "$RUNNER" "$INSTALL" "$CFG" > "${WORK}/release.log" 2>&1
 
 assert_file "${ROOT_RELEASE}/usr/local/bin/containerd-nydus-grpc"
 if [ "$(stat -c '%a' "${ROOT_RELEASE}/usr/local/bin/containerd-nydus-grpc")" != "755" ]; then
@@ -506,7 +519,7 @@ P2P_ROOT="$ROOT_NO_ASSET" SKIP_MODULES=1 SKIP_SYSTEMD=1 SKIP_PREFLIGHT=1 CONTAIN
   NYDUS_SNAPSHOTTER_VERSION=v9.9.9 NYDUS_SNAPSHOTTER_REPO=example-org/example-repo \
   FAKE_CURL_FAIL_ASSET=nydus-snapshotter-linux-amd64 \
   PATH="${FAKE_BIN}:${PATH}" CURL_LOG="${WORK}/curl-fail.log" CURL_ASSET_DIR="$CURL_ASSET_DIR" \
-  bash "$INSTALL" "$CFG" > "${WORK}/no-asset.log" 2>&1
+  "$RUNNER" "$INSTALL" "$CFG" > "${WORK}/no-asset.log" 2>&1
 assert_contains "${WORK}/no-asset.log" 'nydus-snapshotter release asset'
 assert_contains "${WORK}/no-asset.log" 'is unavailable'
 if [ -f "${ROOT_NO_ASSET}/usr/local/bin/containerd-nydus-grpc" ]; then
@@ -552,7 +565,7 @@ P2P_ROOT="$ROOT_INSTALL_FSCACHE" KERNEL_CONFIG_FILE="$GOOD_KERNEL_CONFIG" \
   CACHEFILES_DEVICE="$CACHEFILES_DEVICE" \
   PATH="${WORK}/selector-bin:${PATH}" \
   SKIP_DOWNLOAD=1 SKIP_PREFLIGHT=1 CONTAINERD_MAJOR=1 \
-  bash "$INSTALL" "$CFG" > "${WORK}/install-fscache.log" 2>&1
+  "$RUNNER" "$INSTALL" "$CFG" > "${WORK}/install-fscache.log" 2>&1
 assert_file "$CACHEFILES_DEVICE"
 assert_contains "$MODPROBE_CALLS" 'erofs'
 assert_contains "$MODPROBE_CALLS" 'fscache'
@@ -581,7 +594,7 @@ P2P_ROOT="$ROOT_MIRROR_FSCACHE" KERNEL_CONFIG_FILE="$GOOD_KERNEL_CONFIG" \
   MODPROBE="$MODPROBE_OK" MODPROBE_CALLS="${WORK}/modprobe-mirror-fscache.log" FAKE_CACHEFILES_CREATE=1 \
   CACHEFILES_DEVICE="$CACHEFILES_DEVICE" PATH="${WORK}/selector-bin:${PATH}" \
   SKIP_DOWNLOAD=1 SKIP_PREFLIGHT=1 CONTAINERD_MAJOR=1 \
-  bash "$INSTALL" "$MIRROR_CFG" > "${WORK}/mirror-fscache.log" 2>&1
+  "$RUNNER" "$INSTALL" "$MIRROR_CFG" > "${WORK}/mirror-fscache.log" 2>&1
 assert_file "${ROOT_MIRROR_FSCACHE}/etc/nydus/mirrors.enabled"
 assert_contains "${WORK}/mirror-fscache.log" 'only applied with fs_driver=fusedev'
 assert_contains "${ROOT_MIRROR_FSCACHE}/etc/nydus/config.toml" 'fs_driver = "fscache"'

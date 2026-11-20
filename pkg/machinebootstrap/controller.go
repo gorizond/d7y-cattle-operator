@@ -141,7 +141,7 @@ func (c *Controller) reconcile(key string, secret *corev1.Secret) (*corev1.Secre
 		c.event(machine, cluster, secret, corev1.EventTypeWarning, "MTLSSecretUnavailable", err.Error())
 		return secret, err
 	}
-	line, err := bootstrap.BuildInstallLine(cluster, mtls, "", bootstrap.InstallConfig{
+	env, err := bootstrap.BuildInstallEnv(cluster, mtls, "", bootstrap.InstallConfig{
 		ManagerGRPCDomain: c.opts.ManagerGRPCDomain,
 		ManagerGRPCPort:   c.opts.ManagerGRPCPort,
 		StaticURL:         c.opts.StaticURL,
@@ -159,40 +159,14 @@ func (c *Controller) reconcile(key string, secret *corev1.Secret) (*corev1.Secre
 	if updated.Data == nil {
 		updated.Data = map[string][]byte{}
 	}
-	updated.Data[bootstrapValueKey] = []byte(insertBeforeLastExit(value, line))
+	updated.Data[bootstrapValueKey] = []byte(insertInlineBlock(value, inlineInstallBlock(env)))
 	result, err := c.secrets.Update(updated)
 	if err != nil {
 		c.event(machine, cluster, secret, corev1.EventTypeWarning, "BootstrapPatchFailed", err.Error())
 		return secret, err
 	}
-	c.event(machine, cluster, secret, corev1.EventTypeNormal, "BootstrapInjected", "p2p install line added to the machine bootstrap secret")
+	c.event(machine, cluster, secret, corev1.EventTypeNormal, "BootstrapInjected", "inline p2p block added to the machine bootstrap secret")
 	return result, nil
-}
-
-// insertBeforeLastExit inserts line before the last line whose trimmed value is
-// exactly "exit 0". Without such a line it appends at the end.
-func insertBeforeLastExit(raw, line string) string {
-	lines := strings.Split(raw, "\n")
-	last := -1
-	for i, current := range lines {
-		if strings.TrimSpace(current) == "exit 0" {
-			last = i
-		}
-	}
-	if last < 0 {
-		if raw == "" {
-			return line + "\n"
-		}
-		if strings.HasSuffix(raw, "\n") {
-			return raw + line + "\n"
-		}
-		return raw + "\n" + line + "\n"
-	}
-	out := make([]string, 0, len(lines)+1)
-	out = append(out, lines[:last]...)
-	out = append(out, line)
-	out = append(out, lines[last:]...)
-	return strings.Join(out, "\n")
 }
 
 func (c *Controller) event(machine *capiv1beta2.Machine, cluster *provv1.Cluster, secret *corev1.Secret, eventType, reason, message string) {

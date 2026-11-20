@@ -3,15 +3,12 @@ package main
 import (
 	"fmt"
 	"log/slog"
-	"net/http"
 	"net/url"
 	"os"
 
 	lassoclient "github.com/rancher/lasso/pkg/client"
 	capifactory "github.com/rancher/rancher/pkg/generated/controllers/cluster.x-k8s.io"
 	provisioning "github.com/rancher/rancher/pkg/generated/controllers/provisioning.cattle.io"
-	admissionregistration "github.com/rancher/wrangler/v3/pkg/generated/controllers/admissionregistration.k8s.io"
-	apiextensions "github.com/rancher/wrangler/v3/pkg/generated/controllers/apiextensions.k8s.io"
 	"github.com/rancher/wrangler/v3/pkg/generated/controllers/core"
 	"github.com/rancher/wrangler/v3/pkg/kubeconfig"
 	"github.com/rancher/wrangler/v3/pkg/signals"
@@ -21,8 +18,6 @@ import (
 	"github.com/gorizond/d7y-cattle-operator/pkg/config"
 	"github.com/gorizond/d7y-cattle-operator/pkg/helmop"
 	"github.com/gorizond/d7y-cattle-operator/pkg/machinebootstrap"
-	"github.com/gorizond/d7y-cattle-operator/pkg/webhook"
-	"github.com/gorizond/d7y-cattle-operator/pkg/webhook/machineconfig"
 )
 
 func main() {
@@ -55,14 +50,6 @@ func run() error {
 	if err != nil {
 		return fmt.Errorf("wrangler CAPI factory: %w", err)
 	}
-	admissionFactory, err := admissionregistration.NewFactoryFromConfig(restConfig)
-	if err != nil {
-		return fmt.Errorf("wrangler admissionregistration factory: %w", err)
-	}
-	apiextensionsFactory, err := apiextensions.NewFactoryFromConfig(restConfig)
-	if err != nil {
-		return fmt.Errorf("wrangler apiextensions factory: %w", err)
-	}
 
 	clientFactory, err := lassoclient.NewSharedClientFactoryForConfig(restConfig)
 	if err != nil {
@@ -91,16 +78,11 @@ func run() error {
 
 	secretController := coreFactory.Core().V1().Secret()
 	configMapController := coreFactory.Core().V1().ConfigMap()
-	serviceController := coreFactory.Core().V1().Service()
 	eventController := coreFactory.Core().V1().Event()
 	clusterController := provisioningFactory.Provisioning().V1().Cluster()
 	machineController := capiFactory.Cluster().V1beta2().Machine()
-	mutatingWebhookController := admissionFactory.Admissionregistration().V1().MutatingWebhookConfiguration()
-	validatingWebhookController := admissionFactory.Admissionregistration().V1().ValidatingWebhookConfiguration()
-	crdController := apiextensionsFactory.Apiextensions().V1().CustomResourceDefinition()
 
 	ctx := signals.SetupSignalContext()
-	webhook.Register(ctx, secretController, serviceController, mutatingWebhookController, validatingWebhookController, crdController)
 	cluster.Register(ctx, clusterController, secretController, configMapController, eventController, helmOps, bundles, cluster.Options{
 		OperatorNamespace:           cfg.Namespace,
 		MTLSSecretName:              cfg.MTLSSecretName,
@@ -147,35 +129,15 @@ func run() error {
 		ClusterIDFallback: cfg.ClusterIDFallback,
 	})
 
-	if err := start.All(ctx, 1, coreFactory, provisioningFactory, capiFactory, admissionFactory, apiextensionsFactory); err != nil {
+	if err := start.All(ctx, 1, coreFactory, provisioningFactory, capiFactory); err != nil {
 		return fmt.Errorf("start controllers: %w", err)
 	}
 
 	slog.Info("cluster controller running")
 
-	handler := &machineconfig.Handler{
-		Clusters:          clusterController.Cache(),
-		Secrets:           secretController.Cache(),
-		Events:            eventController,
-		Namespace:         cfg.Namespace,
-		MTLSSecretName:    cfg.MTLSSecretName,
-		ManagerGRPCDomain: cfg.ManagerGRPCDomain,
-		ManagerGRPCPort:   cfg.ManagerGRPCPort,
-		StaticURL:         cfg.NginxStaticURL,
-		SmartProxyURL:     "",
-		NydusMirrorURL:    cfg.NydusMirrorURL,
-		SchedulerDomain:   cfg.P2PDomain,
-		ClusterIDFallback: cfg.ClusterIDFallback,
-	}
-	certLoader, err := webhook.NewCertLoader(cfg.WebhookCertDir, cfg.WebhookServiceName, cfg.Namespace)
-	if err != nil {
-		return fmt.Errorf("webhook certificate loader: %w", err)
-	}
-	mux := http.NewServeMux()
-	mux.Handle("/mutate", machineconfig.NewRouter(handler))
+	<-ctx.Done()
+	return nil
 
-	slog.Info("webhook server listening", "port", cfg.WebhookPort)
-	return webhook.Serve(ctx, fmt.Sprintf(":%d", cfg.WebhookPort), mux, certLoader)
 }
 
 func hostFromURL(raw string) (string, error) {

@@ -12,7 +12,7 @@ service:
   type: ClusterIP
   port: 80
 
-# Serve /p2p-install.sh and the static /bin,/nydus assets on the manager host.
+# Serve the static /bin and /nydus assets on the manager host.
 # The manager REST API keeps its own /api paths; these prefixes do not overlap.
 manager:
   enabled: false
@@ -33,25 +33,6 @@ ingress:
         - path: /
           pathType: Prefix
   tls: []
-
-# Host dfdaemon bootstrap is installed by p2p-install.sh. A host-only systemd
-# timer (30s) disables it while the in-cluster client pod on the node is
-# running, and re-enables it if the pod disappears. No chart value is needed
-# and no in-cluster switch DaemonSet is rendered.
-#
-# The /bin and /nydus directories are populated externally (GitOps, an init
-# job, or a pre-populated existingClaim). /nydus/<version>/ is preferred by the
-# host updater; /bin/ is the legacy fallback. The patched nydus-snapshotter is
-# downloaded from its GitHub release by p2p-install.sh, not from this store.
-# The chart never ships binaries and creates no PVC by default.
-nydus:
-  # Optional nydusd bootstrap id/domain_id. Empty uses the scheduler cluster ID
-  # from the bootstrap payload, then the node hostname.
-  #
-  # The filesystem driver is not a chart value: p2p-install.sh installs both
-  # fscache and fusedev configs, and /usr/local/bin/nydus-fs-select chooses at
-  # every snapshotter start from the running kernel and fscache prerequisites.
-  clusterId: ""
 
 static:
   existingClaim: ""

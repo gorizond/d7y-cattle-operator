@@ -12,7 +12,7 @@ spec:
   entryPoints:
     - {{ .Values.manager.entryPoint | quote }}
   routes:
-    - match: {{ printf "Host(`%s`) && (PathPrefix(`/p2p-install.sh`) || PathPrefix(`/bin`) || PathPrefix(`/nydus`))" $host | quote }}
+    - match: {{ printf "Host(`%s`) && (PathPrefix(`/bin`) || PathPrefix(`/nydus`))" $host | quote }}
       kind: Rule
       priority: 1000
       services:
