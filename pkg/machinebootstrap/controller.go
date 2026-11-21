@@ -9,6 +9,7 @@ import (
 	"fmt"
 	"log/slog"
 	"strings"
+	"sync"
 	"time"
 
 	provv1 "github.com/rancher/rancher/pkg/apis/provisioning.cattle.io/v1"
@@ -82,6 +83,9 @@ type Controller struct {
 	clusters ClusterCache
 	events   eventStore
 	opts     Options
+
+	clusterInputsMu sync.Mutex
+	clusterInputs   map[string]string
 }
 
 // Register wires the machine-bootstrap Secret controller.
@@ -106,8 +110,34 @@ func (c *Controller) clusterChanged(_ string, cluster *provv1.Cluster) (*provv1.
 	if cluster == nil || c.secrets == nil || c.mtls == nil || c.machines == nil || c.clusters == nil {
 		return cluster, nil
 	}
+	if cluster.Labels[labelEnabled] != "true" || cluster.Annotations[annotationSeed] != "true" {
+		return cluster, nil
+	}
+	key := string(cluster.UID)
+	if key == "" {
+		key = cluster.Namespace + "/" + cluster.Name
+	}
+	signature := strings.TrimSpace(cluster.Annotations[bootstrap.SchedulerIPsAnnotation]) + "\x00" +
+		strings.TrimSpace(cluster.Annotations[bootstrap.SchedulerClusterIDAnnotation]) + "\x00" +
+		bootstrap.Distro(cluster)
+	c.clusterInputsMu.Lock()
+	if c.clusterInputs == nil {
+		c.clusterInputs = map[string]string{}
+	}
+	if c.clusterInputs[key] == signature {
+		c.clusterInputsMu.Unlock()
+		return cluster, nil
+	}
+	c.clusterInputs[key] = signature
+	c.clusterInputsMu.Unlock()
+
 	items, err := c.mtls.List(metav1.NamespaceAll, labels.Everything())
 	if err != nil {
+		c.clusterInputsMu.Lock()
+		if c.clusterInputs[key] == signature {
+			delete(c.clusterInputs, key)
+		}
+		c.clusterInputsMu.Unlock()
 		slog.Warn("failed to list bootstrap secrets for cluster change", "cluster", cluster.Name, "error", err)
 		return cluster, nil
 	}
@@ -120,7 +150,7 @@ func (c *Controller) clusterChanged(_ string, cluster *provv1.Cluster) (*provv1.
 			continue
 		}
 		machine, err := c.machines.Get(secret.Namespace, machineName)
-		if err != nil {
+		if err != nil || machine.Namespace != cluster.Namespace {
 			continue
 		}
 		clusterName := strings.TrimSpace(machine.Labels[capiClusterName])

@@ -24,6 +24,7 @@ type fakeSecrets struct {
 	updateErr error
 	enqueued  []string
 	others    []*corev1.Secret
+	listCalls int
 }
 
 func (f *fakeSecrets) Enqueue(namespace, name string) {
@@ -31,6 +32,7 @@ func (f *fakeSecrets) Enqueue(namespace, name string) {
 }
 
 func (f *fakeSecrets) List(namespace string, selector labels.Selector) ([]*corev1.Secret, error) {
+	f.listCalls++
 	var result []*corev1.Secret
 	for _, secret := range append([]*corev1.Secret{f.secret, f.mtls}, f.others...) {
 		if secret == nil || (namespace != metav1.NamespaceAll && secret.Namespace != namespace) {
@@ -477,5 +479,39 @@ func TestClusterChangedEnqueuesOnlyMatchingBootstrapSecrets(t *testing.T) {
 	}
 	if len(secrets.enqueued) != 1 || secrets.enqueued[0] != "fleet-default/machine-1-machine-bootstrap" {
 		t.Errorf("enqueued = %v, want only c1 bootstrap", secrets.enqueued)
+	}
+	listCalls := secrets.listCalls
+
+	// Same scheduler inputs: no second list/enqueue.
+	if _, err := controller.clusterChanged("", clusters.clusters["fleet-default/c1"]); err != nil {
+		t.Fatalf("clusterChanged(unchanged) error = %v", err)
+	}
+	if len(secrets.enqueued) != 1 || secrets.listCalls != listCalls {
+		t.Errorf("unchanged inputs enqueued %v or listed %d times", secrets.enqueued, secrets.listCalls)
+	}
+
+	// Changed scheduler IPs: one new enqueue for c1.
+	c1 := clusters.clusters["fleet-default/c1"]
+	c1.Annotations["p2p.dragonfly.io/scheduler-ips"] = "203.0.113.10"
+	if _, err := controller.clusterChanged("", c1); err != nil {
+		t.Fatalf("clusterChanged(changed) error = %v", err)
+	}
+	if len(secrets.enqueued) != 2 || secrets.enqueued[1] != "fleet-default/machine-1-machine-bootstrap" {
+		t.Errorf("changed inputs enqueued %v", secrets.enqueued)
+	}
+
+	// Non-seed and non-enabled clusters are ignored.
+	nonSeed := c1.DeepCopy()
+	nonSeed.Annotations["p2p.dragonfly.io/seed"] = "false"
+	if _, err := controller.clusterChanged("", nonSeed); err != nil {
+		t.Fatalf("clusterChanged(non-seed) error = %v", err)
+	}
+	nonEnabled := c1.DeepCopy()
+	nonEnabled.Labels[labelEnabled] = "false"
+	if _, err := controller.clusterChanged("", nonEnabled); err != nil {
+		t.Fatalf("clusterChanged(non-enabled) error = %v", err)
+	}
+	if len(secrets.enqueued) != 2 {
+		t.Errorf("non-seed/non-enabled cluster enqueued %v", secrets.enqueued)
 	}
 }
