@@ -7,6 +7,7 @@ import (
 	provv1 "github.com/rancher/rancher/pkg/apis/provisioning.cattle.io/v1"
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
 	"k8s.io/apimachinery/pkg/labels"
+	capiv1beta2 "sigs.k8s.io/cluster-api/api/core/v1beta2"
 )
 
 type fakeClusterCache struct {
@@ -15,6 +16,27 @@ type fakeClusterCache struct {
 
 func (f *fakeClusterCache) List(_ string, _ labels.Selector) ([]*provv1.Cluster, error) {
 	return f.clusters, nil
+}
+
+type fakeMachineCache struct {
+	machines []*capiv1beta2.Machine
+	err      error
+}
+
+func (f *fakeMachineCache) List(_ string, _ labels.Selector) ([]*capiv1beta2.Machine, error) {
+	return f.machines, f.err
+}
+
+func seedMachine(cluster, name, address string) *capiv1beta2.Machine {
+	return &capiv1beta2.Machine{
+		ObjectMeta: metav1.ObjectMeta{
+			Name: name, Namespace: "fleet-default",
+			Labels: map[string]string{capiClusterName: cluster},
+		},
+		Status: capiv1beta2.MachineStatus{Addresses: []capiv1beta2.MachineAddress{{
+			Type: capiv1beta2.MachineExternalIP, Address: address,
+		}}},
+	}
 }
 
 func schedulerCluster(name string) *provv1.Cluster {
@@ -48,16 +70,37 @@ func testSchedulerController(target *provv1.Cluster, clusters []*provv1.Cluster)
 	return c, store, events
 }
 
-func TestSeedPublishesOwnResolvedPublicIPs(t *testing.T) {
-	target := schedulerSeed("a", "203.0.113.99")
+func TestSeedPublishesOwnMachineIPs(t *testing.T) {
+	target := schedulerSeed("seed-a", "203.0.113.99")
 	target.Annotations[legacySchedulerPublicIP] = "192.0.2.1"
+	deleting := seedMachine("seed-a", "seed-a-deleting", "203.0.113.40")
+	now := metav1.Now()
+	deleting.DeletionTimestamp = &now
+	machines := []*capiv1beta2.Machine{
+		seedMachine("seed-a", "seed-a-0", "203.0.113.10"),
+		seedMachine("seed-a", "seed-a-1", "203.0.113.10"),
+		seedMachine("seed-a", "seed-a-2", "203.0.113.11"),
+		seedMachine("seed-a", "seed-a-private", "10.0.0.1"),
+		seedMachine("seed-a", "seed-a-ipv6", "2001:db8::1"),
+		seedMachine("other", "other-0", "203.0.113.50"),
+		seedMachine("seed-a", "seed-a-empty", ""),
+		deleting,
+	}
+	rkeLabeled := seedMachine("seed-a", "seed-a-fallback", "203.0.113.12")
+	rkeLabeled.Labels = map[string]string{rkeClusterName: "seed-a"}
+	machines = append(machines, rkeLabeled)
 	controller, store, events := testSchedulerController(target, []*provv1.Cluster{target})
+	controller.machines = &fakeMachineCache{machines: machines}
 
-	if _, err := controller.ensureSchedulerIPs(target, Roles{Enabled: true, Seed: true}, []string{"203.0.113.10", "203.0.113.11", "203.0.113.10"}); err != nil {
+	ips, err := controller.seedMachineIPs(target)
+	if err != nil {
+		t.Fatalf("seedMachineIPs() error = %v", err)
+	}
+	if _, err := controller.ensureSchedulerIPs(target, Roles{Enabled: true, Seed: true}, ips); err != nil {
 		t.Fatalf("ensureSchedulerIPs() error = %v", err)
 	}
-	if got := store.annotation(AnnotationSchedulerIPs); got != "203.0.113.10,203.0.113.11" {
-		t.Errorf("scheduler IPs = %q, want seed's own deduped sorted IPs", got)
+	if got := store.annotation(AnnotationSchedulerIPs); got != "203.0.113.10,203.0.113.11,203.0.113.12" {
+		t.Errorf("scheduler IPs = %q, want own deduped sorted public IPv4s", got)
 	}
 	if got := store.annotation(legacySchedulerPublicIP); got != "" {
 		t.Errorf("legacy scheduler-public-ip = %q, want removed", got)

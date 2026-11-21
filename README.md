@@ -16,8 +16,8 @@ Pod image-mutation admission, Harbor, and registry-proxy add-ons are out of scop
 - Parses and validates the operator configuration from flags/environment variables.
 - Ensures a single mTLS CA and leaf certificate Secret (`dragonfly-p2p-mtls` by
   default) in the operator namespace. The leaf carries the manager DNS names
-  and the DNS-resolved public scheduler IP(s); node IPs and internal
-  ClusterIPs are never added. The Secret is updated only when the SAN set
+  and the seed's public CAPI machine IP(s); private, internal, and ClusterIPs
+  are never added. The Secret is updated only when the SAN set
   changes, and a changed SAN set regenerates the CA and leaf because the old
   CA key is not persisted. The Secret is replicated into each Cluster namespace
   and delivered downstream through Fleet `downstreamResources`; Traefik
@@ -243,8 +243,8 @@ matching role label must also be present for Fleet to render the shared release.
 Role labels are user-managed: the operator stamps
 `p2p.dragonfly.io/cluster-id` (from `status.clusterName`, read by the scheduler
 host template) and `p2p.dragonfly.io/scheduler-ips`. A seed Cluster publishes
-its own currently resolved public scheduler IPs; a non-seed Cluster aggregates
-the scheduler-ips of other gated seed clusters. The same annotation feeds the
+its own public CAPI machine IPs; a non-seed Cluster aggregates the scheduler-ips
+of other gated seed clusters. The same annotation feeds the
 pre-install bootstrap and the shared scheduler advertiseIP. An empty list is
 removed so the bootstrap installs the host pieces without starting dfdaemon.
 Removing a role annotation is not enough to uninstall a shared release; remove
@@ -419,27 +419,22 @@ The per-cluster DNS alias is
 `d7y-scheduler.<fleet-cluster-id>.<scheduler.domain>`, where the cluster ID
 comes from provisioning Cluster `status.clusterName` (with
 `scheduler.clusterID`/`P2P_CLUSTER_ID` as an explicit fallback). The operator
-resolves the alias at reconcile time with `net.LookupHost`; the resolved
-address(es) become P2P leaf IP SANs and the first IPv4 address becomes the
-scheduler `advertiseIP`. The extras chart publishes the alias with
-`external-dns.alpha.kubernetes.io/hostname`; the target is derived from the
-cluster's own load balancer, so the record follows the LB instead of a pinned
-address. A deployment zone wildcard can also resolve it.
-The P2P leaf carries both the resolved public IP SANs and the scheduler
-hostname DNS SAN. IP SANs are required because Dragonfly client 1.5.14 verifies
-the resolved IP; the DNS SAN keeps name-based callers working. It contains no
-ClusterIP and no node IPs.
+derives the seed's public IPv4 addresses from its CAPI Machine status; those
+become the P2P leaf IP SANs and the first `scheduler-ips` entry is the
+`advertiseIP`. The extras chart still publishes the scheduler hostname DNS SAN
+through external-dns, but it does not use DNS lookup results as IP SANs.
+The P2P leaf carries both the seed machine IP SANs and the scheduler hostname
+DNS SAN. IP SANs are required because Dragonfly client 1.5.14 verifies the
+resolved IP; the DNS SAN keeps name-based callers working. It contains no
+ClusterIP and no wildcard-resolved address.
 
-If DNS resolution fails or returns no addresses, the operator emits a
-`SchedulerDNSResolutionFailed` event, keeps the existing certificate and its IP
-SANs, and continues the reconcile with an empty `advertiseIP`. The shared
-HelmOps, including the extras chart that publishes the alias, are still
-applied, so a missing alias does not block the first deploy. A later reconcile
-resolves the alias, adds the IP SAN, and rotates the certificate once. Existing
-public IP SANs are preserved when a new answer arrives, so a DNS/IP rotation
-keeps the old and new addresses valid during propagation.
-`scheduler.config.server.advertiseIP` and `advertisePort=443` use the public
-front; DaemonSets use the same public host from their local dynconfig.
+Existing public IP SANs are accumulated for backward compatibility. If a seed
+has no public machine IP, the certificate keeps its existing IP SANs and the
+reconcile continues. When the machine SAN set changes, the existing CA/leaf is
+regenerated, so expect a one-time CA rotation and downstream Secret update.
+`scheduler.config.server.advertiseIP` and `advertisePort=443` use the first
+`scheduler-ips` entry; DaemonSets use the same public host from their local
+dynconfig.
 
 ### Fail-open node bootstrap
 
@@ -448,7 +443,7 @@ node of a new cluster can join RKE2 even when the scheduler is not reachable
 yet:
 
 - The operator writes `p2p.dragonfly.io/scheduler-ips` from the seed Cluster's
-  own resolved public scheduler IPs, or from other gated seed clusters'
+  own public CAPI machine IPs, or from other gated seed clusters'
   scheduler-ips for a non-seed Cluster. An empty list still installs
   nydus/dfdaemon binaries and configs, but does not start
   `dfdaemon-bootstrap` and does not use the direct-registry fallback; the

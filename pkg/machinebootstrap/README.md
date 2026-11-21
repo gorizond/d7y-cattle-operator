@@ -13,7 +13,7 @@ The same embedded script is the single source of truth for the host setup; the
 
 The block always carries `P2P_DISTRO` and the Cluster's
 `p2p.dragonfly.io/scheduler-ips` annotation (seed clusters publish their own
-resolved scheduler IPs; non-seed clusters aggregate other seeds). With an empty IP list the block is
+public CAPI machine IPs; non-seed clusters aggregate other seeds). With an empty IP list the block is
 still installed (binaries/configs/units), but `dfdaemon-bootstrap` is not
 started and no direct-registry fallback is taken. With IPs, `dynconfig.yaml`
 uses `scheduler.addrs` with `:443` for each address and the host bootstrap is

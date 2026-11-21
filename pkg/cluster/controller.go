@@ -6,15 +6,14 @@ import (
 	"errors"
 	"fmt"
 	"log/slog"
-	"net"
 	"net/http"
 	"strconv"
 	"strings"
 	"sync"
-	"time"
 
 	fleetv1alpha1 "github.com/rancher/fleet/pkg/apis/fleet.cattle.io/v1alpha1"
 	provv1 "github.com/rancher/rancher/pkg/apis/provisioning.cattle.io/v1"
+	capictl "github.com/rancher/rancher/pkg/generated/controllers/cluster.x-k8s.io/v1beta2"
 	provctl "github.com/rancher/rancher/pkg/generated/controllers/provisioning.cattle.io/v1"
 	"github.com/rancher/wrangler/v3/pkg/condition"
 	corectl "github.com/rancher/wrangler/v3/pkg/generated/controllers/core/v1"
@@ -48,7 +47,6 @@ type Options struct {
 	ManagerAPICredentialsSecret string
 	P2PDomain                   string
 	ClusterIDFallback           string
-	Resolver                    Resolver
 	DragonflyChart              helmop.Chart
 	ExtrasChart                 helmop.Chart
 	MirrorChart                 helmop.Chart
@@ -73,6 +71,7 @@ type Controller struct {
 
 	clusters     clusterStore
 	clusterCache clusterCache
+	machines     machineCache
 
 	managerMu         sync.Mutex
 	managerHTTPClient *http.Client
@@ -82,7 +81,7 @@ type Controller struct {
 
 // Register wires the Cluster controller. Handlers must be registered before
 // the factories are started.
-func Register(ctx context.Context, clusters provctl.ClusterController, secrets corectl.SecretController, configmaps corectl.ConfigMapController, events corectl.EventController, helmops, bundles apply.Store, opts Options) {
+func Register(ctx context.Context, clusters provctl.ClusterController, machines capictl.MachineController, secrets corectl.SecretController, configmaps corectl.ConfigMapController, events corectl.EventController, helmops, bundles apply.Store, opts Options) {
 	c := &Controller{
 		ctx:          ctx,
 		secrets:      secrets,
@@ -92,9 +91,11 @@ func Register(ctx context.Context, clusters provctl.ClusterController, secrets c
 		bundles:      bundles,
 		clusters:     clusters,
 		clusterCache: clusters.Cache(),
+		machines:     machines.Cache(),
 		opts:         opts,
 	}
 	clusters.OnChange(ctx, controllerName, c.reconcile)
+	machines.OnChange(ctx, controllerName+":scheduler-ips", c.machineChanged)
 	if watcher, ok := helmops.(helmOpWatcher); ok {
 		go c.watchHelmOps(watcher)
 	}
@@ -131,14 +132,19 @@ func (c *Controller) reconcile(key string, cluster *provv1.Cluster) (result *pro
 
 	var errs []error
 
-	// The certificate and current DNS-resolved scheduler IPs must be ready
-	// before the seed publishes its own scheduler-ips annotation.
-	var resolvedIPs []string
+	// Seed machine IPs drive both the certificate SANs and the seed's own
+	// scheduler-ips annotation.
+	var seedIPs []string
+	if roles.Seed {
+		var err error
+		seedIPs, err = c.seedMachineIPs(cluster)
+		if err != nil {
+			c.event(cluster, corev1.EventTypeWarning, "SchedulerMachineIPsFailed", err.Error())
+		}
+	}
 	mtlsReady := true
 	if roles.Manager || roles.Seed {
-		var err error
-		resolvedIPs, err = c.ensureMTLSCertificate(cluster, roles)
-		if err != nil {
+		if err := c.ensureMTLSCertificate(cluster, roles, seedIPs); err != nil {
 			errs = append(errs, err)
 			mtlsReady = false
 		}
@@ -150,7 +156,7 @@ func (c *Controller) reconcile(key string, cluster *provv1.Cluster) (result *pro
 		}
 	}
 
-	if updated, err := c.ensureSchedulerIPs(cluster, roles, resolvedIPs); err != nil {
+	if updated, err := c.ensureSchedulerIPs(cluster, roles, seedIPs); err != nil {
 		c.event(cluster, corev1.EventTypeWarning, "SchedulerIPsFailed", err.Error())
 	} else if updated != nil {
 		cluster = updated
@@ -338,14 +344,6 @@ func (c *Controller) helmopCluster(cluster *provv1.Cluster) helmop.Cluster {
 	return hc
 }
 
-// resolver returns the configured DNS resolver or the production default.
-func (c *Controller) resolver() Resolver {
-	if c.opts.Resolver != nil {
-		return c.opts.Resolver
-	}
-	return NetResolver{}
-}
-
 // clusterID returns the Rancher cluster ID used in the scheduler DNS alias.
 // Provisioning Cluster status.clusterName is authoritative; the explicit
 // operator fallback is used only when status is not populated yet.
@@ -367,59 +365,44 @@ func schedulerHost(domain, clusterID string) string {
 }
 
 // ensureMTLSCertificate creates or updates the operator P2P Secret from the
-// scheduler host resolved at reconcile time. Seed clusters own the full SAN set:
-// resolved public IPs, the per-cluster scheduler DNS names, and manager DNS. A
-// DNS failure is not fatal: existing IP SANs are preserved and the reconcile
-// continues with an empty public IP so the shared HelmOps (including the
-// external-dns record) can be applied. A later reconcile adds the resolved IP
-// and rotates once. Manager-only clusters only bootstrap a missing Secret and
-// never rewrite an existing one (a seed reconcile owns the SAN set).
-func (c *Controller) ensureMTLSCertificate(cluster *provv1.Cluster, roles Roles) ([]string, error) {
+// scheduler host and the seed's CAPI machine IPs. Seed clusters own the full
+// SAN set: machine IPs, accumulated existing public IPs, the per-cluster
+// scheduler DNS names, and manager DNS. A machine-list failure is non-fatal:
+// existing IP SANs are preserved and a later reconcile adds the machine IPs.
+// Manager-only clusters only bootstrap a missing Secret and never rewrite an
+// existing one (a seed reconcile owns the SAN set).
+func (c *Controller) ensureMTLSCertificate(cluster *provv1.Cluster, roles Roles, seedIPs []string) error {
 	if !roles.Manager && !roles.Seed {
-		return nil, nil
+		return nil
 	}
 	clusterID := c.clusterID(cluster)
 	if clusterID == "" {
 		err := fmt.Errorf("cluster %s/%s has empty status.clusterName and no --p2p-cluster-id fallback", cluster.Namespace, cluster.Name)
 		c.event(cluster, corev1.EventTypeWarning, "SchedulerHostUnavailable", err.Error())
-		return nil, err
+		return err
 	}
 	host := schedulerHost(c.opts.P2PDomain, clusterID)
 	if host == "" {
 		err := fmt.Errorf("scheduler host is empty: --p2p-domain is required")
 		c.event(cluster, corev1.EventTypeWarning, "SchedulerHostUnavailable", err.Error())
-		return nil, err
+		return err
 	}
 
 	existing, getErr := c.secrets.Get(c.opts.OperatorNamespace, c.opts.MTLSSecretName, metav1.GetOptions{})
 	if getErr != nil && !apierrors.IsNotFound(getErr) {
 		err := fmt.Errorf("get mTLS Secret %s/%s: %w", c.opts.OperatorNamespace, c.opts.MTLSSecretName, getErr)
 		c.event(cluster, corev1.EventTypeWarning, "MTLSSecretUnavailable", err.Error())
-		return nil, err
+		return err
 	}
 
 	if !roles.Seed {
 		if getErr == nil {
-			return nil, nil
+			return nil
 		}
-		return nil, c.bootstrapMTLSSecret(cluster)
+		return c.bootstrapMTLSSecret(cluster)
 	}
 
-	ctx, cancel := context.WithTimeout(c.ctx, 10*time.Second)
-	defer cancel()
-	resolvedIPs := []string(nil)
-	resolved, err := c.resolver().LookupHost(ctx, host)
-	if err != nil {
-		msg := fmt.Sprintf("resolve scheduler host %s: %v", host, err)
-		c.event(cluster, corev1.EventTypeWarning, "SchedulerDNSResolutionFailed", msg)
-	} else {
-		resolvedIPs = validPublicIPs(resolved)
-		if len(resolvedIPs) == 0 {
-			msg := fmt.Sprintf("scheduler host %s resolved to no IP addresses", host)
-			c.event(cluster, corev1.EventTypeWarning, "SchedulerDNSResolutionFailed", msg)
-		}
-	}
-	publicIPs := resolvedIPs
+	publicIPs := append([]string(nil), seedIPs...)
 	if getErr == nil {
 		publicIPs = append(publicIPs, existingPublicIPs(existing)...)
 	}
@@ -433,12 +416,12 @@ func (c *Controller) ensureMTLSCertificate(cluster *provv1.Cluster, roles Roles)
 	})
 	if err != nil {
 		c.event(cluster, corev1.EventTypeWarning, "MTLSSecretUnavailable", err.Error())
-		return nil, err
+		return err
 	}
 	result, err := pki.EnsureSecret(c.secrets, c.opts.OperatorNamespace, c.opts.MTLSSecretName, bundle)
 	if err != nil {
 		c.event(cluster, corev1.EventTypeWarning, "MTLSSecretUnavailable", err.Error())
-		return nil, err
+		return err
 	}
 	if result.Created || result.Updated {
 		slog.Info("P2P certificate ensured",
@@ -449,7 +432,7 @@ func (c *Controller) ensureMTLSCertificate(cluster *provv1.Cluster, roles Roles)
 			"revision", result.Revision,
 		)
 	}
-	return resolvedIPs, nil
+	return nil
 }
 
 // bootstrapMTLSSecret creates a manager-identity-only Secret when no seed
@@ -476,18 +459,6 @@ func (c *Controller) bootstrapMTLSSecret(cluster *provv1.Cluster) error {
 		)
 	}
 	return nil
-}
-
-func validPublicIPs(resolved []string) []string {
-	ips := make([]string, 0, len(resolved))
-	for _, raw := range resolved {
-		ip := net.ParseIP(strings.TrimSpace(raw))
-		if !pki.IsPublicIP(ip) {
-			continue
-		}
-		ips = append(ips, ip.String())
-	}
-	return dedupeStrings(ips)
 }
 
 func existingPublicIPs(secret *corev1.Secret) []string {

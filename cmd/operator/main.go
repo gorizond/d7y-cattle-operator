@@ -82,7 +82,7 @@ func run() error {
 	machineController := capiFactory.Cluster().V1beta2().Machine()
 
 	ctx := signals.SetupSignalContext()
-	cluster.Register(ctx, clusterController, secretController, configMapController, eventController, helmOps, bundles, cluster.Options{
+	cluster.Register(ctx, clusterController, machineController, secretController, configMapController, eventController, helmOps, bundles, cluster.Options{
 		OperatorNamespace:           cfg.Namespace,
 		MTLSSecretName:              cfg.MTLSSecretName,
 		ManagerGRPCDomain:           cfg.ManagerGRPCDomain,
@@ -93,7 +93,6 @@ func run() error {
 		ManagerAPICredentialsSecret: cfg.ManagerAPICredentialsSecret,
 		P2PDomain:                   cfg.P2PDomain,
 		ClusterIDFallback:           cfg.ClusterIDFallback,
-		Resolver:                    cluster.NetResolver{},
 		DragonflyChart: helmop.Chart{
 			Repo:    cfg.DragonflyChartRepo,
 			Name:    cfg.DragonflyChartName,

@@ -10,6 +10,7 @@ import (
 
 	corev1 "k8s.io/api/core/v1"
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
+	capiv1beta2 "sigs.k8s.io/cluster-api/api/core/v1beta2"
 
 	"github.com/gorizond/d7y-cattle-operator/pkg/helmop"
 	"github.com/gorizond/d7y-cattle-operator/pkg/pki"
@@ -34,26 +35,21 @@ func TestSchedulerHost(t *testing.T) {
 	}
 }
 
-func TestEnsureMTLSCertificateResolvesHostAndSANs(t *testing.T) {
+func TestEnsureMTLSCertificateUsesMachineIPs(t *testing.T) {
 	controller, _, _ := newTestController(t)
-	controller.opts.Resolver.(*fakeResolver).ips = []string{
-		"203.0.113.10",
-		"2001:db8::1",
-		"10.0.0.5",
-		"127.0.0.1",
-		"169.254.1.1",
-		"224.0.0.1",
-		"fc00::1",
-	}
+	controller.machines.(*fakeMachineCache).machines = []*capiv1beta2.Machine{{
+		ObjectMeta: metav1.ObjectMeta{Name: "c1-0", Namespace: "fleet-default", Labels: map[string]string{capiClusterName: "c1"}},
+		Status: capiv1beta2.MachineStatus{Addresses: []capiv1beta2.MachineAddress{
+			{Type: capiv1beta2.MachineExternalIP, Address: "203.0.113.10"},
+			{Type: capiv1beta2.MachineInternalIP, Address: "2001:db8::1"},
+			{Type: capiv1beta2.MachineInternalIP, Address: "10.0.0.5"},
+			{Type: capiv1beta2.MachineInternalIP, Address: "127.0.0.1"},
+		}},
+	}}
 	cluster := testSeedCluster("42")
 
 	if _, err := controller.reconcile("", cluster); err != nil {
 		t.Fatalf("reconcile() error = %v", err)
-	}
-
-	resolver := controller.opts.Resolver.(*fakeResolver)
-	if len(resolver.hosts) == 0 || resolver.hosts[0] != "d7y-scheduler.c-m-test.example.com" {
-		t.Errorf("resolver hosts = %v, want d7y-scheduler.c-m-test.example.com", resolver.hosts)
 	}
 
 	secret, err := controller.secrets.Get("dragonfly-system", "dragonfly-p2p-mtls", metav1.GetOptions{})
@@ -74,8 +70,13 @@ func TestEnsureMTLSCertificateResolvesHostAndSANs(t *testing.T) {
 			t.Errorf("leaf DNS SANs %v do not contain %q", leaf.DNSNames, want)
 		}
 	}
-	if certHasIP(leaf.IPAddresses, "10.42.0.1") {
-		t.Error("leaf contains a node IP")
+	if !certHasIP(leaf.IPAddresses, "203.0.113.10") {
+		t.Errorf("leaf IP SANs %v do not contain the machine IP", leaf.IPAddresses)
+	}
+	for _, forbidden := range []string{"10.0.0.5", "2001:db8::1", "62.83.79.230"} {
+		if certHasIP(leaf.IPAddresses, forbidden) {
+			t.Errorf("leaf contains forbidden/non-machine IP %s", forbidden)
+		}
 	}
 }
 
@@ -115,7 +116,7 @@ func TestEnsureMTLSCertificateKeepsOtherSchedulerHosts(t *testing.T) {
 	}
 }
 
-func TestEnsureMTLSCertificateDNSFailureKeepsCertificate(t *testing.T) {
+func TestEnsureMTLSCertificateMachineListFailureKeepsCertificate(t *testing.T) {
 	controller, _, events := newTestController(t)
 	cluster := testSeedCluster("42")
 	if _, err := controller.reconcile("", cluster); err != nil {
@@ -123,86 +124,80 @@ func TestEnsureMTLSCertificateDNSFailureKeepsCertificate(t *testing.T) {
 	}
 	before := certPEM(t, controller)
 
-	resolver := controller.opts.Resolver.(*fakeResolver)
-	resolver.err = errors.New("dns unavailable")
+	controller.machines.(*fakeMachineCache).err = errors.New("machine cache unavailable")
 	if _, err := controller.reconcile("", cluster); err != nil {
-		t.Fatalf("reconcile() error = %v, want DNS failure tolerated", err)
+		t.Fatalf("reconcile() error = %v, want machine failure tolerated", err)
 	}
 	if got := certPEM(t, controller); string(got) != string(before) {
-		t.Error("certificate changed after DNS failure")
+		t.Error("certificate changed after machine list failure")
 	}
-	if !hasEventReason(events.events, "SchedulerDNSResolutionFailed") {
-		t.Errorf("events = %+v, want SchedulerDNSResolutionFailed", events.events)
+	if !hasEventReason(events.events, "SchedulerMachineIPsFailed") {
+		t.Errorf("events = %+v, want SchedulerMachineIPsFailed", events.events)
 	}
 }
 
-func TestEnsureMTLSCertificateEmptyResolutionKeepsCertificate(t *testing.T) {
-	controller, _, events := newTestController(t)
+func TestEnsureMTLSCertificateNoMachinesKeepsAccumulatedIPs(t *testing.T) {
+	controller, _, _ := newTestController(t)
 	cluster := testSeedCluster("42")
 	if _, err := controller.reconcile("", cluster); err != nil {
 		t.Fatalf("initial reconcile() error = %v", err)
 	}
 	before := certPEM(t, controller)
 
-	resolver := controller.opts.Resolver.(*fakeResolver)
-	resolver.ips = nil
+	controller.machines.(*fakeMachineCache).machines = nil
 	if _, err := controller.reconcile("", cluster); err != nil {
-		t.Fatalf("reconcile() error = %v, want empty resolution tolerated", err)
+		t.Fatalf("reconcile() error = %v", err)
 	}
 	if got := certPEM(t, controller); string(got) != string(before) {
-		t.Error("certificate changed after an empty DNS answer")
+		t.Error("certificate changed when machines disappeared but existing SANs remained")
 	}
-	if !hasEventReason(events.events, "SchedulerDNSResolutionFailed") {
-		t.Errorf("events = %+v, want SchedulerDNSResolutionFailed", events.events)
+	leaf := firstCertificate(t, before)
+	if !certHasIP(leaf.IPAddresses, "203.0.113.10") {
+		t.Errorf("leaf IP SANs %v do not contain the accumulated machine IP", leaf.IPAddresses)
 	}
 }
 
-func TestEnsureMTLSCertificateDNSFailureBootstrapsAndAppliesHelmOps(t *testing.T) {
-	controller, store, events := newTestController(t)
+func TestEnsureMTLSCertificateBootstrapsThenAddsMachineIPs(t *testing.T) {
+	controller, store, _ := newTestController(t)
 	delete(controller.secrets.(*fakeSecretStore).secrets, "dragonfly-system/dragonfly-p2p-mtls")
-	resolver := controller.opts.Resolver.(*fakeResolver)
-	resolver.err = errors.New("dns unavailable")
+	controller.machines.(*fakeMachineCache).machines = nil
 	cluster := testSeedCluster("42")
 	clusterStore := controller.clusters.(*fakeClusterStore)
 	clusterStore.set(cluster)
 
 	if _, err := controller.reconcile("", cluster); err != nil {
-		t.Fatalf("reconcile() error = %v, want DNS failure tolerated", err)
-	}
-	if !hasEventReason(events.events, "SchedulerDNSResolutionFailed") {
-		t.Errorf("events = %+v, want SchedulerDNSResolutionFailed", events.events)
+		t.Fatalf("reconcile() error = %v", err)
 	}
 	if !store.has("fleet-default/" + helmop.SharedExtrasName()) {
-		t.Error("shared extras HelmOp was not applied after a DNS failure")
+		t.Error("shared extras HelmOp was not applied")
+	}
+	if got := clusterStore.annotation(AnnotationSchedulerIPs); got != "" {
+		t.Errorf("scheduler IPs without machines = %q, want empty", got)
 	}
 
-	leaf := firstCertificate(t, certPEM(t, controller))
+	before := certPEM(t, controller)
+	leaf := firstCertificate(t, before)
 	if !containsString(leaf.DNSNames, "d7y-scheduler.c-m-test.example.com") {
 		t.Errorf("leaf DNS SANs = %v, want the scheduler host", leaf.DNSNames)
 	}
 	if len(leaf.IPAddresses) != 2 || !certHasIP(leaf.IPAddresses, "127.0.0.1") || !certHasIP(leaf.IPAddresses, "::1") {
-		t.Errorf("leaf IP SANs = %v, want only loopbacks before the alias resolves", leaf.IPAddresses)
+		t.Errorf("leaf IP SANs = %v, want only loopbacks before machines appear", leaf.IPAddresses)
 	}
-	if certHasIP(leaf.IPAddresses, "203.0.113.10") {
-		t.Error("leaf contains a resolved public IP before the alias resolves")
-	}
-	before := certPEM(t, controller)
 
-	resolver.err = nil
-	resolver.ips = []string{"203.0.113.10"}
+	controller.machines.(*fakeMachineCache).machines = []*capiv1beta2.Machine{seedMachine("c1", "c1-0", "203.0.113.10")}
 	if _, err := controller.reconcile("", cluster); err != nil {
-		t.Fatalf("resolved reconcile() error = %v", err)
+		t.Fatalf("machine reconcile() error = %v", err)
 	}
 	if got := clusterStore.annotation(AnnotationSchedulerIPs); got != "203.0.113.10" {
-		t.Errorf("scheduler public IP annotation = %q, want the resolved address", got)
+		t.Errorf("scheduler IPs = %q, want machine IP", got)
 	}
 	rotated := certPEM(t, controller)
 	if bytes.Equal(rotated, before) {
-		t.Fatal("certificate did not rotate after the alias started resolving")
+		t.Fatal("certificate did not rotate after machine IPs appeared")
 	}
 	leaf = firstCertificate(t, rotated)
 	if !certHasIP(leaf.IPAddresses, "203.0.113.10") {
-		t.Errorf("leaf IP SANs = %v, want the resolved address", leaf.IPAddresses)
+		t.Errorf("leaf IP SANs = %v, want the machine IP", leaf.IPAddresses)
 	}
 	if !containsString(leaf.DNSNames, "d7y-scheduler.c-m-test.example.com") {
 		t.Errorf("leaf DNS SANs = %v, want the scheduler host", leaf.DNSNames)
@@ -225,9 +220,9 @@ func TestEnsureMTLSCertificateClusterIDFallback(t *testing.T) {
 	if _, err := controller.reconcile("", cluster); err != nil {
 		t.Fatalf("reconcile() error = %v", err)
 	}
-	resolver := controller.opts.Resolver.(*fakeResolver)
-	if len(resolver.hosts) == 0 || resolver.hosts[0] != "d7y-scheduler.c-m-fallback.example.com" {
-		t.Errorf("resolver hosts = %v, want fallback host", resolver.hosts)
+	leaf := firstCertificate(t, certPEM(t, controller))
+	if !containsString(leaf.DNSNames, "d7y-scheduler.c-m-fallback.example.com") {
+		t.Errorf("leaf DNS SANs = %v, want fallback scheduler host", leaf.DNSNames)
 	}
 }
 
@@ -256,8 +251,7 @@ func TestEnsureMTLSCertificatePublicIPRotationPreservesOldIP(t *testing.T) {
 	}
 	first := certPEM(t, controller)
 
-	resolver := controller.opts.Resolver.(*fakeResolver)
-	resolver.ips = []string{"203.0.113.11"}
+	controller.machines.(*fakeMachineCache).machines = []*capiv1beta2.Machine{seedMachine("c1", "c1-0", "203.0.113.11")}
 	if _, err := controller.reconcile("", cluster); err != nil {
 		t.Fatalf("rotation reconcile() error = %v", err)
 	}
@@ -353,26 +347,5 @@ func TestManagerOnlyBootstrapsMissingCertificate(t *testing.T) {
 	}
 	if certHasIP(leaf.IPAddresses, "203.0.113.10") {
 		t.Error("manager-only bootstrap unexpectedly added a public IP")
-	}
-}
-
-func TestValidPublicIPsFiltersNonPublic(t *testing.T) {
-	got := validPublicIPs([]string{
-		"203.0.113.10",
-		"2001:db8::1",
-		"10.0.0.5",
-		"127.0.0.1",
-		"169.254.1.1",
-		"224.0.0.1",
-		"fc00::1",
-	})
-	want := []string{"203.0.113.10", "2001:db8::1"}
-	if len(got) != len(want) {
-		t.Fatalf("validPublicIPs = %v, want %v", got, want)
-	}
-	for i := range want {
-		if got[i] != want[i] {
-			t.Errorf("validPublicIPs[%d] = %q, want %q", i, got[i], want[i])
-		}
 	}
 }

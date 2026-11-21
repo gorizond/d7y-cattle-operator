@@ -11,6 +11,7 @@ import (
 	"k8s.io/apimachinery/pkg/apis/meta/v1/unstructured"
 	"k8s.io/apimachinery/pkg/runtime"
 	"k8s.io/apimachinery/pkg/runtime/schema"
+	capiv1beta2 "sigs.k8s.io/cluster-api/api/core/v1beta2"
 
 	"github.com/gorizond/d7y-cattle-operator/pkg/helmop"
 )
@@ -224,6 +225,7 @@ func newTestController(t *testing.T) (*Controller, *fakeHelmOpStore, *fakeEventS
 		bundles:    bundles,
 		clusters:   newFakeClusterStore(),
 		configmaps: newFakeConfigMapStore(),
+		machines:   &fakeMachineCache{machines: []*capiv1beta2.Machine{seedMachine("c1", "c1-0", "203.0.113.10")}},
 		registrar:  newFakeRegistrar(),
 		allocator:  newFakeAllocator(),
 		opts: Options{
@@ -236,7 +238,6 @@ func newTestController(t *testing.T) (*Controller, *fakeHelmOpStore, *fakeEventS
 			ManagerAPIURL:               "https://manager-api.example.com",
 			ManagerAPICredentialsSecret: "manager-api-credentials",
 			P2PDomain:                   "example.com",
-			Resolver:                    &fakeResolver{ips: []string{"203.0.113.10"}},
 			DragonflyChart:              helmop.Chart{Repo: "https://charts.example.com", Name: "dragonfly", Version: "1.10.1-patch.2"},
 			ExtrasChart:                 helmop.Chart{Repo: "https://charts.example.com", Name: "dragonfly-extras", Version: "0.1.10"},
 			MirrorChart:                 helmop.Chart{Repo: "https://charts.example.com", Name: "containerd-mirror", Version: "0.1.0"},
@@ -461,15 +462,4 @@ func TestEnsureMTLSSecretRequiresCA(t *testing.T) {
 	if len(events.events) == 0 || events.events[0].Reason != "MTLSSecretUnavailable" {
 		t.Errorf("events = %+v, want MTLSSecretUnavailable", events.events)
 	}
-}
-
-type fakeResolver struct {
-	ips   []string
-	err   error
-	hosts []string
-}
-
-func (f *fakeResolver) LookupHost(_ context.Context, host string) ([]string, error) {
-	f.hosts = append(f.hosts, host)
-	return f.ips, f.err
 }

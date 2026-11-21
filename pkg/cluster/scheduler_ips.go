@@ -13,12 +13,15 @@ import (
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
 	"k8s.io/apimachinery/pkg/labels"
 	"k8s.io/apimachinery/pkg/watch"
+	capiv1beta2 "sigs.k8s.io/cluster-api/api/core/v1beta2"
 
 	"github.com/gorizond/d7y-cattle-operator/pkg/pki"
 )
 
 const (
 	AnnotationSchedulerIPs = "p2p.dragonfly.io/scheduler-ips"
+	capiClusterName        = "cluster.x-k8s.io/cluster-name"
+	rkeClusterName         = "rke.cattle.io/cluster-name"
 	// legacySchedulerPublicIP is removed from gated Clusters during reconcile.
 	legacySchedulerPublicIP = "p2p.dragonfly.io/scheduler-public-ip"
 )
@@ -27,22 +30,26 @@ type clusterCache interface {
 	List(namespace string, selector labels.Selector) ([]*provv1.Cluster, error)
 }
 
+type machineCache interface {
+	List(namespace string, selector labels.Selector) ([]*capiv1beta2.Machine, error)
+}
+
 type helmOpWatcher interface {
 	Watch(ctx context.Context, namespace string, opts metav1.ListOptions) (watch.Interface, error)
 }
 
 // ensureSchedulerIPs computes scheduler-ips for a managed cluster. A seed
-// cluster publishes its own currently resolved scheduler IPs; other gated
-// clusters aggregate the scheduler-ips of other seed clusters. The legacy
-// scheduler-public-ip annotation is removed during the same reconcile.
-func (c *Controller) ensureSchedulerIPs(cluster *provv1.Cluster, roles Roles, resolvedIPs []string) (*provv1.Cluster, error) {
+// cluster publishes its own machine IPs; other gated clusters aggregate the
+// scheduler-ips of other seed clusters. The legacy scheduler-public-ip
+// annotation is removed during the same reconcile.
+func (c *Controller) ensureSchedulerIPs(cluster *provv1.Cluster, roles Roles, seedIPs []string) (*provv1.Cluster, error) {
 	if cluster == nil || c.clusters == nil {
 		return nil, nil
 	}
 	seen := map[string]bool{}
 	var ips []string
 	if roles.Seed {
-		for _, raw := range resolvedIPs {
+		for _, raw := range seedIPs {
 			addPublicIPv4(&ips, seen, raw)
 		}
 	} else {
@@ -106,6 +113,46 @@ func addPublicIPv4(ips *[]string, seen map[string]bool, raw string) {
 	}
 	seen[value] = true
 	*ips = append(*ips, value)
+}
+
+func (c *Controller) seedMachineIPs(cluster *provv1.Cluster) ([]string, error) {
+	if cluster == nil || c.machines == nil {
+		return nil, nil
+	}
+	machines, err := c.machines.List(cluster.Namespace, labels.Everything())
+	if err != nil {
+		return nil, fmt.Errorf("list machines for seed IPs: %w", err)
+	}
+	seen := map[string]bool{}
+	var ips []string
+	for i := range machines {
+		machine := machines[i]
+		if machine == nil || machine.DeletionTimestamp != nil || machine.Namespace != cluster.Namespace {
+			continue
+		}
+		clusterName := machine.Labels[capiClusterName]
+		if clusterName == "" {
+			clusterName = machine.Labels[rkeClusterName]
+		}
+		if clusterName != cluster.Name {
+			continue
+		}
+		for _, address := range machine.Status.Addresses {
+			if address.Type == capiv1beta2.MachineInternalIP || address.Type == capiv1beta2.MachineExternalIP {
+				addPublicIPv4(&ips, seen, address.Address)
+			}
+		}
+	}
+	sort.Strings(ips)
+	return ips, nil
+}
+
+func (c *Controller) machineChanged(key string, machine *capiv1beta2.Machine) (*capiv1beta2.Machine, error) {
+	if machine == nil || c.clusters == nil {
+		return machine, nil
+	}
+	c.enqueueGatedClusters()
+	return machine, nil
 }
 
 func (c *Controller) enqueueGatedClusters() {
