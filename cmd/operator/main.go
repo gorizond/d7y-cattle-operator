@@ -13,7 +13,9 @@ import (
 	"github.com/rancher/wrangler/v3/pkg/kubeconfig"
 	"github.com/rancher/wrangler/v3/pkg/signals"
 	"github.com/rancher/wrangler/v3/pkg/start"
+	"k8s.io/apimachinery/pkg/runtime/schema"
 
+	"github.com/gorizond/d7y-cattle-operator/pkg/apply"
 	"github.com/gorizond/d7y-cattle-operator/pkg/cluster"
 	"github.com/gorizond/d7y-cattle-operator/pkg/config"
 	"github.com/gorizond/d7y-cattle-operator/pkg/helmop"
@@ -63,6 +65,12 @@ func run() error {
 	if err != nil {
 		return fmt.Errorf("Bundle client: %w", err)
 	}
+	var hetznerMachines apply.Store
+	if client, err := clientFactory.ForResource(schema.GroupVersionResource{Group: "rke-machine.cattle.io", Version: "v1", Resource: "hetznermachines"}, true); err == nil {
+		hetznerMachines = client
+	} else {
+		slog.Warn("HetznerMachine client unavailable; using CAPI machine addresses only", "error", err)
+	}
 
 	apiHost, err := hostFromURL(cfg.ManagerAPIURL)
 	if err != nil {
@@ -83,7 +91,7 @@ func run() error {
 	machineController := capiFactory.Cluster().V1beta2().Machine()
 
 	ctx := signals.SetupSignalContext()
-	cluster.Register(ctx, clusterController, secretController, configMapController, eventController, helmOps, bundles, cluster.Options{
+	cluster.Register(ctx, clusterController, machineController, secretController, configMapController, eventController, hetznerMachines, helmOps, bundles, cluster.Options{
 		OperatorNamespace:           cfg.Namespace,
 		MTLSSecretName:              cfg.MTLSSecretName,
 		ManagerGRPCDomain:           cfg.ManagerGRPCDomain,

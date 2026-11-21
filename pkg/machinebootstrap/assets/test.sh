@@ -26,13 +26,14 @@ RUNNER_EOF
 chmod +x "$RUNNER"
 
 payload() {
-  local ca cert key env host mirror
+  local ca cert key env host mirror ips
   host="${1:-scheduler.example.test}"
   mirror="${2:-}"
+  ips="${3-203.0.113.10,203.0.113.11}"
   ca="$(printf 'dummy-ca\n' | base64 | tr -d '\n')"
   cert="$(printf 'dummy-cert\n' | base64 | tr -d '\n')"
   key="$(printf 'dummy-key\n' | base64 | tr -d '\n')"
-  env="$(printf 'MANAGER_GRPC=https://manager-grpc.example.test:443\nSTATIC_URL=http://static.example.test\nSCHEDULER_HOST=%s\nSCHEDULER_CLUSTER_ID=2\nCA_CRT_B64=%s\nCLIENT_CRT_B64=%s\nCLIENT_KEY_B64=%s\n' "$host" "$ca" "$cert" "$key")"
+  env="$(printf 'MANAGER_GRPC=https://manager-grpc.example.test:443\nSTATIC_URL=http://static.example.test\nSCHEDULER_HOST=%s\nSCHEDULER_CLUSTER_ID=2\nSCHEDULER_IPS=%s\nCA_CRT_B64=%s\nCLIENT_CRT_B64=%s\nCLIENT_KEY_B64=%s\n' "$host" "$ips" "$ca" "$cert" "$key")"
   if [ -n "$mirror" ]; then
     env="${env}"$'\n'"NYDUS_MIRROR_URL=${mirror}"
   fi
@@ -119,7 +120,7 @@ assert_contains "${ROOT_ONE}/etc/dragonfly/dfget.yaml" 'schedulerClusterID: 2'
 assert_not_contains "${ROOT_ONE}/etc/dragonfly/dfget.yaml" 'manager:'
 assert_not_contains "${ROOT_ONE}/etc/dragonfly/dfget.yaml" 'manager-grpc.example.test'
 assert_contains "${ROOT_ONE}/etc/dragonfly/dfget.yaml" 'tlsVerify: true'
-assert_contains "${ROOT_ONE}/etc/dragonfly/dynconfig.yaml" 'addr: "scheduler.example.test:443"'
+assert_contains "${ROOT_ONE}/etc/dragonfly/dynconfig.yaml" 'addrs: ["203.0.113.10:443", "203.0.113.11:443"]'
 assert_not_contains "${ROOT_ONE}/etc/dragonfly/dynconfig.yaml" '.dragonfly-system.svc'
 assert_contains "${ROOT_ONE}/etc/dragonfly/dfget.yaml" 'tlsPolicy: "force"'
 assert_contains "${ROOT_ONE}/etc/dragonfly/dfget.yaml" 'autoIssueCert: false'
@@ -778,6 +779,27 @@ assert_contains "$README" 'fs_version=6'
 assert_contains "$README" 'CONFIG_EROFS_FS_ONDEMAND=n'
 assert_contains "$README" 'custom or signed kernel'
 assert_not_contains "$README" 'k3s-gpu-erofs'
+
+# Empty scheduler IPs: install configs but do not write the dfdaemon start marker.
+ROOT_NO_IPS="${WORK}/root-no-ips"
+NO_IPS_CFG="$(payload scheduler.example.test "" "")"
+P2P_ROOT="$ROOT_NO_IPS" SKIP_DOWNLOAD=1 SKIP_MODULES=1 SKIP_SYSTEMD=1 SKIP_PREFLIGHT=1 CONTAINERD_MAJOR=1 \
+  "$RUNNER" "$INSTALL" "$NO_IPS_CFG" > "${WORK}/no-ips.log" 2>&1
+assert_contains "${ROOT_NO_IPS}/etc/dragonfly/dynconfig.yaml" 'addrs: []'
+assert_not_contains "${WORK}/no-ips.log" 'direct-registry'
+if [ -e "${ROOT_NO_IPS}/etc/dragonfly/scheduler-ips" ]; then
+  echo "p2p-static self-test: empty scheduler IPs wrote the dfdaemon marker" >&2
+  exit 1
+fi
+assert_contains "$INSTALL" 'ConditionPathExists=/etc/dragonfly/scheduler-ips'
+assert_contains "$INSTALL" 'if [ -n "${SCHEDULER_IPS:-}" ]; then'
+
+# P2P_DISTRO wins over the filesystem when no k3s directory exists.
+ROOT_DISTRO="${WORK}/root-distro"
+DISTRO_CFG="$(payload scheduler.example.test "" "")"
+P2P_ROOT="$ROOT_DISTRO" P2P_DISTRO=k3s SKIP_DOWNLOAD=1 SKIP_MODULES=1 SKIP_SYSTEMD=1 SKIP_PREFLIGHT=1 CONTAINERD_MAJOR=1 \
+  "$RUNNER" "$INSTALL" "$DISTRO_CFG" > "${WORK}/distro.log" 2>&1
+assert_contains "${ROOT_DISTRO}/etc/systemd/system/dfdaemon-bootstrap.service" 'Before=k3s.service'
 
 if command -v shellcheck >/dev/null 2>&1; then
   shellcheck "$INSTALL" "$0" || {

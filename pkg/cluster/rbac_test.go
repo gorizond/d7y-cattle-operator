@@ -72,7 +72,8 @@ func TestOperatorRBACMachineBootstrapAccess(t *testing.T) {
 		`resources: ["secrets"]`,
 		`verbs: ["get", "list", "watch", "create", "update", "patch"]`,
 		`resources: ["machines"]`,
-		`verbs: ["get", "list", "watch"]`,
+		`resources: ["*"]`,
+		`apiGroups: ["rke-machine.cattle.io"]`,
 	} {
 		if !strings.Contains(text, want) {
 			t.Errorf("operator RBAC missing %q", want)

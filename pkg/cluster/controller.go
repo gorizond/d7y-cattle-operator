@@ -15,6 +15,7 @@ import (
 
 	fleetv1alpha1 "github.com/rancher/fleet/pkg/apis/fleet.cattle.io/v1alpha1"
 	provv1 "github.com/rancher/rancher/pkg/apis/provisioning.cattle.io/v1"
+	capictl "github.com/rancher/rancher/pkg/generated/controllers/cluster.x-k8s.io/v1beta2"
 	provctl "github.com/rancher/rancher/pkg/generated/controllers/provisioning.cattle.io/v1"
 	"github.com/rancher/wrangler/v3/pkg/condition"
 	corectl "github.com/rancher/wrangler/v3/pkg/generated/controllers/core/v1"
@@ -71,7 +72,10 @@ type Controller struct {
 	bundles    apply.Store
 	opts       Options
 
-	clusters clusterStore
+	clusters     clusterStore
+	clusterCache clusterCache
+	machines     machineCache
+	infra        apply.Store
 
 	managerMu         sync.Mutex
 	managerHTTPClient *http.Client
@@ -81,18 +85,25 @@ type Controller struct {
 
 // Register wires the Cluster controller. Handlers must be registered before
 // the factories are started.
-func Register(ctx context.Context, clusters provctl.ClusterController, secrets corectl.SecretController, configmaps corectl.ConfigMapController, events corectl.EventController, helmops, bundles apply.Store, opts Options) {
+func Register(ctx context.Context, clusters provctl.ClusterController, machines capictl.MachineController, secrets corectl.SecretController, configmaps corectl.ConfigMapController, events corectl.EventController, infra, helmops, bundles apply.Store, opts Options) {
 	c := &Controller{
-		ctx:        ctx,
-		secrets:    secrets,
-		configmaps: configmaps,
-		events:     events,
-		helmops:    helmops,
-		bundles:    bundles,
-		clusters:   clusters,
-		opts:       opts,
+		ctx:          ctx,
+		secrets:      secrets,
+		configmaps:   configmaps,
+		events:       events,
+		helmops:      helmops,
+		bundles:      bundles,
+		clusters:     clusters,
+		clusterCache: clusters.Cache(),
+		machines:     machines.Cache(),
+		infra:        infra,
+		opts:         opts,
 	}
 	clusters.OnChange(ctx, controllerName, c.reconcile)
+	machines.OnChange(ctx, controllerName+":scheduler-ips", c.machineChanged)
+	if watcher, ok := helmops.(helmOpWatcher); ok {
+		go c.watchHelmOps(watcher)
+	}
 }
 
 func (c *Controller) reconcile(key string, cluster *provv1.Cluster) (result *provv1.Cluster, retErr error) {
@@ -123,6 +134,13 @@ func (c *Controller) reconcile(key string, cluster *provv1.Cluster) (result *pro
 		return cluster, nil
 	}
 	status.rolesResolved(true, roles.Manager, roles.Seed)
+
+	if updated, err := c.ensureSchedulerIPs(cluster); err != nil {
+		c.event(cluster, corev1.EventTypeWarning, "SchedulerIPsFailed", err.Error())
+	} else if updated != nil {
+		cluster = updated
+		status.rebase(updated)
+	}
 
 	if updated, err := c.ensureContainerdHosts(cluster); err != nil {
 		c.event(cluster, corev1.EventTypeWarning, "ContainerdHostsFailed", err.Error())

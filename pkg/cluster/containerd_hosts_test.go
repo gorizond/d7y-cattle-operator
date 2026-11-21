@@ -71,6 +71,7 @@ func TestReconcileCreatesContainerdHostsForK3s(t *testing.T) {
 	controller, store, _ := newTestController(t)
 	cluster := testSeedCluster("42")
 	cluster.Spec.KubernetesVersion = "v1.35.9+k3s1"
+	cluster.Annotations[AnnotationSchedulerIPs] = "203.0.113.10"
 	clusterStore := controller.clusters.(*fakeClusterStore)
 	clusterStore.set(cluster)
 
@@ -167,6 +168,7 @@ func TestReconcileUsesRKEPathsAndPreservesUserEntries(t *testing.T) {
 	controller, _, _ := newTestController(t)
 	cluster := testSeedCluster("42")
 	cluster.Spec.KubernetesVersion = "v1.35.9+rke2r1"
+	cluster.Annotations[AnnotationSchedulerIPs] = "203.0.113.10"
 	cluster.Spec.RKEConfig = &provv1.RKEConfig{}
 	cluster.Spec.RKEConfig.MachineSelectorFiles = []rkev1.RKEProvisioningFiles{{
 		MachineLabelSelector: &metav1.LabelSelector{MatchLabels: map[string]string{"role": "user"}},
@@ -292,4 +294,74 @@ func TestContainerdHostsClusterPatchFailureSetsCondition(t *testing.T) {
 	if !found {
 		t.Errorf("events = %+v, want ContainerdHostsFailed", events.events)
 	}
+}
+
+func TestContainerdHostsDefaultItemIsGatedBySchedulerIPs(t *testing.T) {
+	controller, _, _ := newTestController(t)
+	cluster := testSeedCluster("42")
+	cluster.Spec.KubernetesVersion = "v1.35.9+k3s1"
+	clusterStore := controller.clusters.(*fakeClusterStore)
+	clusterStore.set(cluster)
+
+	if _, err := controller.reconcile("", cluster); err != nil {
+		t.Fatalf("empty annotation reconcile() error = %v", err)
+	}
+	entry := operatorSelectorEntry(t, clusterStore.get(), containerdHostsName(cluster.Name))
+	if containsItem(entry, "_default") {
+		t.Fatal("empty scheduler IPs must not add _default")
+	}
+	for _, key := range []string{"docker.io", "index.docker.io"} {
+		if !containsItem(entry, key) {
+			t.Errorf("empty scheduler IPs missing %q", key)
+		}
+	}
+
+	stored := clusterStore.get()
+	stored.Annotations[AnnotationSchedulerIPs] = "203.0.113.10"
+	if _, err := controller.reconcile("", stored); err != nil {
+		t.Fatalf("non-empty annotation reconcile() error = %v", err)
+	}
+	entry = operatorSelectorEntry(t, clusterStore.get(), containerdHostsName(cluster.Name))
+	for _, key := range []string{"_default", "docker.io", "index.docker.io"} {
+		if !containsItem(entry, key) {
+			t.Errorf("non-empty scheduler IPs missing %q", key)
+		}
+	}
+
+	stored = clusterStore.get()
+	delete(stored.Annotations, AnnotationSchedulerIPs)
+	if _, err := controller.reconcile("", stored); err != nil {
+		t.Fatalf("removed annotation reconcile() error = %v", err)
+	}
+	entry = operatorSelectorEntry(t, clusterStore.get(), containerdHostsName(cluster.Name))
+	if !containsItem(entry, "_default") {
+		t.Fatal("_default was removed after the annotation became empty")
+	}
+}
+
+func operatorSelectorEntry(t *testing.T, cluster *provv1.Cluster, name string) rkev1.RKEProvisioningFiles {
+	t.Helper()
+	if cluster.Spec.RKEConfig == nil {
+		t.Fatal("rkeConfig is nil")
+	}
+	for _, entry := range cluster.Spec.RKEConfig.MachineSelectorFiles {
+		for _, source := range entry.FileSources {
+			if source.ConfigMap.Name == name {
+				return entry
+			}
+		}
+	}
+	t.Fatalf("machineSelectorFiles has no entry for %q", name)
+	return rkev1.RKEProvisioningFiles{}
+}
+
+func containsItem(entry rkev1.RKEProvisioningFiles, key string) bool {
+	for _, source := range entry.FileSources {
+		for _, item := range source.ConfigMap.Items {
+			if item.Key == key {
+				return true
+			}
+		}
+	}
+	return false
 }

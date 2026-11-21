@@ -27,6 +27,7 @@ type managerRegistrar interface {
 type clusterStore interface {
 	Update(*provv1.Cluster) (*provv1.Cluster, error)
 	UpdateStatus(*provv1.Cluster) (*provv1.Cluster, error)
+	Enqueue(namespace, name string)
 }
 
 func (c *Controller) managerClient(ctx context.Context) (managerRegistrar, *registry.Allocator, error) {
