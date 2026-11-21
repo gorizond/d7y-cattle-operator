@@ -26,14 +26,15 @@ RUNNER_EOF
 chmod +x "$RUNNER"
 
 payload() {
-  local ca cert key env host mirror ips
+  local ca cert key env host mirror ips id
   host="${1:-scheduler.example.test}"
   mirror="${2:-}"
   ips="${3-203.0.113.10,203.0.113.11}"
+  id="${4:-2}"
   ca="$(printf 'dummy-ca\n' | base64 | tr -d '\n')"
   cert="$(printf 'dummy-cert\n' | base64 | tr -d '\n')"
   key="$(printf 'dummy-key\n' | base64 | tr -d '\n')"
-  env="$(printf 'MANAGER_GRPC=https://manager-grpc.example.test:443\nSTATIC_URL=http://static.example.test\nSCHEDULER_HOST=%s\nSCHEDULER_CLUSTER_ID=2\nSCHEDULER_IPS=%s\nCA_CRT_B64=%s\nCLIENT_CRT_B64=%s\nCLIENT_KEY_B64=%s\n' "$host" "$ips" "$ca" "$cert" "$key")"
+  env="$(printf 'MANAGER_GRPC=https://manager-grpc.example.test:443\nSTATIC_URL=http://static.example.test\nSCHEDULER_HOST=%s\nSCHEDULER_CLUSTER_ID=%s\nSCHEDULER_IPS=%s\nCA_CRT_B64=%s\nCLIENT_CRT_B64=%s\nCLIENT_KEY_B64=%s\n' "$host" "$id" "$ips" "$ca" "$cert" "$key")"
   if [ -n "$mirror" ]; then
     env="${env}"$'\n'"NYDUS_MIRROR_URL=${mirror}"
   fi
@@ -818,6 +819,19 @@ if [ -e "${ROOT_NO_IPS}/etc/dragonfly/scheduler-ips" ]; then
 fi
 assert_contains "$INSTALL" 'ConditionPathExists=/etc/dragonfly/scheduler-ips'
 assert_contains "$INSTALL" 'if [ -n "${SCHEDULER_IPS:-}" ]; then'
+
+# First seed node: scheduler ID is still absent, so the operator injects the
+# zero placeholder and the host must install without starting dfdaemon.
+ROOT_NO_ID="${WORK}/root-no-id"
+NO_ID_CFG="$(payload scheduler.example.test "" "" 0)"
+P2P_ROOT="$ROOT_NO_ID" SKIP_DOWNLOAD=1 SKIP_MODULES=1 SKIP_SYSTEMD=1 SKIP_PREFLIGHT=1 CONTAINERD_MAJOR=1 \
+  "$RUNNER" "$INSTALL" "$NO_ID_CFG" > "${WORK}/no-id.log" 2>&1
+assert_contains "${ROOT_NO_ID}/etc/dragonfly/dfget.yaml" 'schedulerClusterID: 0'
+assert_contains "${ROOT_NO_ID}/etc/dragonfly/dynconfig.yaml" 'addrs: []'
+if [ -e "${ROOT_NO_ID}/etc/dragonfly/scheduler-ips" ]; then
+  echo "p2p-static self-test: zero placeholder wrote the dfdaemon marker" >&2
+  exit 1
+fi
 
 # P2P_DISTRO wins over the filesystem when no k3s directory exists.
 ROOT_DISTRO="${WORK}/root-distro"

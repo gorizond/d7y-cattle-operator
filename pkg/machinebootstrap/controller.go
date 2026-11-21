@@ -136,6 +136,12 @@ func (c *Controller) reconcile(key string, secret *corev1.Secret) (*corev1.Secre
 	if strings.Contains(value, bootstrap.Marker) {
 		return secret, nil
 	}
+	schedulerID := ""
+	if cluster != nil {
+		schedulerID = strings.TrimSpace(cluster.Annotations[bootstrap.SchedulerClusterIDAnnotation])
+	}
+	placeholderSchedulerID := schedulerID == ""
+
 	mtls, err := c.mtls.Get(c.opts.OperatorNamespace, c.opts.MTLSSecretName)
 	if err != nil {
 		c.event(machine, cluster, secret, corev1.EventTypeWarning, "MTLSSecretUnavailable", err.Error())
@@ -153,6 +159,12 @@ func (c *Controller) reconcile(key string, secret *corev1.Secret) (*corev1.Secre
 	if err != nil {
 		c.event(machine, cluster, secret, corev1.EventTypeWarning, "PayloadBuildFailed", err.Error())
 		return secret, err
+	}
+	if placeholderSchedulerID {
+		c.event(machine, cluster, secret, corev1.EventTypeWarning, "SchedulerClusterIDPlaceholder",
+			"scheduler cluster ID annotation is empty; injecting schedulerClusterID 0 placeholder")
+		slog.Warn("injecting p2p bootstrap with scheduler cluster ID placeholder",
+			"cluster", clusterName, "machine", machineName, "schedulerClusterID", "0")
 	}
 
 	updated := secret.DeepCopy()

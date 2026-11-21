@@ -79,3 +79,27 @@ func TestBuildInstallEnvCarriesEmptySchedulerIPs(t *testing.T) {
 		t.Errorf("empty scheduler IPs are not represented: %q", env)
 	}
 }
+
+func TestBuildInstallEnvEmptySchedulerIDUsesPlaceholder(t *testing.T) {
+	secret := &corev1.Secret{Data: map[string][]byte{
+		"ca.crt":                []byte("ca"),
+		corev1.TLSCertKey:       []byte("cert"),
+		corev1.TLSPrivateKeyKey: []byte("key"),
+	}}
+	cluster := &provv1.Cluster{
+		ObjectMeta: metav1.ObjectMeta{Annotations: map[string]string{}},
+		Status:     provv1.ClusterStatus{ClusterName: "c-m-test"},
+	}
+	env, err := BuildInstallEnv(cluster, secret, "", InstallConfig{
+		ManagerGRPCDomain: "manager.example.com",
+		ManagerGRPCPort:   443,
+		StaticURL:         "https://static.example.com",
+		SchedulerDomain:   "example.com",
+	})
+	if err != nil {
+		t.Fatalf("BuildInstallEnv() error = %v", err)
+	}
+	if !strings.Contains(env, "SCHEDULER_CLUSTER_ID=0\n") {
+		t.Errorf("env = %q, want scheduler cluster ID 0 placeholder", env)
+	}
+}

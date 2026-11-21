@@ -16,8 +16,16 @@ The block always carries `P2P_DISTRO` and the Cluster's
 public CAPI machine IPs; non-seed clusters aggregate other seeds). With an empty IP list the block is
 still installed (binaries/configs/units), but `dfdaemon-bootstrap` is not
 started and no direct-registry fallback is taken. With IPs, `dynconfig.yaml`
-uses `scheduler.addrs` with `:443` for each address and the host bootstrap is
+uses `scheduler.addrs` with `:8002` for each address and the host bootstrap is
 started.
+
+The injector does not wait for `p2p.dragonfly.io/scheduler-cluster-id`. When
+the annotation is empty, the block is injected with the placeholder
+`SCHEDULER_CLUSTER_ID=0` and the controller emits a
+`SchedulerClusterIDPlaceholder` warning. This is the first-seed-node path: its
+scheduler IPs are still empty, so the host dfdaemon does not start; later
+reconciles keep the marker and are idempotent. Workers normally have the
+annotation by the time their bootstrap Secret is rendered.
 
 ## Kernel prerequisites
 
