@@ -23,7 +23,16 @@ fi
 
 bash "$self_test" || fail "embedded p2p-install self-test failed"
 
-helm template p2p-static "$root/charts/p2p-static" --namespace dragonfly-system >"$tmp/p2p-static.yaml"
+chart="$root/charts/p2p-static"
+cmp -s "$chart/files/nydus-fs-select.sh" "$selector" || fail "chart nydus-fs-select.sh differs from the embedded asset"
+bash -n "$chart/files/populate-static.sh" || fail "populate-static.sh has a syntax error"
+bash -n "$chart/files/nydus-fs-select.sh" || fail "chart nydus-fs-select.sh has a syntax error"
+
+helm template p2p-static "$chart" --namespace dragonfly-system >"$tmp/p2p-static.yaml"
+grep -q 'name: populate-static' "$tmp/p2p-static.yaml" || fail "p2p-static is missing the populate-static init container"
+grep -q 'nydus-static-v2.4.5-linux-amd64.tgz' "$tmp/p2p-static.yaml" || fail "p2p-static is missing the pinned nydus tarball URL"
+grep -q '1ad7b793a1996577e462b0bf5c1a22e4450b9c04f7e9e99d4b274ccc92f19072' "$tmp/p2p-static.yaml" || fail "p2p-static is missing the pinned nydus checksum"
+grep -q 'nydus-fs-select.sh' "$tmp/p2p-static.yaml" || fail "p2p-static is missing the nydus-fs-select asset"
 grep -q 'location /nydus/' "$tmp/p2p-static.yaml" || fail "p2p-static is missing the versioned nydus asset route"
 grep -q 'location /bin/' "$tmp/p2p-static.yaml" || fail "p2p-static is missing the /bin asset route"
 grep -q 'listen 80;' "$tmp/p2p-static.yaml" || fail "p2p-static nginx must listen on port 80"
@@ -32,7 +41,7 @@ if grep -q 'p2p-install.sh' "$tmp/p2p-static.yaml"; then
   fail "p2p-static must not serve p2p-install.sh"
 fi
 
-helm template p2p-static "$root/charts/p2p-static" --namespace dragonfly-system \
+helm template p2p-static "$chart" --namespace dragonfly-system \
   --set manager.enabled=true --set manager.host=manager.example.com \
   --set manager.tlsSecret=manager-tls >"$tmp/p2p-static-manager.yaml"
 grep -q 'kind: IngressRoute' "$tmp/p2p-static-manager.yaml" || fail "p2p-static manager IngressRoute missing"
@@ -41,5 +50,50 @@ grep -q 'PathPrefix(`/nydus`)' "$tmp/p2p-static-manager.yaml" || fail "p2p-stati
 if grep -q 'p2p-install.sh' "$tmp/p2p-static-manager.yaml"; then
   fail "p2p-static manager route must not include p2p-install.sh"
 fi
+
+# Exercise the populate script with a fake downloader: nydus assets land in
+# both layouts, while an existing dfdaemon is preserved.
+populate="$chart/files/populate-static.sh"
+static_dir="$tmp/static"
+populate_bin="$tmp/populate-bin"
+populate_src="$tmp/populate-src/nydus-static"
+populate_tgz="$tmp/populate-nydus.tgz"
+mkdir -p "$static_dir/bin" "$populate_bin" "$populate_src"
+printf 'existing-dfdaemon\n' > "$static_dir/bin/dfdaemon"
+for binary in nydusd nydus-image nydus-overlayfs; do
+  printf '#!/bin/sh\nexit 0\n' > "$populate_src/$binary"
+done
+tar -czf "$populate_tgz" -C "$tmp/populate-src" nydus-static
+populate_sha="$(sha256sum "$populate_tgz" | cut -d' ' -f1)"
+cat > "$populate_bin/curl" <<'POPULATECURL'
+#!/bin/sh
+out=""
+while [ "$#" -gt 0 ]; do
+  case "$1" in
+    -o) out="$2"; shift 2 ;;
+    --retry|--retry-delay|--connect-timeout|--max-time) shift 2 ;;
+    -*) shift ;;
+    *) shift ;;
+  esac
+done
+cp "${POPULATE_TARBALL:?}" "$out"
+POPULATECURL
+chmod 0755 "$populate_bin/curl"
+STATIC_DIR="$static_dir" SELECTOR_SRC="$chart/files/nydus-fs-select.sh" \
+  DOWNLOAD_RETRIES=1 SELECTOR_ENABLED=1 \
+  NYDUS_VERSION=v2.4.5 NYDUS_BINARIES="nydusd nydus-image nydus-overlayfs" \
+  NYDUS_TARBALL_URL=https://example.test/nydus.tgz NYDUS_TARBALL_SHA256="$populate_sha" \
+  NYDUS_TARBALL_ROOT=nydus-static \
+  DFDAEMON_ENABLED=1 DFDAEMON_VERSION=1.5.14 \
+  DFDAEMON_TARBALL_URL=https://example.test/dfdaemon.tgz DFDAEMON_TARBALL_SHA256=unused \
+  DFDAEMON_TARBALL_ROOT=unused DFDAEMON_BINARY=dfdaemon \
+  POPULATE_TARBALL="$populate_tgz" PATH="$populate_bin:$PATH" \
+  sh "$populate" >"$tmp/populate.log" 2>&1
+for binary in nydusd nydus-image nydus-overlayfs nydus-fs-select; do
+  [ -s "$static_dir/nydus/v2.4.5/$binary" ] || fail "populate-static did not create nydus/v2.4.5/$binary"
+  [ -s "$static_dir/bin/$binary" ] || fail "populate-static did not create bin/$binary"
+done
+grep -q 'preserving existing' "$tmp/populate.log" || fail "populate-static did not preserve the existing dfdaemon"
+[ "$(cat "$static_dir/bin/dfdaemon")" = "existing-dfdaemon" ] || fail "populate-static overwrote the existing dfdaemon"
 
 echo "p2p-static render checks passed"

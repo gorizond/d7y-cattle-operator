@@ -50,6 +50,9 @@ NYDUS_SNAPSHOTTER_BINARY="containerd-nydus-grpc"
 # nydus-overlayfs.
 NYDUS_ALLOW_GITHUB="${NYDUS_ALLOW_GITHUB:-1}"
 NYDUS_GITHUB_REPO="${NYDUS_GITHUB_REPO:-dragonflyoss/nydus}"
+# SHA256 of the pinned nydus-static tarball. Required for the GitHub fallback;
+# change it together with NYDUS_VERSION when moving to another release.
+NYDUS_GITHUB_SHA256="${NYDUS_GITHUB_SHA256:-1ad7b793a1996577e462b0bf5c1a22e4450b9c04f7e9e99d4b274ccc92f19072}"
 # Optional HTTPS mirror path for nydus blobs, for example
 # https://proxy.example.test/docker.io. Empty keeps the dfdaemon proxy block in
 # the generated nydusd backend; setting it makes nydusd fetch blobs directly
@@ -145,6 +148,14 @@ ensure_nydus_github_assets() {
   url="$(nydus_github_tarball_url)"
   if ! curl -fL --retry 3 --connect-timeout 10 --max-time 300 -o "$tarball" "$url"; then
     log "nydus GitHub release unavailable: ${url}"
+    return 1
+  fi
+  [ -n "$NYDUS_GITHUB_SHA256" ] || { log "NYDUS_GITHUB_SHA256 is required for the nydus GitHub fallback"; return 1; }
+  command -v sha256sum >/dev/null 2>&1 || { log "sha256sum is required to verify ${url}"; return 1; }
+  actual="$(sha256sum "$tarball")"
+  actual="${actual%% *}"
+  if [ "$actual" != "$NYDUS_GITHUB_SHA256" ]; then
+    log "checksum verification failed for ${url}: got ${actual} want ${NYDUS_GITHUB_SHA256}"
     return 1
   fi
   if ! tar -xzf "$tarball" -C "$dir"; then
@@ -1157,6 +1168,9 @@ UNIT
 {
   printf 'STATIC_URL=%q\n' "$STATIC_URL"
   printf 'NYDUS_VERSION=%q\n' "$NYDUS_VERSION"
+  printf 'NYDUS_GITHUB_REPO=%q\n' "$NYDUS_GITHUB_REPO"
+  printf 'NYDUS_GITHUB_SHA256=%q\n' "$NYDUS_GITHUB_SHA256"
+  printf 'NYDUS_ALLOW_GITHUB=%q\n' "$NYDUS_ALLOW_GITHUB"
 } | write_file "${ROOT}${NYDUS_DIR}/updater.env" 0644
 
 write_file "${BIN_DIR}/nydus-updater" 0755 <<'UPDATER'
@@ -1164,7 +1178,7 @@ write_file "${BIN_DIR}/nydus-updater" 0755 <<'UPDATER'
 set -Eeuo pipefail
 IFS=$'\n\t'
 
-env_file="/etc/nydus/updater.env"
+env_file="${NYDUS_UPDATER_ENV:-/etc/nydus/updater.env}"
 if [ ! -f "$env_file" ]; then
   echo "nydus-updater: missing ${env_file}" >&2
   exit 1
@@ -1173,11 +1187,70 @@ fi
 . "$env_file"
 : "${STATIC_URL:?STATIC_URL is required}"
 : "${NYDUS_VERSION:?NYDUS_VERSION is required}"
+NYDUS_GITHUB_REPO="${NYDUS_GITHUB_REPO:-dragonflyoss/nydus}"
+NYDUS_ALLOW_GITHUB="${NYDUS_ALLOW_GITHUB:-1}"
+NYDUS_GITHUB_SHA256="${NYDUS_GITHUB_SHA256:-}"
 
-bin_dir="/usr/local/bin"
+bin_dir="${NYDUS_UPDATER_BIN_DIR:-/usr/local/bin}"
+selector="${NYDUS_UPDATER_SELECTOR:-/usr/local/bin/nydus-fs-select}"
 tmp="$(mktemp -d)"
 trap 'rm -rf "$tmp"' EXIT
+github_dir=""
+
+nydus_github_url() {
+  local base="https://github.com/${NYDUS_GITHUB_REPO}/releases"
+  if [ "$NYDUS_VERSION" = "latest" ]; then
+    printf '%s/latest/download/nydus-static-latest-linux-amd64.tgz' "$base"
+  else
+    printf '%s/download/%s/nydus-static-%s-linux-amd64.tgz' "$base" "$NYDUS_VERSION" "$NYDUS_VERSION"
+  fi
+}
+
+# Same tarball fallback as the installer: static store first, then the pinned
+# GitHub release. The tarball is verified before any binary is installed.
+fetch_github_assets() {
+  local url tarball actual
+  if [ "$NYDUS_ALLOW_GITHUB" != "1" ]; then
+    echo "nydus-updater: GitHub fallback disabled (NYDUS_ALLOW_GITHUB=${NYDUS_ALLOW_GITHUB})" >&2
+    return 1
+  fi
+  if [ -z "$NYDUS_GITHUB_SHA256" ]; then
+    echo "nydus-updater: NYDUS_GITHUB_SHA256 is required for the GitHub fallback" >&2
+    return 1
+  fi
+  command -v sha256sum >/dev/null 2>&1 || {
+    echo "nydus-updater: sha256sum is required to verify the GitHub tarball" >&2
+    return 1
+  }
+  url="$(nydus_github_url)"
+  tarball="${tmp}/nydus-static.tgz"
+  echo "nydus-updater: static store miss; trying GitHub release ${url}" >&2
+  if ! curl -fL --retry 3 --retry-delay 5 --retry-all-errors \
+    --connect-timeout 10 --max-time 600 -o "$tarball" "$url"; then
+    echo "nydus-updater: GitHub release unavailable: ${url}" >&2
+    return 1
+  fi
+  actual="$(sha256sum "$tarball")"
+  actual="${actual%% *}"
+  if [ "$actual" != "$NYDUS_GITHUB_SHA256" ]; then
+    echo "nydus-updater: checksum mismatch for ${url}: got ${actual} want ${NYDUS_GITHUB_SHA256}" >&2
+    return 1
+  fi
+  mkdir -p "${tmp}/github"
+  if ! tar -xzf "$tarball" -C "${tmp}/github"; then
+    echo "nydus-updater: invalid GitHub tarball: ${url}" >&2
+    return 1
+  fi
+  if [ ! -d "${tmp}/github/nydus-static" ]; then
+    echo "nydus-updater: GitHub tarball has no nydus-static directory: ${url}" >&2
+    return 1
+  fi
+  github_dir="${tmp}/github/nydus-static"
+  echo "nydus-updater: using GitHub release ${NYDUS_VERSION}" >&2
+}
+
 # Fetch every asset first so a partial update never mixes versions.
+missing=""
 for binary in nydusd nydus-image nydus-overlayfs; do
   fetched=0
   for url in "${STATIC_URL%/}/nydus/${NYDUS_VERSION}/${binary}" "${STATIC_URL%/}/bin/${binary}"; do
@@ -1187,10 +1260,25 @@ for binary in nydusd nydus-image nydus-overlayfs; do
     fi
   done
   if [ "$fetched" != 1 ]; then
-    echo "nydus-updater: failed to fetch ${binary} ${NYDUS_VERSION}" >&2
-    exit 1
+    missing="${missing}${binary}"$'\n'
+    echo "nydus-updater: static store miss for ${binary}: ${STATIC_URL%/}/nydus/${NYDUS_VERSION}/${binary}, ${STATIC_URL%/}/bin/${binary}" >&2
   fi
 done
+
+if [ -n "$missing" ]; then
+  if ! fetch_github_assets; then
+    echo "nydus-updater: failed to fetch nydus ${NYDUS_VERSION}: ${missing}" >&2
+    exit 1
+  fi
+  for binary in $missing; do
+    if [ -s "${github_dir}/${binary}" ]; then
+      cp "${github_dir}/${binary}" "$tmp/$binary"
+    else
+      echo "nydus-updater: GitHub tarball is missing ${binary}" >&2
+      exit 1
+    fi
+  done
+fi
 
 changed=0
 for binary in nydusd nydus-image nydus-overlayfs; do
@@ -1205,13 +1293,13 @@ done
 # upgrade can make fscache usable (or unusable). Restart only when the
 # selection actually rewrote config.toml.
 config_changed=0
-if [ -x /usr/local/bin/nydus-fs-select ]; then
+if [ -x "$selector" ]; then
   config_before=""
   config_after=""
   if [ -f /etc/nydus/config.toml ]; then
     config_before="$(sha256sum /etc/nydus/config.toml | cut -d' ' -f1)"
   fi
-  /usr/local/bin/nydus-fs-select
+  "$selector"
   if [ -f /etc/nydus/config.toml ]; then
     config_after="$(sha256sum /etc/nydus/config.toml | cut -d' ' -f1)"
   fi

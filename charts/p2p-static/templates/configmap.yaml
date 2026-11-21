@@ -36,3 +36,7 @@ data:
             return 404;
         }
     }
+  populate-static.sh: |-
+{{ .Files.Get "files/populate-static.sh" | indent 4 }}
+  nydus-fs-select.sh: |-
+{{ .Files.Get "files/nydus-fs-select.sh" | indent 4 }}

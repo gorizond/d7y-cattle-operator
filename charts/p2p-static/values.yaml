@@ -37,6 +37,34 @@ ingress:
 static:
   existingClaim: ""
   sizeLimit: ""
+  # Self-populate the static volume from pinned release artifacts. The init
+  # container writes nydus assets to both /nydus/<version>/ and /bin/; an
+  # existing /bin/dfdaemon is preserved and only downloaded when absent.
+  populate:
+    enabled: true
+    image:
+      repository: curlimages/curl
+      tag: "8.10.1"
+      pullPolicy: IfNotPresent
+    retries: 5
+    nydus:
+      version: v2.4.5
+      tarballURL: https://github.com/dragonflyoss/nydus/releases/download/v2.4.5/nydus-static-v2.4.5-linux-amd64.tgz
+      tarballSHA256: 1ad7b793a1996577e462b0bf5c1a22e4450b9c04f7e9e99d4b274ccc92f19072
+      tarballRoot: nydus-static
+      binaries:
+        - nydusd
+        - nydus-image
+        - nydus-overlayfs
+    dfdaemon:
+      enabled: true
+      version: 1.5.14
+      tarballURL: https://github.com/dragonflyoss/client/releases/download/v1.5.14/dragonfly-client-v1.5.14-x86_64-unknown-linux-musl.tar.gz
+      tarballSHA256: d514da77d57dd77e02ac903a0072e921aa19350bbef273f5be36ae41b235653a
+      tarballRoot: dragonfly-client-v1.5.14-x86_64-unknown-linux-musl
+      binary: dfdaemon
+    selector:
+      enabled: true
 
 resources:
   requests:

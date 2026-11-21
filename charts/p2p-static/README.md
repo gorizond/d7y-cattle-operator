@@ -15,9 +15,20 @@ helm install p2p-static charts/p2p-static \
   --set static.existingClaim=static-bin
 ```
 
-`static.existingClaim` is optional. Without it the chart uses an `emptyDir`;
-populate it from GitOps or an init job. `static.sizeLimit` optionally caps the
-`emptyDir`.
+`static.existingClaim` is optional. Without it the chart uses an `emptyDir`
+that survives for the pod lifetime; an existing claim survives pod restarts.
+`static.sizeLimit` optionally caps the `emptyDir`.
+
+The static volume is self-populating: a `populate-static` init container
+downloads the pinned nydus v2.4.5 static tarball, verifies its SHA-256, and
+writes `nydusd`, `nydus-image`, `nydus-overlayfs`, and `nydus-fs-select` to both
+`/nydus/<version>/` and `/bin/`. It also fills `/bin/dfdaemon` from the pinned
+dragonfly-client v1.5.14 tarball only when the file is absent; an existing
+`dfdaemon` (the live poligon volume) is never overwritten. Downloads retry with
+backoff and fail the init container instead of starting nginx with incomplete
+assets. All artifact URLs, versions, checksums, and the init image are
+overridable under `static.populate`; `static.populate.enabled=false` restores
+the old externally-populated behavior.
 
 ## Manager-host route
 
@@ -40,12 +51,18 @@ and forwards to the `p2p-static` Service. The manager REST API keeps its own
 
 ## Asset volume
 
-The chart never ships binaries. Populate the static volume with the trusted
-`v2.4.5` nydus daemon assets (`nydusd`, `nydus-image`, `nydus-overlayfs`) and
-the patched nydus-snapshotter release. `/nydus/<version>/` is preferred by the
-host updater; `/bin/` is the legacy fallback. The embedded operator script
-checks executability but not signatures. The patched snapshotter release is
-checksum-verified by the embedded updater.
+The chart populates the static volume from pinned upstream releases; it does
+not vendor binaries. Defaults are nydus `v2.4.5`
+(`nydus-static-v2.4.5-linux-amd64.tgz`) and dragonfly-client `v1.5.14`
+(`dragonfly-client-v1.5.14-x86_64-unknown-linux-musl.tar.gz`). Both tarballs
+are SHA-256 verified before extraction. `/nydus/<version>/` is preferred by the
+host updater; `/bin/` is the legacy fallback. An existing `/bin/dfdaemon` is
+preserved; the chart only populates it when missing. The patched
+nydus-snapshotter release is not served by this chart; the embedded installer
+downloads it directly from its GitHub release and verifies its `.sha256` asset.
+The embedded operator script checks executability of host binaries, not
+signatures, and `nydus-fs-select` is shipped from the operator asset and
+checked against it by `scripts/test-p2p-static.sh`.
 
 The Ingress is optional and does not manage TLS or DNS.
 
