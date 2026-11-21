@@ -32,6 +32,9 @@ func (c *Controller) deleteSeed(cluster *provv1.Cluster) error {
 	if err := c.deleteSchedulerPKI(cluster); err != nil {
 		errs = append(errs, err)
 	}
+	if err := c.deleteHostSync(cluster); err != nil {
+		errs = append(errs, err)
+	}
 	for _, name := range []string{
 		helmop.MirrorName(cluster.Name),
 		helmop.DataName(cluster.Name),

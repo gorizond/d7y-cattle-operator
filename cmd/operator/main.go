@@ -108,6 +108,11 @@ func run() error {
 			Name:    cfg.MirrorChartName,
 			Version: cfg.MirrorChartVersion,
 		},
+		HostSyncChart: helmop.Chart{
+			Repo:    cfg.HostSyncChartRepo,
+			Name:    cfg.HostSyncChartName,
+			Version: cfg.HostSyncChartVersion,
+		},
 		ExtrasIngressController:  cfg.ExtrasIngressController,
 		ExtrasIngressClassName:   cfg.ExtrasIngressClassName,
 		ExtrasIngressGRPCEnabled: cfg.ExtrasIngressGRPCEnabled,
@@ -116,7 +121,7 @@ func run() error {
 		ExtrasTraefikTransport:   cfg.ExtrasTraefikTransport,
 		VPAEnabled:               vpaEnabled,
 	})
-	machinebootstrap.Register(ctx, secretController, machineController, clusterController.Cache(), eventController, machinebootstrap.Options{
+	machinebootstrap.Register(ctx, secretController, machineController, clusterController, eventController, machinebootstrap.Options{
 		OperatorNamespace: cfg.Namespace,
 		MTLSSecretName:    cfg.MTLSSecretName,
 		ManagerGRPCDomain: cfg.ManagerGRPCDomain,

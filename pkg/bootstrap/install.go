@@ -20,7 +20,10 @@ const (
 	// ClientCertRevisionAnnotation stores the client Secret revision used by
 	// the injected block.
 	ClientCertRevisionAnnotation = "p2p.dragonfly.io/client-cert-revision"
-	schedulerIPsAnnotation       = "p2p.dragonfly.io/scheduler-ips"
+	// BootstrapInputsAnnotation stores the full desired bootstrap-input
+	// fingerprint (client revision, scheduler IPs/ID, distro).
+	BootstrapInputsAnnotation = "p2p.dragonfly.io/bootstrap-inputs"
+	SchedulerIPsAnnotation    = "p2p.dragonfly.io/scheduler-ips"
 )
 
 // InstallConfig carries the operator-wide values used to build the p2p install
@@ -83,15 +86,20 @@ func BuildInstallEnv(cluster *provv1.Cluster, secret *corev1.Secret, schedulerID
 	if err != nil {
 		return "", err
 	}
-	distro := "k3s"
-	if cluster != nil && strings.Contains(strings.ToLower(cluster.Spec.KubernetesVersion), "+rke2") {
-		distro = "rke2"
-	}
+	distro := Distro(cluster)
 	ips := ""
 	if cluster != nil {
-		ips = strings.TrimSpace(cluster.Annotations[schedulerIPsAnnotation])
+		ips = strings.TrimSpace(cluster.Annotations[SchedulerIPsAnnotation])
 	}
 	return "P2P_DISTRO=" + distro + "\nSCHEDULER_IPS=" + ips + "\n" + env, nil
+}
+
+// Distro returns the bootstrap distro for a provisioning Cluster.
+func Distro(cluster *provv1.Cluster) string {
+	if cluster != nil && strings.Contains(strings.ToLower(cluster.Spec.KubernetesVersion), "+rke2") {
+		return "rke2"
+	}
+	return "k3s"
 }
 
 func schedulerHost(domain, clusterID string) string {

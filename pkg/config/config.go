@@ -28,6 +28,9 @@ const (
 	DefaultMirrorChartRepo               = "https://gorizond.github.io/d7y-cattle-operator"
 	DefaultMirrorChartName               = "containerd-mirror"
 	DefaultMirrorChartVersion            = "0.1.0"
+	DefaultHostSyncChartRepo             = "https://gorizond.github.io/d7y-cattle-operator"
+	DefaultHostSyncChartName             = "p2p-host-sync"
+	DefaultHostSyncChartVersion          = "0.1.0"
 	DefaultExtrasIngressController       = "nginx"
 	DefaultExtrasIngressClassName        = ""
 	DefaultExtrasIngressGRPCEnabled      = true
@@ -60,6 +63,9 @@ type Config struct {
 	MirrorChartRepo             string
 	MirrorChartName             string
 	MirrorChartVersion          string
+	HostSyncChartRepo           string
+	HostSyncChartName           string
+	HostSyncChartVersion        string
 	ExtrasIngressController     string
 	ExtrasIngressClassName      string
 	ExtrasIngressGRPCEnabled    bool
@@ -116,6 +122,9 @@ func Load(args []string) (*Config, error) {
 	fs.StringVar(&cfg.MirrorChartRepo, "containerd-mirror-chart-repo", envOr("CONTAINERD_MIRROR_CHART_REPO", DefaultMirrorChartRepo), "Helm repository URL of the containerd-mirror chart")
 	fs.StringVar(&cfg.MirrorChartName, "containerd-mirror-chart-name", envOr("CONTAINERD_MIRROR_CHART_NAME", DefaultMirrorChartName), "containerd-mirror chart name")
 	fs.StringVar(&cfg.MirrorChartVersion, "containerd-mirror-chart-version", envOr("CONTAINERD_MIRROR_CHART_VERSION", DefaultMirrorChartVersion), "containerd-mirror chart version")
+	fs.StringVar(&cfg.HostSyncChartRepo, "host-sync-chart-repo", envOr("HOST_SYNC_CHART_REPO", DefaultHostSyncChartRepo), "Helm repository URL of the p2p-host-sync chart")
+	fs.StringVar(&cfg.HostSyncChartName, "host-sync-chart-name", envOr("HOST_SYNC_CHART_NAME", DefaultHostSyncChartName), "p2p-host-sync chart name")
+	fs.StringVar(&cfg.HostSyncChartVersion, "host-sync-chart-version", envOr("HOST_SYNC_CHART_VERSION", DefaultHostSyncChartVersion), "p2p-host-sync chart version")
 	fs.StringVar(&cfg.ExtrasIngressController, "extras-ingress-controller", envOr("EXTRAS_INGRESS_CONTROLLER", DefaultExtrasIngressController), "extras Ingress controller: nginx or traefik")
 	fs.StringVar(&cfg.ExtrasIngressClassName, "extras-ingress-class-name", envOr("EXTRAS_INGRESS_CLASS_NAME", DefaultExtrasIngressClassName), "extras Ingress class name (empty uses the cluster default)")
 	fs.BoolVar(&cfg.ExtrasIngressGRPCEnabled, "extras-ingress-grpc-enabled", defaultGRPCEnabled, "render the extras gRPC Ingress")
@@ -226,6 +235,19 @@ func (c *Config) Validate() error {
 	}
 	if !chartVersionPattern.MatchString(c.MirrorChartVersion) {
 		add("--containerd-mirror-chart-version: %q is not a valid chart version", c.MirrorChartVersion)
+	}
+	if c.HostSyncChartRepo == "" {
+		add("--host-sync-chart-repo is required")
+	} else if err := validateURL(c.HostSyncChartRepo, "http", "https"); err != nil {
+		add("--host-sync-chart-repo: %v", err)
+	}
+	if c.HostSyncChartName == "" {
+		add("--host-sync-chart-name is required")
+	} else if msgs := validation.IsDNS1123Label(c.HostSyncChartName); len(msgs) > 0 {
+		add("--host-sync-chart-name: %s", strings.Join(msgs, "; "))
+	}
+	if !chartVersionPattern.MatchString(c.HostSyncChartVersion) {
+		add("--host-sync-chart-version: %q is not a valid chart version", c.HostSyncChartVersion)
 	}
 	switch c.ExtrasIngressController {
 	case "nginx", "traefik":

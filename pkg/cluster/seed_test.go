@@ -253,6 +253,7 @@ func newTestController(t *testing.T) (*Controller, *fakeHelmOpStore, *fakeEventS
 			DragonflyChart:              helmop.Chart{Repo: "https://charts.example.com", Name: "dragonfly", Version: "1.10.1-patch.2"},
 			ExtrasChart:                 helmop.Chart{Repo: "https://charts.example.com", Name: "dragonfly-extras", Version: "0.1.10"},
 			MirrorChart:                 helmop.Chart{Repo: "https://charts.example.com", Name: "containerd-mirror", Version: "0.1.0"},
+			HostSyncChart:               helmop.Chart{Repo: "https://charts.example.com", Name: "p2p-host-sync", Version: "0.1.0"},
 			ExtrasIngressController:     "nginx",
 			ExtrasIngressGRPCEnabled:    true,
 			ExtrasIngressRESTEnabled:    true,
@@ -510,4 +511,53 @@ func hasEventReason(events []*corev1.Event, reason string) bool {
 		}
 	}
 	return false
+}
+
+func TestSeedHostSyncFollowsSchedulerIPs(t *testing.T) {
+	controller, store, _ := newTestController(t)
+	cluster := testSeedCluster("42")
+	controller.machines = &fakeMachineCache{machines: []*capiv1beta2.Machine{
+		seedMachine("c1", "c1-0", "203.0.113.10"),
+		seedMachine("c1", "c1-1", "203.0.113.11"),
+	}}
+	controller.downstream = &fakeSchedulerPodLister{pods: []schedulerPod{
+		{NodeName: "c1-node", HostIP: "203.0.113.10"},
+		{NodeName: "c1-node-2", HostIP: "203.0.113.11"},
+	}}
+	controller.clusters.(*fakeClusterStore).set(cluster)
+	if _, err := controller.reconcile("", cluster); err != nil {
+		t.Fatalf("reconcile() error = %v", err)
+	}
+	if !store.has("fleet-default/" + helmop.HostSyncName("c1")) {
+		t.Fatal("host-sync HelmOp was not created")
+	}
+	op := store.object("fleet-default/" + helmop.HostSyncName("c1"))
+	ips, _ := helmValues(t, op)["schedulerIPs"].([]any)
+	if len(ips) != 2 || ips[0] != "203.0.113.10:8002" || ips[1] != "203.0.113.11:8002" {
+		t.Errorf("host-sync schedulerIPs = %v", ips)
+	}
+
+	controller.machines = &fakeMachineCache{machines: []*capiv1beta2.Machine{
+		seedMachine("c1", "c1-0", "203.0.113.12"),
+	}}
+	controller.downstream = &fakeSchedulerPodLister{pods: []schedulerPod{{NodeName: "c1-node", HostIP: "203.0.113.12"}}}
+	controller.clusters.(*fakeClusterStore).set(cluster)
+	if _, err := controller.reconcile("", cluster); err != nil {
+		t.Fatalf("reconcile(IP change) error = %v", err)
+	}
+	op = store.object("fleet-default/" + helmop.HostSyncName("c1"))
+	ips, _ = helmValues(t, op)["schedulerIPs"].([]any)
+	if len(ips) != 1 || ips[0] != "203.0.113.12:8002" {
+		t.Errorf("host-sync schedulerIPs after change = %v", ips)
+	}
+
+	controller.machines = &fakeMachineCache{}
+	controller.downstream = &fakeSchedulerPodLister{}
+	controller.clusters.(*fakeClusterStore).set(cluster)
+	if _, err := controller.reconcile("", cluster); err != nil {
+		t.Fatalf("reconcile(empty IPs) error = %v", err)
+	}
+	if store.has("fleet-default/" + helmop.HostSyncName("c1")) {
+		t.Error("host-sync HelmOp was not removed for empty scheduler IPs")
+	}
 }

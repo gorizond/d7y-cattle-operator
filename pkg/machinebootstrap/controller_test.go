@@ -23,6 +23,8 @@ type fakeSecrets struct {
 	updates   int
 	updateErr error
 	enqueued  []string
+	others    []*corev1.Secret
+	listCalls int
 }
 
 func (f *fakeSecrets) Enqueue(namespace, name string) {
@@ -30,8 +32,9 @@ func (f *fakeSecrets) Enqueue(namespace, name string) {
 }
 
 func (f *fakeSecrets) List(namespace string, selector labels.Selector) ([]*corev1.Secret, error) {
+	f.listCalls++
 	var result []*corev1.Secret
-	for _, secret := range []*corev1.Secret{f.secret, f.mtls} {
+	for _, secret := range append([]*corev1.Secret{f.secret, f.mtls}, f.others...) {
 		if secret == nil || (namespace != metav1.NamespaceAll && secret.Namespace != namespace) {
 			continue
 		}
@@ -412,5 +415,103 @@ func TestInsertInlineBlockRejectsUnknownLegacyShape(t *testing.T) {
 	raw := "#!/bin/bash\n" + bootstrap.Marker + "\ndo_install \"$@\"\n"
 	if _, err := insertInlineBlock(raw, inlineInstallBlockFor("echo new\n", "")); err == nil {
 		t.Fatal("insertInlineBlock() error = nil, want unrecognized legacy shape error")
+	}
+}
+
+func TestSchedulerInputsChangeReinjectsBlock(t *testing.T) {
+	controller, secrets, _, clusters, _, _ := testController()
+	cluster := clusters.clusters["fleet-default/c1"]
+	cluster.Annotations["p2p.dragonfly.io/scheduler-ips"] = "203.0.113.10"
+	if _, err := controller.reconcile("", secrets.secret.DeepCopy()); err != nil {
+		t.Fatalf("initial reconcile() error = %v", err)
+	}
+	value := string(secrets.secret.Data[bootstrapValueKey])
+	if !strings.Contains(value, "SCHEDULER_IPS='203.0.113.10'") {
+		t.Fatalf("initial block missing scheduler IP: %q", value)
+	}
+	if secrets.updates != 1 {
+		t.Fatalf("updates = %d, want 1", secrets.updates)
+	}
+	firstFingerprint := secrets.secret.Annotations[bootstrap.BootstrapInputsAnnotation]
+	if firstFingerprint == "" {
+		t.Fatal("bootstrap-inputs fingerprint is empty")
+	}
+
+	cluster.Annotations["p2p.dragonfly.io/scheduler-ips"] = "203.0.113.11"
+	if _, err := controller.reconcile("", secrets.secret.DeepCopy()); err != nil {
+		t.Fatalf("IP-change reconcile() error = %v", err)
+	}
+	value = string(secrets.secret.Data[bootstrapValueKey])
+	if !strings.Contains(value, "SCHEDULER_IPS='203.0.113.11'") || strings.Contains(value, "SCHEDULER_IPS='203.0.113.10'") {
+		t.Fatalf("block did not replace scheduler IP: %q", value)
+	}
+	if secrets.updates != 2 {
+		t.Errorf("updates = %d, want 2", secrets.updates)
+	}
+	if secrets.secret.Annotations[bootstrap.BootstrapInputsAnnotation] == firstFingerprint {
+		t.Error("bootstrap-inputs fingerprint did not change with scheduler IPs")
+	}
+
+	if _, err := controller.reconcile("", secrets.secret.DeepCopy()); err != nil {
+		t.Fatalf("equal reconcile() error = %v", err)
+	}
+	if secrets.updates != 2 {
+		t.Errorf("updates = %d, want 2 for equal inputs", secrets.updates)
+	}
+}
+
+func TestClusterChangedEnqueuesOnlyMatchingBootstrapSecrets(t *testing.T) {
+	controller, secrets, machines, clusters, _, _ := testController()
+	otherMachine := &capiv1beta2.Machine{ObjectMeta: metav1.ObjectMeta{
+		Name: "machine-2", Namespace: "fleet-default",
+		Labels: map[string]string{capiClusterName: "c2"},
+	}}
+	machines.machines["fleet-default/machine-2"] = otherMachine
+	clusters.clusters["fleet-default/c2"] = &provv1.Cluster{ObjectMeta: metav1.ObjectMeta{Name: "c2", Namespace: "fleet-default"}}
+	otherSecret := &corev1.Secret{
+		ObjectMeta: metav1.ObjectMeta{Name: "machine-2-machine-bootstrap", Namespace: "fleet-default"},
+		Type:       bootstrapSecretType,
+	}
+	secrets.others = append(secrets.others, otherSecret)
+
+	if _, err := controller.clusterChanged("", clusters.clusters["fleet-default/c1"]); err != nil {
+		t.Fatalf("clusterChanged() error = %v", err)
+	}
+	if len(secrets.enqueued) != 1 || secrets.enqueued[0] != "fleet-default/machine-1-machine-bootstrap" {
+		t.Errorf("enqueued = %v, want only c1 bootstrap", secrets.enqueued)
+	}
+	listCalls := secrets.listCalls
+
+	// Same scheduler inputs: no second list/enqueue.
+	if _, err := controller.clusterChanged("", clusters.clusters["fleet-default/c1"]); err != nil {
+		t.Fatalf("clusterChanged(unchanged) error = %v", err)
+	}
+	if len(secrets.enqueued) != 1 || secrets.listCalls != listCalls {
+		t.Errorf("unchanged inputs enqueued %v or listed %d times", secrets.enqueued, secrets.listCalls)
+	}
+
+	// Changed scheduler IPs: one new enqueue for c1.
+	c1 := clusters.clusters["fleet-default/c1"]
+	c1.Annotations["p2p.dragonfly.io/scheduler-ips"] = "203.0.113.10"
+	if _, err := controller.clusterChanged("", c1); err != nil {
+		t.Fatalf("clusterChanged(changed) error = %v", err)
+	}
+	if len(secrets.enqueued) != 2 || secrets.enqueued[1] != "fleet-default/machine-1-machine-bootstrap" {
+		t.Errorf("changed inputs enqueued %v", secrets.enqueued)
+	}
+
+	// Non-seed and non-enabled clusters are ignored.
+	nonSeed := c1.DeepCopy()
+	nonSeed.Annotations["p2p.dragonfly.io/seed"] = "false"
+	if _, err := controller.clusterChanged("", nonSeed); err != nil {
+		t.Fatalf("clusterChanged(non-seed) error = %v", err)
+	}
+	nonEnabled := c1.DeepCopy()
+	nonEnabled.Labels[labelEnabled] = "false"
+	if _, err := controller.clusterChanged("", nonEnabled); err != nil {
+		t.Fatalf("clusterChanged(non-enabled) error = %v", err)
+	}
+	if len(secrets.enqueued) != 2 {
+		t.Errorf("non-seed/non-enabled cluster enqueued %v", secrets.enqueued)
 	}
 }

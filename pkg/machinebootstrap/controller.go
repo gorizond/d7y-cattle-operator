@@ -4,12 +4,16 @@ package machinebootstrap
 
 import (
 	"context"
+	"crypto/sha256"
+	"encoding/hex"
 	"fmt"
 	"log/slog"
 	"strings"
+	"sync"
 	"time"
 
 	provv1 "github.com/rancher/rancher/pkg/apis/provisioning.cattle.io/v1"
+	provctl "github.com/rancher/rancher/pkg/generated/controllers/provisioning.cattle.io/v1"
 	corectl "github.com/rancher/wrangler/v3/pkg/generated/controllers/core/v1"
 	corev1 "k8s.io/api/core/v1"
 	apierrors "k8s.io/apimachinery/pkg/api/errors"
@@ -79,20 +83,89 @@ type Controller struct {
 	clusters ClusterCache
 	events   eventStore
 	opts     Options
+
+	clusterInputsMu sync.Mutex
+	clusterInputs   map[string]string
 }
 
 // Register wires the machine-bootstrap Secret controller.
-func Register(ctx context.Context, secrets corectl.SecretController, machines capictl.MachineController, clusters ClusterCache, events corectl.EventController, opts Options) {
+func Register(ctx context.Context, secrets corectl.SecretController, machines capictl.MachineController, clusters provctl.ClusterController, events corectl.EventController, opts Options) {
 	c := &Controller{
 		secrets:  secrets,
 		mtls:     secrets.Cache(),
 		machines: machines.Cache(),
-		clusters: clusters,
+		clusters: clusters.Cache(),
 		events:   events,
 		opts:     opts,
 	}
 	secrets.OnChange(ctx, controllerName, c.reconcile)
 	secrets.OnChange(ctx, controllerName+":client-cert-revision", c.clientSecretChanged)
+	clusters.OnChange(ctx, controllerName+":scheduler-inputs", c.clusterChanged)
+}
+
+// clusterChanged re-enqueues only the bootstrap Secrets that belong to the
+// updated Cluster. Reconcile compares the full input fingerprint and is a
+// no-op when scheduler IPs/ID and the client revision are unchanged.
+func (c *Controller) clusterChanged(_ string, cluster *provv1.Cluster) (*provv1.Cluster, error) {
+	if cluster == nil || c.secrets == nil || c.mtls == nil || c.machines == nil || c.clusters == nil {
+		return cluster, nil
+	}
+	if cluster.Labels[labelEnabled] != "true" || cluster.Annotations[annotationSeed] != "true" {
+		return cluster, nil
+	}
+	key := string(cluster.UID)
+	if key == "" {
+		key = cluster.Namespace + "/" + cluster.Name
+	}
+	signature := strings.TrimSpace(cluster.Annotations[bootstrap.SchedulerIPsAnnotation]) + "\x00" +
+		strings.TrimSpace(cluster.Annotations[bootstrap.SchedulerClusterIDAnnotation]) + "\x00" +
+		bootstrap.Distro(cluster)
+	c.clusterInputsMu.Lock()
+	if c.clusterInputs == nil {
+		c.clusterInputs = map[string]string{}
+	}
+	if c.clusterInputs[key] == signature {
+		c.clusterInputsMu.Unlock()
+		return cluster, nil
+	}
+	c.clusterInputs[key] = signature
+	c.clusterInputsMu.Unlock()
+
+	items, err := c.mtls.List(metav1.NamespaceAll, labels.Everything())
+	if err != nil {
+		c.clusterInputsMu.Lock()
+		if c.clusterInputs[key] == signature {
+			delete(c.clusterInputs, key)
+		}
+		c.clusterInputsMu.Unlock()
+		slog.Warn("failed to list bootstrap secrets for cluster change", "cluster", cluster.Name, "error", err)
+		return cluster, nil
+	}
+	for _, secret := range items {
+		if secret == nil || secret.Type != bootstrapSecretType {
+			continue
+		}
+		machineName := strings.TrimSuffix(secret.Name, machineBootstrapSuffix)
+		if machineName == "" || machineName == secret.Name {
+			continue
+		}
+		machine, err := c.machines.Get(secret.Namespace, machineName)
+		if err != nil || machine.Namespace != cluster.Namespace {
+			continue
+		}
+		clusterName := strings.TrimSpace(machine.Labels[capiClusterName])
+		if clusterName == "" {
+			clusterName = strings.TrimSpace(machine.Labels[rkeClusterName])
+		}
+		if clusterName != cluster.Name {
+			continue
+		}
+		if _, err := c.clusters.Get(machine.Namespace, clusterName); err != nil {
+			continue
+		}
+		c.secrets.Enqueue(secret.Namespace, secret.Name)
+	}
+	return cluster, nil
 }
 
 // clientSecretChanged re-enqueues every machine-bootstrap Secret when the
@@ -173,7 +246,8 @@ func (c *Controller) reconcile(key string, secret *corev1.Secret) (*corev1.Secre
 		return secret, err
 	}
 	clientRevision := pki.SecretRevision(mtls.Data)
-	if strings.Contains(value, bootstrap.Marker) && secret.Annotations[bootstrap.ClientCertRevisionAnnotation] == clientRevision {
+	inputsRevision := bootstrapInputsFingerprint(cluster, clientRevision)
+	if strings.Contains(value, bootstrap.Marker) && secret.Annotations[bootstrap.BootstrapInputsAnnotation] == inputsRevision {
 		return secret, nil
 	}
 	env, err := bootstrap.BuildInstallEnv(cluster, mtls, "", bootstrap.InstallConfig{
@@ -210,6 +284,7 @@ func (c *Controller) reconcile(key string, secret *corev1.Secret) (*corev1.Secre
 		updated.Annotations = map[string]string{}
 	}
 	updated.Annotations[bootstrap.ClientCertRevisionAnnotation] = clientRevision
+	updated.Annotations[bootstrap.BootstrapInputsAnnotation] = inputsRevision
 	result, err := c.secrets.Update(updated)
 	if err != nil {
 		c.event(machine, cluster, secret, corev1.EventTypeWarning, "BootstrapPatchFailed", err.Error())
@@ -217,6 +292,17 @@ func (c *Controller) reconcile(key string, secret *corev1.Secret) (*corev1.Secre
 	}
 	c.event(machine, cluster, secret, corev1.EventTypeNormal, "BootstrapInjected", "inline p2p block added to the machine bootstrap secret")
 	return result, nil
+}
+
+func bootstrapInputsFingerprint(cluster *provv1.Cluster, clientRevision string) string {
+	ips := ""
+	schedulerID := ""
+	if cluster != nil {
+		ips = strings.TrimSpace(cluster.Annotations[bootstrap.SchedulerIPsAnnotation])
+		schedulerID = strings.TrimSpace(cluster.Annotations[bootstrap.SchedulerClusterIDAnnotation])
+	}
+	sum := sha256.Sum256([]byte(clientRevision + "\x00" + ips + "\x00" + schedulerID + "\x00" + bootstrap.Distro(cluster)))
+	return hex.EncodeToString(sum[:])
 }
 
 func (c *Controller) event(machine *capiv1beta2.Machine, cluster *provv1.Cluster, secret *corev1.Secret, eventType, reason, message string) {

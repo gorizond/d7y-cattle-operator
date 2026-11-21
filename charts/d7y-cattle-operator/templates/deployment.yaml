@@ -66,6 +66,12 @@ spec:
               value: {{ .Values.containerdMirror.chart.name | quote }}
             - name: CONTAINERD_MIRROR_CHART_VERSION
               value: {{ .Values.containerdMirror.chart.version | quote }}
+            - name: HOST_SYNC_CHART_REPO
+              value: {{ .Values.hostSync.chart.repo | quote }}
+            - name: HOST_SYNC_CHART_NAME
+              value: {{ .Values.hostSync.chart.name | quote }}
+            - name: HOST_SYNC_CHART_VERSION
+              value: {{ .Values.hostSync.chart.version | quote }}
             - name: EXTRAS_INGRESS_CONTROLLER
               value: {{ .Values.extras.ingress.controller | quote }}
             - name: EXTRAS_INGRESS_CLASS_NAME

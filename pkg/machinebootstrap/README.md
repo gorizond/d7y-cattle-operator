@@ -13,10 +13,13 @@ The same embedded script is the single source of truth for the host setup; the
 
 The block carries the client identity's `ca-bundle.crt` (falling back to
 `ca.crt` for legacy Secrets). The bootstrap Secret is annotated with
-`p2p.dragonfly.io/client-cert-revision`; when the client certificate changes,
-the injected block is replaced in place (bounded by the p2p start/end markers)
-instead of being skipped. Existing nodes only pick up the new block after their
-Rancher bootstrap/cloud-init runs again, which in practice requires a reboot.
+`p2p.dragonfly.io/client-cert-revision` and
+`p2p.dragonfly.io/bootstrap-inputs` (client revision + scheduler IPs/ID +
+distro); when either changes, the injected block is replaced in place (bounded
+by the p2p start/end markers). A provisioning-Cluster watch re-enqueues only
+that cluster's bootstrap Secrets when its scheduler annotations change.
+Existing nodes only pick up the new block after their Rancher
+bootstrap/cloud-init runs again, which in practice requires a reboot.
 
 The block always carries `P2P_DISTRO` and the Cluster's
 `p2p.dragonfly.io/scheduler-ips` annotation (seed clusters publish their own

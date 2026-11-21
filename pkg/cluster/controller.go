@@ -50,6 +50,7 @@ type Options struct {
 	DragonflyChart              helmop.Chart
 	ExtrasChart                 helmop.Chart
 	MirrorChart                 helmop.Chart
+	HostSyncChart               helmop.Chart
 	ExtrasIngressController     string
 	ExtrasIngressClassName      string
 	ExtrasIngressGRPCEnabled    bool
@@ -255,7 +256,7 @@ func (c *Controller) reconcile(key string, cluster *provv1.Cluster) (result *pro
 	}
 	for _, err := range []error{
 		shared.keydb, shared.manager, shared.control, shared.data, shared.extras,
-		shared.mirror, shared.cleanup,
+		shared.mirror, shared.hostSync, shared.cleanup,
 	} {
 		if err != nil {
 			errs = append(errs, err)
@@ -301,6 +302,7 @@ func (c *Controller) helmopCluster(cluster *provv1.Cluster) helmop.Cluster {
 		Chart:                       c.opts.DragonflyChart,
 		ExtrasChart:                 c.opts.ExtrasChart,
 		MirrorChart:                 c.opts.MirrorChart,
+		HostSyncChart:               c.opts.HostSyncChart,
 		MirrorPort:                  c.opts.ContainerdMirrorPort,
 		ManagerGRPCDomain:           c.opts.ManagerGRPCDomain,
 		P2PDomain:                   c.opts.P2PDomain,
@@ -310,6 +312,7 @@ func (c *Controller) helmopCluster(cluster *provv1.Cluster) helmop.Cluster {
 		SchedulerClusterID:          schedulerClusterID(cluster),
 		SchedulerReplicas:           helmop.ReplicasOrOne(AnnotationSchedulerReplicas, cluster.Annotations[AnnotationSchedulerReplicas]),
 		SeedClientReplicas:          helmop.ReplicasOrOne(AnnotationSeedClientReplicas, cluster.Annotations[AnnotationSeedClientReplicas]),
+		SchedulerIPs:                strings.TrimSpace(cluster.Annotations[AnnotationSchedulerIPs]),
 		Monitoring:                  monitoringEnabled(cluster),
 		P2PDataTLS:                  p2pDataTLSEnabled(cluster),
 		Labels:                      apply.Labels(cluster.Namespace, cluster.Name),
@@ -362,9 +365,9 @@ func schedulerClusterID(cluster *provv1.Cluster) int {
 // sharedHelmOps carries the per-component shared apply results so conditions
 // and legacy cleanup only act on components whose shared HelmOp was applied.
 type sharedHelmOps struct {
-	keydb, manager, control, data, extras, mirror error
-	managerApplied                                bool
-	cleanup                                       error
+	keydb, manager, control, data, extras, mirror, hostSync error
+	managerApplied                                          bool
+	cleanup                                                 error
 }
 
 // ensureClusterMetadata stamps the cluster-id label used by shared Fleet
@@ -427,6 +430,11 @@ func (c *Controller) ensureSharedHelmOps(cluster *provv1.Cluster, hc helmop.Clus
 		VPAEnabled:                     c.opts.VPAEnabled,
 	}))
 	result.mirror = c.applyHelmOp(cluster, helmop.SharedMirror(hc))
+	if roles.Seed && strings.Trim(hc.SchedulerIPs, " ,") != "" {
+		result.hostSync = c.applyHelmOp(cluster, helmop.HostSync(hc))
+	} else {
+		result.hostSync = c.deleteHostSync(cluster)
+	}
 	result.cleanup = c.cleanupLegacyHelmOps(cluster, result, roles)
 	return result
 }
@@ -477,6 +485,11 @@ func (c *Controller) applyHelmOp(cluster *provv1.Cluster, op *fleetv1alpha1.Helm
 		return fmt.Errorf("apply HelmOp %s/%s: %w", cluster.Namespace, op.Name, err)
 	}
 	return nil
+}
+
+func (c *Controller) deleteHostSync(cluster *provv1.Cluster) error {
+	name := helmop.HostSyncName(cluster.Name)
+	return errors.Join(c.deleteHelmOp(cluster, name), c.deleteBundle(cluster, name))
 }
 
 func (c *Controller) deleteHelmOp(cluster *provv1.Cluster, name string) error {
