@@ -11,6 +11,7 @@ import (
 	corev1 "k8s.io/api/core/v1"
 	apierrors "k8s.io/apimachinery/pkg/api/errors"
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
+	"k8s.io/apimachinery/pkg/util/validation"
 )
 
 // Wrangler's generated SecretController must satisfy SecretStore.
@@ -416,5 +417,16 @@ func TestSANsCoverWildcardService(t *testing.T) {
 	}
 	if SANsCover(cert, []string{"a.b.dragonfly-system.svc"}, nil) {
 		t.Error("wildcard service SAN covered a multi-label prefix")
+	}
+}
+
+func TestShortFingerprintIsLabelSafe(t *testing.T) {
+	ca := testCA(t)
+	fingerprint := ShortFingerprint(ca.CertPEM)
+	if len(fingerprint) != 32 {
+		t.Errorf("ShortFingerprint length = %d, want 32", len(fingerprint))
+	}
+	if errs := validation.IsValidLabelValue(fingerprint); len(errs) > 0 {
+		t.Errorf("ShortFingerprint %q is not a valid label: %v", fingerprint, errs)
 	}
 }

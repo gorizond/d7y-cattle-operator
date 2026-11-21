@@ -257,7 +257,7 @@ func (c *Controller) setCAAnnotation(namespace, key, value string) error {
 func (c *Controller) ensureLegacyServerSecret(namespace string, client *corev1.Secret, clientValid bool, manager, scheduler *corev1.Secret, ca *pki.CA, phaseA bool) (*corev1.Secret, error) {
 	current, err := c.secrets.Get(namespace, legacyServerSecretName, metav1.GetOptions{})
 	if err == nil {
-		activeFingerprint := pki.Fingerprint(ca.CertPEM)
+		activeFingerprint := pki.ShortFingerprint(ca.CertPEM)
 		if current.Labels[pki.CAFingerprintLabel] == activeFingerprint && isBundleTrustedServer(current, ca) {
 			return current, nil
 		}
@@ -296,7 +296,7 @@ func (c *Controller) ensureLegacyServerSecret(namespace string, client *corev1.S
 			Labels: map[string]string{
 				pki.LeafGenerationLabel: pki.LeafGenerationV2,
 				pki.ManagedByLabel:      pki.ManagedByValue,
-				pki.CAFingerprintLabel:  pki.Fingerprint(ca.CertPEM),
+				pki.CAFingerprintLabel:  pki.ShortFingerprint(ca.CertPEM),
 			},
 		},
 		Type: corev1.SecretTypeTLS,
@@ -653,8 +653,13 @@ func (c *Controller) deleteSchedulerPKI(cluster *provv1.Cluster) error {
 		}
 	}
 	if c.secrets != nil {
-		if err := c.secrets.Delete(c.opts.OperatorNamespace, helmop.SchedulerSourceSecretName(cluster.Name), &metav1.DeleteOptions{}); err != nil && !apierrors.IsNotFound(err) {
-			errs = append(errs, fmt.Errorf("delete scheduler Secret: %w", err))
+		name := helmop.SchedulerSourceSecretName(cluster.Name)
+		if _, err := c.secrets.Get(c.opts.OperatorNamespace, name, metav1.GetOptions{}); err == nil {
+			if err := c.secrets.Delete(c.opts.OperatorNamespace, name, &metav1.DeleteOptions{}); err != nil && !apierrors.IsNotFound(err) {
+				errs = append(errs, fmt.Errorf("delete scheduler Secret: %w", err))
+			}
+		} else if !apierrors.IsNotFound(err) {
+			errs = append(errs, fmt.Errorf("get scheduler Secret before delete: %w", err))
 		}
 	}
 	return errorsJoin(errs)
