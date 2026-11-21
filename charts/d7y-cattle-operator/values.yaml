@@ -82,6 +82,14 @@ extras:
     tlsSecret: ""
     traefikServersTransportEnabled: true
 
+# Per-seed host sync keeps /etc/dragonfly current from the scheduler-ips
+# annotation without touching systemd units.
+hostSync:
+  chart:
+    repo: https://gorizond.github.io/d7y-cattle-operator
+    name: p2p-host-sync
+    version: 0.1.0
+
 # Strict node-local containerd registry mirror for seed/data clusters.
 containerdMirror:
   # Node-local dfdaemon/containerd mirror port used in the hosts.toml files

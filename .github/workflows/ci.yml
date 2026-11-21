@@ -53,6 +53,7 @@ jobs:
           helm template dragonfly-extras charts/dragonfly-extras --set ingress.enabled=true --set vpa.enabled=true --api-versions autoscaling.k8s.io/v1 > /dev/null
           helm template p2p-static charts/p2p-static > /dev/null
           helm template containerd-mirror charts/containerd-mirror > /dev/null
+          helm template p2p-host-sync charts/p2p-host-sync --set 'schedulerIPs[0]=203.0.113.10:8002' > /dev/null
 
       - name: Render extras ingress modes
         run: bash scripts/test-extras-ingress.sh

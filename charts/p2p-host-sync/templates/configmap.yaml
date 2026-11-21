@@ -1,0 +1,88 @@
+apiVersion: v1
+kind: ConfigMap
+metadata:
+  name: {{ .Release.Name }}-config
+  namespace: {{ .Release.Namespace }}
+  labels:
+    app.kubernetes.io/name: p2p-host-sync
+    app.kubernetes.io/instance: {{ .Release.Name }}
+data:
+  scheduler-ips: {{ join "," .Values.schedulerIPs | quote }}
+  dynconfig.yaml: |
+    scheduler:
+{{- if .Values.schedulerIPs }}
+      addrs:
+{{- range .Values.schedulerIPs }}
+      - {{ . | quote }}
+{{- end }}
+{{- else }}
+      addrs: []
+{{- end }}
+  sync.sh: |
+    #!/bin/sh
+    set -u
+    HOST_DIR=/host{{ .Values.hostConfigDir }}
+    SRC_CONFIG=/source/config
+    SRC_CERTS=/source/certs
+    log() { echo "p2p-host-sync: $*" >&2; }
+    mkdir -p "$HOST_DIR/certs" || exit 1
+
+    sync_file() {
+      src="$1"
+      dst="$2"
+      mode="$3"
+      if [ ! -r "$src" ]; then
+        log "source $src is not readable; keeping $dst"
+        return 0
+      fi
+      tmp="${dst}.tmp.$$"
+      if ! cp "$src" "$tmp" 2>/dev/null; then
+        rm -f "$tmp"
+        log "copy $src failed; keeping $dst"
+        return 0
+      fi
+      chmod "$mode" "$tmp" || { rm -f "$tmp"; log "chmod $tmp failed"; return 0; }
+      if [ -f "$dst" ] && cmp -s "$tmp" "$dst"; then
+        rm -f "$tmp"
+      else
+        mv -f "$tmp" "$dst" || log "replace $dst failed"
+      fi
+    }
+
+    while true; do
+      if [ -r "$SRC_CONFIG/dynconfig.yaml" ]; then
+        sync_file "$SRC_CONFIG/dynconfig.yaml" "$HOST_DIR/dynconfig.yaml" 0644
+        if [ -r "$SRC_CONFIG/scheduler-ips" ]; then
+          ips="$(tr -d '\r\n' < "$SRC_CONFIG/scheduler-ips" 2>/dev/null || true)"
+          tmp="$HOST_DIR/scheduler-ips.tmp.$$"
+          if [ -n "$ips" ]; then
+            if printf '%s\n' "$ips" > "$tmp" 2>/dev/null; then
+              chmod 0644 "$tmp" && mv -f "$tmp" "$HOST_DIR/scheduler-ips" || log "replace scheduler-ips failed"
+            else
+              rm -f "$tmp"
+              log "write scheduler-ips failed"
+            fi
+          else
+            rm -f "$HOST_DIR/scheduler-ips"
+          fi
+        else
+          log "$SRC_CONFIG/scheduler-ips is not readable; keeping marker"
+        fi
+      else
+        log "$SRC_CONFIG/dynconfig.yaml is not readable; keeping config"
+      fi
+
+      certs_ok=1
+      for file in ca.crt tls.crt tls.key; do
+        [ -r "$SRC_CERTS/$file" ] || certs_ok=0
+      done
+      if [ "$certs_ok" = 1 ]; then
+        sync_file "$SRC_CERTS/ca.crt" "$HOST_DIR/certs/ca.crt" 0644
+        sync_file "$SRC_CERTS/tls.crt" "$HOST_DIR/certs/tls.crt" 0644
+        sync_file "$SRC_CERTS/tls.key" "$HOST_DIR/certs/tls.key" 0600
+      else
+        log "client certificate source is incomplete; keeping existing certs"
+      fi
+
+      sleep "${SYNC_INTERVAL_SECONDS:-30}"
+    done

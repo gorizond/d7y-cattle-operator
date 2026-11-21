@@ -208,6 +208,9 @@ and JWT signing key; see [Manager root credentials](#manager-root-credentials).
 | `extras.chart.repo` | `EXTRAS_CHART_REPO` | Helm repository URL of the dragonfly-extras chart |
 | `extras.chart.name` | `EXTRAS_CHART_NAME` | dragonfly-extras chart name |
 | `extras.chart.version` | `EXTRAS_CHART_VERSION` | dragonfly-extras chart version |
+| `hostSync.chart.repo` | `HOST_SYNC_CHART_REPO` | Helm repository URL of the p2p-host-sync chart |
+| `hostSync.chart.name` | `HOST_SYNC_CHART_NAME` | p2p-host-sync chart name |
+| `hostSync.chart.version` | `HOST_SYNC_CHART_VERSION` | p2p-host-sync chart version |
 | `extras.ingress.controller` | `EXTRAS_INGRESS_CONTROLLER` | `nginx` (default) or `traefik` |
 | `extras.ingress.className` | `EXTRAS_INGRESS_CLASS_NAME` | Ingress class; empty uses the cluster default |
 | `extras.ingress.grpcEnabled` | `EXTRAS_INGRESS_GRPC_ENABLED` | Render the manager gRPC front when the manager role is active; default `true` |
@@ -218,7 +221,8 @@ and JWT signing key; see [Manager root credentials](#manager-root-credentials).
 Defaults: `mtlsSecretName=dragonfly-p2p-mtls`, `dragonfly.chart.name=dragonfly`,
 `dragonfly.chart.repo=https://gorizond.github.io/dragonflyoss-helm-charts`,
 `dragonfly.chart.version=1.10.1-patch.2`, `extras.chart.name=dragonfly-extras`,
-`extras.chart.version=0.1.10`, `extras.ingress.controller=nginx`,
+`extras.chart.version=0.1.10`, `hostSync.chart.name=p2p-host-sync`,
+`hostSync.chart.version=0.1.0`, `extras.ingress.controller=nginx`,
 `extras.ingress.grpcEnabled=true`, `extras.ingress.restEnabled=true`,
 `manager.grpcPort=443`, `leaderElect=false`. Scheduler node IPs come from
 downstream scheduler pods/CAPI Machines; there is no scheduler IP value.
@@ -516,6 +520,28 @@ control scheduler uses the per-target
 scheduler rolls. A stable SAN set keeps the revision stable. Leaf Secret
 updates remove `kubectl.kubernetes.io/last-applied-configuration` because it can
 contain a copy of `tls.key`.
+
+### Host sync DaemonSet
+
+`p2p-host-sync` is a per-seed HelmOp (`<cluster>-p2p-host-sync`) rendered from
+the Cluster `p2p.dragonfly.io/scheduler-ips` annotation. The operator only
+creates it for seed clusters with a non-empty scheduler IP list; an empty list
+removes the HelmOp. The chart renders a ConfigMap containing
+`scheduler-ips` (`<ip>:8002` entries) and a matching `scheduler:` `addrs` list.
+
+The DaemonSet mounts only `/etc/dragonfly` from the host, the operator-generated
+ConfigMap, and the `dragonfly-p2p-mtls` client Secret. It runs privileged as
+root, has no Kubernetes API access, and every 30 seconds copies the ConfigMap
+`dynconfig.yaml`/`scheduler-ips` and the client `ca.crt`/`tls.crt`/`tls.key` to
+the host files (`tls.key` is mode 0600). Missing or transiently unreadable
+sources are logged and skipped; an empty scheduler list removes the
+`scheduler-ips` marker. It never starts, stops, or restarts systemd units: the
+existing host/in-cluster switch owns handoff. A scheduler-IP change updates the
+HelmOp values, Fleet applies the updated ConfigMap, and the DaemonSet loop
+updates the host files without restarting pods.
+
+The new chart is packaged by the release workflow (`cr package charts/*`) along
+with the other charts; no separate publication step is required.
 
 ### Port security
 
@@ -830,6 +856,9 @@ make helm-template  # render the operator, extras, p2p-static, and mirror charts
   cert Bundle. The CA private key exists only in the Opaque
   `dragonfly-p2p-ca` Secret. Neither is logged. Restrict Bundle read access:
   anyone who can read the cert Bundle can read the scheduler leaf `tls.key`.
+- The host sync DaemonSet is privileged and mounts `/etc/dragonfly` read-write;
+  it has no ServiceAccount token or Kubernetes API access. Treat its node
+  placement and hostPath mount as a cluster-admin surface.
 - The operator uses Wrangler/lasso clients for its own resources and a client-go
   clientset only to read downstream scheduler pods through the per-cluster
   kubeconfig. Its ClusterRole includes create/update/patch on Fleet Bundles for

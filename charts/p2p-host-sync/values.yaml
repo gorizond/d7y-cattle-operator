@@ -1,0 +1,32 @@
+# Privileged host sync for the pre-RKE2 dfdaemon bootstrap.
+image:
+  repository: busybox
+  tag: "1.36"
+  pullPolicy: IfNotPresent
+
+# Comma-separated scheduler node IPs rendered by the operator from
+# p2p.dragonfly.io/scheduler-ips. Each entry gets :8002 appended by the
+# operator before it is placed here.
+schedulerIPs: []
+
+# Client identity Secret mounted into the pod. The operator delivers it through
+# the HostSync HelmOp's downstreamResources.
+mtlsSecret: dragonfly-p2p-mtls
+
+# ConfigMap/Secret source directory and host config directory.
+hostConfigDir: /etc/dragonfly
+syncIntervalSeconds: 30
+
+resources:
+  requests:
+    cpu: 10m
+    memory: 16Mi
+  limits:
+    cpu: 100m
+    memory: 64Mi
+
+tolerations:
+  - operator: Exists
+
+nodeSelector: {}
+podAnnotations: {}

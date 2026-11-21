@@ -200,6 +200,7 @@ type Cluster struct {
 	Chart          Chart
 	ExtrasChart    Chart
 	MirrorChart    Chart
+	HostSyncChart  Chart
 	// MirrorPort is the node-local dfdaemon/containerd mirror port.
 	MirrorPort        int
 	ManagerGRPCDomain string
@@ -215,6 +216,7 @@ type Cluster struct {
 	SchedulerClusterIDTemplate string
 	SchedulerReplicas          string
 	SeedClientReplicas         string
+	SchedulerIPs               string
 	// P2PDomain is the operator-wide scheduler base domain used to build the
 	// shared scheduler host template.
 	P2PDomain string
@@ -244,6 +246,9 @@ func ManagerName(cluster string) string { return objectName(cluster, "manager") 
 
 // ControlName returns the control (scheduler) HelmOp and release name.
 func ControlName(cluster string) string { return objectName(cluster, "control") }
+
+// HostSyncName returns the per-seed host-sync HelmOp and release name.
+func HostSyncName(cluster string) string { return objectName(cluster, "p2p-host-sync") }
 
 // SchedulerBundleName returns the per-seed scheduler certificate Bundle name.
 func SchedulerBundleName(cluster string) string { return objectName(cluster, "p2p-scheduler") }
