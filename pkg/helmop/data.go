@@ -1,9 +1,8 @@
 package helmop
 
 import (
-	"fmt"
-
 	fleetv1alpha1 "github.com/rancher/fleet/pkg/apis/fleet.cattle.io/v1alpha1"
+	"sigs.k8s.io/yaml"
 )
 
 // Data returns the seedClient/client HelmOp. It deliberately leaves
@@ -15,9 +14,11 @@ import (
 // The Dragonfly chart has no separate advertise fields for dfdaemon.
 func Data(c Cluster) *fleetv1alpha1.HelmOp {
 	names := ClusterNames(c.Name)
+	values := dataValues(c, names)
 	op := newHelmOp(DataName(c.Name), c, c.Chart, "data",
-		dataValues(c, names, schedulerAddr(c.SchedulerHost)),
+		values,
 		[]string{names.Control, names.KeyDB, ExtrasName(c.Name)})
+	withSchedulerAddrsTemplate(op, values)
 	return withMTLS(op, c.MTLSSecretName)
 }
 
@@ -26,20 +27,15 @@ func Data(c Cluster) *fleetv1alpha1.HelmOp {
 func SharedData(c Cluster) *fleetv1alpha1.HelmOp {
 	c = sharedCluster(c)
 	names := SharedNames()
+	values := dataValues(c, names)
 	op := newSharedHelmOp(SharedDataName(), TargetNamespace, c, c.Chart, "data",
-		dataValues(c, names, SharedSchedulerAddrTemplate(c.P2PDomain)),
+		values,
 		[]string{SharedControlName(), SharedKeyDBName(), SharedExtrasName()}, SharedSelector())
+	withSchedulerAddrsTemplate(op, values)
 	return withMTLS(op, c.MTLSSecretName)
 }
 
-// schedulerAddr is the public scheduler front used by DaemonSets: the P2P
-// client resolves this host to the public LB IP that is in the certificate SAN
-// set, and Traefik passes TLS through to the scheduler.
-func schedulerAddr(host string) string {
-	return fmt.Sprintf("%s:%d", host, SchedulerPublicPort)
-}
-
-func dataValues(c Cluster, names Names, schedulerAddr string) map[string]any {
+func dataValues(c Cluster, names Names) map[string]any {
 	seedClient := map[string]any{
 		"enable":      true,
 		"hostNetwork": true,
@@ -55,7 +51,6 @@ func dataValues(c Cluster, names Names, schedulerAddr string) map[string]any {
 		},
 		// The chart defaults to a 100Gi PVC; the seed client must stay PVC-free.
 		"persistence": map[string]any{"enable": false},
-		"dynconfig":   map[string]any{"scheduler": map[string]any{"addr": schedulerAddr}},
 		"config": map[string]any{
 			"host":      map[string]any{"schedulerClusterID": schedulerClusterIDValue(c)},
 			"scheduler": tlsPaths(),
@@ -89,7 +84,6 @@ func dataValues(c Cluster, names Names, schedulerAddr string) map[string]any {
 			"requests": map[string]any{"cpu": "250m", "memory": "512Mi"},
 			"limits":   map[string]any{"cpu": "2", "memory": "4Gi"},
 		},
-		"dynconfig": map[string]any{"scheduler": map[string]any{"addr": schedulerAddr}},
 		"config": map[string]any{
 			"host":      map[string]any{"schedulerClusterID": schedulerClusterIDValue(c)},
 			"scheduler": tlsPaths(),
@@ -139,6 +133,49 @@ func dataValues(c Cluster, names Names, schedulerAddr string) map[string]any {
 	// dynconfig, so data waits for it before starting clients.
 	applyMonitoring(values, c.Monitoring)
 	return values
+}
+
+const schedulerAddrsTemplate = `dynconfig:
+  scheduler:
+${- with (default "" (index .ClusterAnnotations "p2p.dragonfly.io/scheduler-ips")) }
+    addrs:
+${- range splitList "," . }
+    - "${ . }:8002"
+${- end }
+${- else }
+    addrs: []
+${- end }
+`
+
+// withSchedulerAddrsTemplate supplies the per-target dynconfig as Fleet
+// template values so the chart receives a real list of scheduler node IPs.
+func withSchedulerAddrsTemplate(op *fleetv1alpha1.HelmOp, values map[string]any) {
+	templates := map[string]string{}
+	for _, key := range []string{"seedClient", "client"} {
+		component, ok := values[key].(map[string]any)
+		if !ok {
+			continue
+		}
+		withoutDynconfig := make(map[string]any, len(component))
+		for k, v := range component {
+			if k == "dynconfig" {
+				continue
+			}
+			withoutDynconfig[k] = v
+		}
+		raw, err := yaml.Marshal(withoutDynconfig)
+		if err != nil {
+			continue
+		}
+		templates[key] = string(raw) + schedulerAddrsTemplate
+	}
+	if len(templates) == 0 {
+		return
+	}
+	if op.Spec.Helm == nil {
+		op.Spec.Helm = &fleetv1alpha1.HelmOptions{}
+	}
+	op.Spec.Helm.TemplateValues = templates
 }
 
 // proxyRules must render as a YAML sequence: dfdaemon rejects a map form with

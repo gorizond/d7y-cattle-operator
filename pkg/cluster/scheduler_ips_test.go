@@ -2,7 +2,10 @@ package cluster
 
 import (
 	"context"
+	"errors"
 	"testing"
+
+	corev1 "k8s.io/api/core/v1"
 
 	provv1 "github.com/rancher/rancher/pkg/apis/provisioning.cattle.io/v1"
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
@@ -21,6 +24,15 @@ func (f *fakeClusterCache) List(_ string, _ labels.Selector) ([]*provv1.Cluster,
 type fakeMachineCache struct {
 	machines []*capiv1beta2.Machine
 	err      error
+}
+
+type fakeSchedulerPodLister struct {
+	pods []schedulerPod
+	err  error
+}
+
+func (f *fakeSchedulerPodLister) ListSchedulerPods(_ context.Context, _ []byte) ([]schedulerPod, error) {
+	return f.pods, f.err
 }
 
 func (f *fakeMachineCache) List(_ string, _ labels.Selector) ([]*capiv1beta2.Machine, error) {
@@ -70,37 +82,49 @@ func testSchedulerController(target *provv1.Cluster, clusters []*provv1.Cluster)
 	return c, store, events
 }
 
-func TestSeedPublishesOwnMachineIPs(t *testing.T) {
+func TestSeedUsesSchedulerPodsOnMachineNodes(t *testing.T) {
 	target := schedulerSeed("seed-a", "203.0.113.99")
 	target.Annotations[legacySchedulerPublicIP] = "192.0.2.1"
+	nodeA := seedMachine("seed-a", "seed-a-0", "203.0.113.10")
+	nodeA.Status.NodeRef = capiv1beta2.MachineNodeReference{Name: "node-a"}
+	nodeB := seedMachine("seed-a", "seed-a-1", "203.0.113.11")
+	nodeB.Status.NodeRef = capiv1beta2.MachineNodeReference{Name: "node-b"}
+	fallback := seedMachine("seed-a", "seed-a-2", "203.0.113.12")
+	fallback.Status.Addresses = append(fallback.Status.Addresses,
+		capiv1beta2.MachineAddress{Type: capiv1beta2.MachineInternalIP, Address: "10.0.0.1"},
+		capiv1beta2.MachineAddress{Type: capiv1beta2.MachineInternalIP, Address: "2001:db8::1"},
+	)
 	deleting := seedMachine("seed-a", "seed-a-deleting", "203.0.113.40")
 	now := metav1.Now()
 	deleting.DeletionTimestamp = &now
-	machines := []*capiv1beta2.Machine{
-		seedMachine("seed-a", "seed-a-0", "203.0.113.10"),
-		seedMachine("seed-a", "seed-a-1", "203.0.113.10"),
-		seedMachine("seed-a", "seed-a-2", "203.0.113.11"),
-		seedMachine("seed-a", "seed-a-private", "10.0.0.1"),
-		seedMachine("seed-a", "seed-a-ipv6", "2001:db8::1"),
-		seedMachine("other", "other-0", "203.0.113.50"),
-		seedMachine("seed-a", "seed-a-empty", ""),
-		deleting,
-	}
-	rkeLabeled := seedMachine("seed-a", "seed-a-fallback", "203.0.113.12")
-	rkeLabeled.Labels = map[string]string{rkeClusterName: "seed-a"}
-	machines = append(machines, rkeLabeled)
+	deleting.Status.NodeRef = capiv1beta2.MachineNodeReference{Name: "node-deleting"}
 	controller, store, events := testSchedulerController(target, []*provv1.Cluster{target})
-	controller.machines = &fakeMachineCache{machines: machines}
+	secrets := newFakeSecretStore()
+	secrets.put(&corev1.Secret{ObjectMeta: metav1.ObjectMeta{Name: "seed-a-kubeconfig", Namespace: "fleet-default"}, Data: map[string][]byte{"value": []byte("fake")}})
+	controller.secrets = secrets
+	controller.machines = &fakeMachineCache{machines: []*capiv1beta2.Machine{
+		nodeA, nodeB, fallback,
+		seedMachine("other", "other-0", "203.0.113.50"),
+		deleting,
+		seedMachine("seed-a", "seed-a-empty", ""),
+	}}
+	controller.downstream = &fakeSchedulerPodLister{pods: []schedulerPod{
+		{NodeName: "node-a", HostIP: "203.0.113.10"},
+		{NodeName: "node-a", HostIP: "203.0.113.10"},
+		{NodeName: "node-b", HostIP: "203.0.113.11"},
+		{NodeName: "missing-node", HostIP: "203.0.113.12"},
+		{NodeName: "node-deleting", HostIP: "203.0.113.40"},
+	}}
 
-	ips, err := controller.seedMachineIPs(target)
+	ips, err := controller.discoverSeedSchedulerIPs(target)
 	if err != nil {
-		t.Fatalf("seedMachineIPs() error = %v", err)
+		t.Fatalf("discoverSeedSchedulerIPs() error = %v", err)
 	}
 	if _, err := controller.ensureSchedulerIPs(target, Roles{Enabled: true, Seed: true}, ips); err != nil {
 		t.Fatalf("ensureSchedulerIPs() error = %v", err)
 	}
 	if got := store.annotation(AnnotationSchedulerIPs); got != "203.0.113.10,203.0.113.11,203.0.113.12" {
-		t.Errorf("scheduler IPs = %q, want own deduped sorted public IPv4s", got)
+		t.Errorf("scheduler IPs = %q, want deduped/sorted scheduler node IPs", got)
 	}
 	if got := store.annotation(legacySchedulerPublicIP); got != "" {
 		t.Errorf("legacy scheduler-public-ip = %q, want removed", got)
@@ -171,5 +195,55 @@ func TestSchedulerIPsSeedEmptyRemovesAnnotation(t *testing.T) {
 	}
 	if got := store.annotation(AnnotationSchedulerIPs); got != "" {
 		t.Errorf("scheduler IPs = %q, want removed when DNS resolved nothing", got)
+	}
+}
+
+func TestSeedMissingKubeconfigKeepsAnnotation(t *testing.T) {
+	controller, _, events := newTestController(t)
+	cluster := testSeedCluster("42")
+	cluster.Annotations[AnnotationSchedulerIPs] = "203.0.113.10"
+	controller.clusters.(*fakeClusterStore).set(cluster)
+	controller.secrets.(*fakeSecretStore).secrets = map[string]*corev1.Secret{}
+	controller.downstream.(*fakeSchedulerPodLister).pods = nil
+
+	if _, err := controller.reconcile("", cluster); err != nil {
+		t.Fatalf("reconcile() error = %v", err)
+	}
+	if got := controller.clusters.(*fakeClusterStore).annotation(AnnotationSchedulerIPs); got != "203.0.113.10" {
+		t.Errorf("scheduler IPs = %q, want stale annotation preserved on discovery failure", got)
+	}
+	if !hasEventReason(events.events, "SchedulerIPsUnavailable") {
+		t.Errorf("events = %+v, want SchedulerIPsUnavailable", events.events)
+	}
+}
+
+func TestSeedEmptySchedulerPodsRemovesAnnotation(t *testing.T) {
+	controller, _, _ := newTestController(t)
+	cluster := testSeedCluster("42")
+	controller.downstream.(*fakeSchedulerPodLister).pods = nil
+
+	if _, err := controller.reconcile("", cluster); err != nil {
+		t.Fatalf("reconcile() error = %v", err)
+	}
+	if got := controller.clusters.(*fakeClusterStore).annotation(AnnotationSchedulerIPs); got != "" {
+		t.Errorf("scheduler IPs = %q, want empty without scheduler pods", got)
+	}
+}
+
+func TestSeedDownstreamErrorKeepsAnnotation(t *testing.T) {
+	controller, _, events := newTestController(t)
+	cluster := testSeedCluster("42")
+	cluster.Annotations[AnnotationSchedulerIPs] = "203.0.113.10"
+	controller.clusters.(*fakeClusterStore).set(cluster)
+	controller.downstream.(*fakeSchedulerPodLister).err = errors.New("downstream unavailable")
+
+	if _, err := controller.reconcile("", cluster); err != nil {
+		t.Fatalf("reconcile() error = %v", err)
+	}
+	if got := controller.clusters.(*fakeClusterStore).annotation(AnnotationSchedulerIPs); got != "203.0.113.10" {
+		t.Errorf("scheduler IPs = %q, want stale annotation preserved on downstream error", got)
+	}
+	if !hasEventReason(events.events, "SchedulerIPsUnavailable") {
+		t.Errorf("events = %+v, want SchedulerIPsUnavailable", events.events)
 	}
 }

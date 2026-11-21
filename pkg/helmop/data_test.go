@@ -1,10 +1,13 @@
 package helmop
 
 import (
+	"bytes"
 	"strings"
 	"testing"
+	"text/template"
 
 	fleetv1alpha1 "github.com/rancher/fleet/pkg/apis/fleet.cattle.io/v1alpha1"
+	"sigs.k8s.io/yaml"
 )
 
 func TestDataHelmOp(t *testing.T) {
@@ -44,8 +47,11 @@ func TestDataHelmOp(t *testing.T) {
 	if got := valueAt(t, seedClient, "replicas"); got != testCluster().SeedClientReplicas {
 		t.Errorf("seedClient.replicas = %v", got)
 	}
-	if got := valueAt(t, seedClient, "dynconfig", "scheduler", "addr"); got != "d7y-scheduler.c-m-test.example.com:443" {
-		t.Errorf("seedClient dynconfig addr = %v", got)
+	dynconfig := op.Spec.Helm.TemplateValues["seedClient"]
+	for _, want := range []string{"addrs:", ":8002", "scheduler-ips"} {
+		if !strings.Contains(dynconfig, want) {
+			t.Errorf("seedClient dynconfig template missing %q: %q", want, dynconfig)
+		}
 	}
 	if got := valueAt(t, seedClient, "podAnnotations", certRevisionAnnotation); got != "rev1" {
 		t.Errorf("seedClient podAnnotations revision = %v", got)
@@ -268,9 +274,6 @@ func TestControlHelmOp(t *testing.T) {
 	if got := valueAt(t, values, "scheduler", "config", "server", "advertisePort"); got != SchedulerPort {
 		t.Errorf("scheduler advertisePort = %v, want scheduler gRPC port %d", got, SchedulerPort)
 	}
-	if got := valueAt(t, values, "scheduler", "config", "server", "advertisePort"); got == SchedulerPublicPort {
-		t.Errorf("scheduler advertisePort must not be the public Traefik port %d", SchedulerPublicPort)
-	}
 	if got := valueAt(t, values, "scheduler", "podAnnotations", certRevisionAnnotation); got != "rev1" {
 		t.Errorf("scheduler podAnnotations revision = %v", got)
 	}
@@ -349,4 +352,66 @@ func containsSubstring(value any, substr string) bool {
 		}
 	}
 	return false
+}
+
+func TestSchedulerAddrsTemplateRendersFleetAnnotations(t *testing.T) {
+	tmpl := Data(testCluster()).Spec.Helm.TemplateValues["seedClient"]
+	tests := []struct {
+		name        string
+		annotations map[string]string
+		want        []string
+	}{
+		{
+			name:        "ips",
+			annotations: map[string]string{"p2p.dragonfly.io/scheduler-ips": "203.0.113.10,203.0.113.11"},
+			want:        []string{"203.0.113.10:8002", "203.0.113.11:8002"},
+		},
+		{
+			name:        "empty",
+			annotations: map[string]string{},
+			want:        nil,
+		},
+	}
+	for _, tc := range tests {
+		t.Run(tc.name, func(t *testing.T) {
+			rendered, err := renderFleetTemplate(t, tmpl, tc.annotations)
+			if err != nil {
+				t.Fatalf("render template: %v", err)
+			}
+			var values map[string]any
+			if err := yaml.Unmarshal(rendered, &values); err != nil {
+				t.Fatalf("rendered values are not YAML: %v\n%s", err, rendered)
+			}
+			addrs, _ := valueAt(t, values, "dynconfig", "scheduler", "addrs").([]any)
+			if len(addrs) != len(tc.want) {
+				t.Fatalf("addrs = %v, want %v", addrs, tc.want)
+			}
+			for i, want := range tc.want {
+				if addrs[i] != want {
+					t.Errorf("addrs[%d] = %v, want %s", i, addrs[i], want)
+				}
+			}
+		})
+	}
+}
+
+func renderFleetTemplate(t *testing.T, text string, annotations map[string]string) ([]byte, error) {
+	t.Helper()
+	tmpl, err := template.New("values").Delims("${", "}").Funcs(template.FuncMap{
+		"default": func(def, value any) any {
+			if value == nil || value == "" {
+				return def
+			}
+			return value
+		},
+		"splitList": func(sep, value string) []string { return strings.Split(value, sep) },
+	}).Parse(text)
+	if err != nil {
+		return nil, err
+	}
+	var out bytes.Buffer
+	if err := tmpl.Execute(&out, map[string]any{"ClusterAnnotations": annotations}); err != nil {
+		return nil, err
+	}
+	return out.Bytes(), nil
 }
