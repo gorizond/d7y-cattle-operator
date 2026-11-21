@@ -481,13 +481,21 @@ fi
 
 # P2P data upload is intentionally plaintext here. Scheduler control uses
 # client mTLS with caCert/cert/key directly under scheduler, matching
-# dfdaemon 1.5.14 and the in-cluster client config. The operator's
-# p2p-data-tls annotation does not apply to this pre-cluster bootstrap config.
+# dfdaemon 1.5.14 and the in-cluster client config. The proxy scheduling rules
+# match the chart client config so registry blobs/manifests use Dragonfly P2P.
+# The operator's p2p-data-tls annotation does not apply to this pre-cluster
+# bootstrap config.
 write_file "${ROOT}${DFGET_CONFIG}" 0644 <<EOF
 scheduler:
   caCert: "$CERT_DIR/ca.crt"
   cert: "$CERT_DIR/tls.crt"
   key: "$CERT_DIR/tls.key"
+proxy:
+  rules:
+    - regex: blobs/sha256.*
+      schedulingPolicy: always
+    - regex: manifests/sha256.*
+      schedulingPolicy: always
 host:
   schedulerClusterID: $SCHEDULER_CLUSTER_ID
 EOF
