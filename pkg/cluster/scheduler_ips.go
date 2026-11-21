@@ -41,7 +41,7 @@ type helmOpWatcher interface {
 // the machines of other gated seed clusters. The target cluster's own machines
 // are excluded so a bootstrapping first seed does not depend on itself.
 func (c *Controller) ensureSchedulerIPs(cluster *provv1.Cluster) (*provv1.Cluster, error) {
-	if cluster == nil || c.clusterCache == nil || c.machines == nil {
+	if cluster == nil || c.clusterCache == nil || c.machines == nil || c.clusters == nil {
 		return nil, nil
 	}
 	clusters, err := c.clusterCache.List(cluster.Namespace, labels.Everything())
