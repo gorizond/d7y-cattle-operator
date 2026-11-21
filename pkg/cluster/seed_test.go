@@ -533,6 +533,17 @@ func (f *fakeSecretStore) Delete(namespace, name string, _ *metav1.DeleteOptions
 	return nil
 }
 
+func TestHelmopClusterCarriesSnapshotterBinaryChecksums(t *testing.T) {
+	controller, _, _ := newTestController(t)
+	hc := controller.helmopCluster(testSeedCluster("42"))
+	if hc.StaticSnapshotterBinarySHA256AMD64 != "snapshotter-bin-amd64" {
+		t.Errorf("StaticSnapshotterBinarySHA256AMD64 = %q", hc.StaticSnapshotterBinarySHA256AMD64)
+	}
+	if hc.StaticSnapshotterBinarySHA256ARM64 != "snapshotter-bin-arm64" {
+		t.Errorf("StaticSnapshotterBinarySHA256ARM64 = %q", hc.StaticSnapshotterBinarySHA256ARM64)
+	}
+}
+
 func TestHelmopClusterCarriesSchedulerIdentityAndCertRevision(t *testing.T) {
 	controller, _, _ := newTestController(t)
 	cluster := testSeedCluster("42")
@@ -588,6 +599,13 @@ func TestSeedHostSyncFollowsSchedulerIPs(t *testing.T) {
 	}
 	if got := downstreamSecretNames(op); len(got) != 0 {
 		t.Errorf("host-sync downstreamSecretNames = %v, want none: control owns the client Secret", got)
+	}
+	hostValues := helmValues(t, op)
+	if got := valueAtPath(t, hostValues, "checksums", "snapshotterBinary", "amd64"); got != "snapshotter-bin-amd64" {
+		t.Errorf("host-sync snapshotter binary amd64 = %v", got)
+	}
+	if got := valueAtPath(t, hostValues, "checksums", "snapshotterBinary", "arm64"); got != "snapshotter-bin-arm64" {
+		t.Errorf("host-sync snapshotter binary arm64 = %v", got)
 	}
 	ips, _ := helmValues(t, op)["schedulerIPs"].([]any)
 	if len(ips) != 2 || ips[0] != "203.0.113.10:8002" || ips[1] != "203.0.113.11:8002" {

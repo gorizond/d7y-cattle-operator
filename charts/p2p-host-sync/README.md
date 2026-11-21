@@ -7,7 +7,8 @@ It writes from its ConfigMap to the host:
 
 - `/etc/dragonfly/{dynconfig.yaml,scheduler-ips,certs/*}` (existing);
 - `/etc/nydus/versions.env` and `/etc/nydus/updater.env` with the operator
-  versions, repositories, and fallback checksums;
+  versions, repositories, and fallback checksums, including
+  `NYDUS_SNAPSHOTTER_BINARY_SHA256_AMD64/ARM64` (verified v0.16.0 defaults);
 - `/usr/local/bin/nydus-updater` and `/usr/local/bin/nydus-fs-select`.
 
 The DaemonSet runs with `hostPID: true` and, once per revision, triggers

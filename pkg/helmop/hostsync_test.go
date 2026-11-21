@@ -13,6 +13,7 @@ func TestHostSyncHelmOp(t *testing.T) {
 	c.StaticNydusSHA256AMD64 = "nydus-amd64"
 	c.StaticSnapshotterSHA256AMD64 = "snapshotter-amd64"
 	c.StaticSnapshotterBinarySHA256AMD64 = "snapshotter-bin-amd64"
+	c.StaticSnapshotterBinarySHA256ARM64 = "snapshotter-bin-arm64"
 	op := HostSync(c)
 	if op.Name != "c1-p2p-host-sync" || op.Spec.TargetNamespace != TargetNamespace {
 		t.Errorf("name/namespace = %s/%s", op.Name, op.Spec.TargetNamespace)
@@ -44,7 +45,10 @@ func TestHostSyncHelmOp(t *testing.T) {
 		t.Errorf("snapshotter version = %v", got)
 	}
 	if got := valueAt(t, values, "checksums", "snapshotterBinary", "amd64"); got != "snapshotter-bin-amd64" {
-		t.Errorf("snapshotter binary checksum = %v", got)
+		t.Errorf("snapshotter binary amd64 checksum = %v", got)
+	}
+	if got := valueAt(t, values, "checksums", "snapshotterBinary", "arm64"); got != "snapshotter-bin-arm64" {
+		t.Errorf("snapshotter binary arm64 checksum = %v", got)
 	}
 	if op.Spec.Helm.Chart != "p2p-host-sync" || op.Spec.Helm.Version != "0.1.0" {
 		t.Errorf("chart = %s/%s", op.Spec.Helm.Chart, op.Spec.Helm.Version)

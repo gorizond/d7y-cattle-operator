@@ -2,5 +2,5 @@ apiVersion: v2
 name: p2p-host-sync
 description: Keeps the pre-RKE2 host Dragonfly config and scheduler marker current from a per-cluster ConfigMap.
 type: application
-version: 0.1.3
+version: 0.1.4
 appVersion: "1.0.0"
