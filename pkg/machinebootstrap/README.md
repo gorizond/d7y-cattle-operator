@@ -11,6 +11,13 @@ not parsed by dash.
 The same embedded script is the single source of truth for the host setup; the
 `p2p-static` chart serves only the static `/bin` and `/nydus` assets.
 
+The block carries the client identity's `ca-bundle.crt` (falling back to
+`ca.crt` for legacy Secrets). The bootstrap Secret is annotated with
+`p2p.dragonfly.io/client-cert-revision`; when the client certificate changes,
+the injected block is replaced in place (bounded by the p2p start/end markers)
+instead of being skipped. Existing nodes only pick up the new block after their
+Rancher bootstrap/cloud-init runs again, which in practice requires a reboot.
+
 The block always carries `P2P_DISTRO` and the Cluster's
 `p2p.dragonfly.io/scheduler-ips` annotation (seed clusters publish their own
 public CAPI machine IPs; non-seed clusters aggregate other seeds). With an empty IP list the block is

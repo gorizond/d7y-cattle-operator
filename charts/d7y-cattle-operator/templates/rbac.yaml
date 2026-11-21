@@ -15,11 +15,11 @@ rules:
   - apiGroups: ["fleet.cattle.io"]
     resources: ["helmops"]
     verbs: ["get", "list", "watch", "create", "update", "patch", "delete"]
-  # Bounded admission cleanup deletes the Fleet Bundle named after the HelmOp;
-  # Fleet itself purges BundleDeployments and the downstream release.
+  # Per-seed scheduler certificate Bundles are raw Fleet Bundles with an
+  # inline Secret. The same verbs also cover bounded HelmOp cleanup.
   - apiGroups: ["fleet.cattle.io"]
     resources: ["bundles"]
-    verbs: ["get", "list", "watch", "delete"]
+    verbs: ["get", "list", "watch", "create", "update", "patch", "delete"]
   - apiGroups: [""]
     resources: ["secrets"]
     verbs: ["get", "list", "watch", "create", "update", "patch"]

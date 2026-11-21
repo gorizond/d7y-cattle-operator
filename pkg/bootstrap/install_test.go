@@ -103,3 +103,30 @@ func TestBuildInstallEnvEmptySchedulerIDUsesPlaceholder(t *testing.T) {
 		t.Errorf("env = %q, want scheduler cluster ID 0 placeholder", env)
 	}
 }
+
+func TestBuildInstallEnvUsesTrustBundle(t *testing.T) {
+	secret := &corev1.Secret{Data: map[string][]byte{
+		"ca.crt":                []byte("new-ca"),
+		"ca-bundle.crt":         []byte("new-ca-legacy-ca"),
+		corev1.TLSCertKey:       []byte("cert"),
+		corev1.TLSPrivateKeyKey: []byte("key"),
+	}}
+	cluster := &provv1.Cluster{
+		ObjectMeta: metav1.ObjectMeta{Annotations: map[string]string{
+			"p2p.dragonfly.io/scheduler-cluster-id": "2",
+		}},
+		Status: provv1.ClusterStatus{ClusterName: "c-m-test"},
+	}
+	env, err := BuildInstallEnv(cluster, secret, "", InstallConfig{
+		ManagerGRPCDomain: "manager.example.com",
+		ManagerGRPCPort:   443,
+		StaticURL:         "https://static.example.com",
+		SchedulerDomain:   "example.com",
+	})
+	if err != nil {
+		t.Fatalf("BuildInstallEnv() error = %v", err)
+	}
+	if !strings.Contains(env, "CA_CRT_B64=") || !strings.Contains(env, "bmV3LWNhLWxlZ2FjeS1jYQ==") {
+		t.Errorf("env does not carry the CA bundle: %q", env)
+	}
+}

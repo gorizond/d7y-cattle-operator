@@ -262,8 +262,8 @@ func TestReconcileAppendsWithoutExitZero(t *testing.T) {
 		t.Fatalf("reconcile() error = %v", err)
 	}
 	value := string(secrets.secret.Data[bootstrapValueKey])
-	if !strings.HasSuffix(value, "fi\n") {
-		t.Errorf("bootstrap value = %q, want the block appended", value)
+	if !strings.HasSuffix(value, "fi\n"+bootstrap.EndMarker+"\n") {
+		t.Errorf("bootstrap value = %q, want the block appended with an end marker", value)
 	}
 }
 
@@ -313,5 +313,58 @@ func TestReconcileMissingSchedulerIDInjectsPlaceholder(t *testing.T) {
 	}
 	if secrets.updates != 1 {
 		t.Errorf("Secret updates = %d, want 1 after idempotent re-sync", secrets.updates)
+	}
+}
+
+func TestReconcileRebuildsBlockOnClientRevisionChange(t *testing.T) {
+	controller, secrets, _, _, _, _ := testController()
+	secret := secrets.secret.DeepCopy()
+	if _, err := controller.reconcile("", secret); err != nil {
+		t.Fatalf("first reconcile() error = %v", err)
+	}
+	first := string(secrets.secret.Data[bootstrapValueKey])
+	if secrets.updates != 1 {
+		t.Fatalf("updates = %d, want 1", secrets.updates)
+	}
+	previousRevision := secrets.secret.Annotations[bootstrap.ClientCertRevisionAnnotation]
+	if previousRevision == "" {
+		t.Fatal("client revision annotation is empty")
+	}
+
+	secrets.mtls.Data[corev1.TLSCertKey] = []byte("rotated-cert")
+	if _, err := controller.reconcile("", secrets.secret.DeepCopy()); err != nil {
+		t.Fatalf("second reconcile() error = %v", err)
+	}
+	second := string(secrets.secret.Data[bootstrapValueKey])
+	if secrets.updates != 2 {
+		t.Errorf("updates = %d, want 2 after client rotation", secrets.updates)
+	}
+	if strings.Count(second, bootstrap.Marker+"\n") != 1 || strings.Count(second, bootstrap.EndMarker+"\n") != 1 {
+		t.Errorf("bootstrap block markers were not replaced exactly once: %q", second)
+	}
+	if second == first {
+		t.Error("bootstrap block did not change after client revision rotation")
+	}
+	if got := secrets.secret.Annotations[bootstrap.ClientCertRevisionAnnotation]; got == previousRevision {
+		t.Error("client revision annotation did not change")
+	}
+}
+
+func TestInsertInlineBlockReplacesLegacyBlockWithoutEndMarker(t *testing.T) {
+	legacy := strings.TrimSuffix(inlineInstallBlockFor("echo legacy\n", "SCHEDULER_IPS=''\n"), bootstrap.EndMarker+"\n")
+	raw := "#!/bin/bash\n" + legacy + `do_install "$@"` + "\nexit 0\n"
+	next := inlineInstallBlockFor("echo new\n", "SCHEDULER_IPS='203.0.113.10'\n")
+	got := insertInlineBlock(raw, next)
+	if strings.Contains(got, "echo legacy") {
+		t.Errorf("legacy block was not removed: %q", got)
+	}
+	if !strings.Contains(got, "echo new") {
+		t.Errorf("new block was not inserted: %q", got)
+	}
+	if strings.Count(got, bootstrap.Marker+"\n") != 1 || strings.Count(got, bootstrap.EndMarker+"\n") != 1 {
+		t.Errorf("block markers = %q", got)
+	}
+	if !strings.Contains(got, "do_install \"$@\"\n") {
+		t.Errorf("do_install line was lost: %q", got)
 	}
 }

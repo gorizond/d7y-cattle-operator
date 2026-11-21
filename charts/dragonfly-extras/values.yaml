@@ -11,9 +11,9 @@ ingress:
     host: ""
     service: ""
     port: 65003
-    # nginx-only P2P Secret for the GRPCS backend and client mTLS. Traefik
-    # uses TCP passthrough and does not consume this value.
-    tlsSecret: ""
+    # nginx-only manager identity Secret for the GRPCS backend and client mTLS.
+    # Traefik uses TCP passthrough and does not consume this value.
+    tlsSecret: dragonfly-p2p-manager
   rest:
     enabled: true
     host: ""
@@ -29,14 +29,14 @@ ingress:
     serversTransport:
       enabled: true
       insecureSkipVerify: true
-  # nginx-only Secret in this namespace that holds ca.crt for client
-  # certificate verification.
-  mtlsSecret: dragonfly-p2p-mtls
+  # nginx-only manager identity Secret in this namespace that holds ca.crt
+  # for client certificate verification.
+  mtlsSecret: dragonfly-p2p-manager
 
-# Public scheduler front owned by this chart. The backend is the Dragonfly fork
-# chart's headless scheduler Service. DaemonSets and bootstrap clients use the
-# same public host. TLS is passed through end-to-end; Traefik never terminates
-# it and no LE certificate is used.
+# Optional legacy public scheduler front. The operator disables it; bootstrap
+# clients and DaemonSets use scheduler node IPs on port 8002 instead. The
+# backend, when enabled manually, is the fork chart's headless scheduler
+# Service; TLS is passed through end-to-end.
 scheduler:
   enabled: false
   # Fleet cluster ID and base domain build d7y-scheduler.<cluster-id>.<domain>.

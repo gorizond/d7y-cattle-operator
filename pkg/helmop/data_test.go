@@ -231,8 +231,8 @@ func TestControlHelmOp(t *testing.T) {
 	if op.Name != "c1-control" {
 		t.Errorf("name = %q", op.Name)
 	}
-	if len(op.Spec.DependsOn) != 1 || op.Spec.DependsOn[0].Name != "c1-keydb" {
-		t.Errorf("dependsOn = %+v", op.Spec.DependsOn)
+	if len(op.Spec.DependsOn) != 2 || op.Spec.DependsOn[0].Name != "c1-keydb" || op.Spec.DependsOn[1].Name != SchedulerBundleName("c1") {
+		t.Errorf("dependsOn = %+v, want keydb and scheduler Bundle", op.Spec.DependsOn)
 	}
 
 	values := op.Spec.Helm.Values.Data
@@ -257,8 +257,8 @@ func TestControlHelmOp(t *testing.T) {
 		}
 	}
 	managerTLS := nested(t, values, "scheduler", "config", "manager", "tls")
-	if managerTLS["caCert"] != CertDir+"/ca.crt" {
-		t.Errorf("manager TLS = %v", managerTLS)
+	if managerTLS["caCert"] != ClientCertDir+"/ca.crt" {
+		t.Errorf("manager client TLS = %v", managerTLS)
 	}
 	serverTLS := nested(t, values, "scheduler", "config", "server", "tls")
 	if serverTLS["caCert"] != CertDir+"/ca.crt" {
@@ -275,7 +275,25 @@ func TestControlHelmOp(t *testing.T) {
 		t.Errorf("scheduler advertisePort = %v, want scheduler gRPC port %d", got, SchedulerPort)
 	}
 	if got := valueAt(t, values, "scheduler", "podAnnotations", certRevisionAnnotation); got != "rev1" {
-		t.Errorf("scheduler podAnnotations revision = %v", got)
+		t.Errorf("scheduler client revision = %v", got)
+	}
+	if got := valueAt(t, values, "scheduler", "podAnnotations", AnnotationMTLSCertRevision); got != "sched1" {
+		t.Errorf("scheduler revision = %v", got)
+	}
+	volumes := valueAt(t, values, "scheduler", "extraVolumes").([]any)
+	foundScheduler, foundClient := false, false
+	for _, raw := range volumes {
+		volume, _ := raw.(map[string]any)
+		secret, _ := volume["secret"].(map[string]any)
+		switch volume["name"] {
+		case "scheduler-mtls":
+			foundScheduler = secret["secretName"] == SchedulerMTLSSecretName
+		case "client-mtls":
+			foundClient = secret["secretName"] == "dragonfly-p2p-mtls"
+		}
+	}
+	if !foundScheduler || !foundClient {
+		t.Errorf("scheduler extraVolumes = %v, want scheduler and client Secrets", volumes)
 	}
 }
 
@@ -290,7 +308,7 @@ func TestControlHelmOpP2PDataTLSEnabled(t *testing.T) {
 	if got := valueAt(t, values, "scheduler", "config", "server", "tls", "caCert"); got != CertDir+"/ca.crt" {
 		t.Errorf("scheduler server TLS = %v", got)
 	}
-	if got := valueAt(t, values, "scheduler", "config", "manager", "tls", "caCert"); got != CertDir+"/ca.crt" {
+	if got := valueAt(t, values, "scheduler", "config", "manager", "tls", "caCert"); got != ClientCertDir+"/ca.crt" {
 		t.Errorf("manager client TLS = %v", got)
 	}
 }
@@ -405,6 +423,12 @@ func renderFleetTemplate(t *testing.T, text string, annotations map[string]strin
 			return value
 		},
 		"splitList": func(sep, value string) []string { return strings.Split(value, sep) },
+		"first": func(values []string) string {
+			if len(values) == 0 {
+				return ""
+			}
+			return values[0]
+		},
 	}).Parse(text)
 	if err != nil {
 		return nil, err

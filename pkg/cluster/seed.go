@@ -29,6 +29,9 @@ func (c *Controller) ensureSeed(cluster *provv1.Cluster) error {
 // Cluster and is never modified here.
 func (c *Controller) deleteSeed(cluster *provv1.Cluster) error {
 	var errs []error
+	if err := c.deleteSchedulerPKI(cluster); err != nil {
+		errs = append(errs, err)
+	}
 	for _, name := range []string{
 		helmop.MirrorName(cluster.Name),
 		helmop.DataName(cluster.Name),

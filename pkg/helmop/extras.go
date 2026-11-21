@@ -42,7 +42,8 @@ func Extras(c Cluster, opts ExtrasOptions) *fleetv1alpha1.HelmOp {
 	if opts.IngressEnabled {
 		dependsOn = []string{names.Manager}
 	}
-	return newHelmOp(ExtrasName(c.Name), c, c.ExtrasChart, "extras", values, dependsOn)
+	op := newHelmOp(ExtrasName(c.Name), c, c.ExtrasChart, "extras", values, dependsOn)
+	return withMTLS(op, ManagerMTLSSecretName)
 }
 
 // SharedExtras returns the shared dragonfly-extras HelmOp. It targets seed
@@ -62,8 +63,9 @@ func SharedExtras(c Cluster, opts ExtrasOptions) *fleetv1alpha1.HelmOp {
 	opts.SchedulerPort = SchedulerPort
 	values := extrasValues(c, opts, names)
 	values["ingress"].(map[string]any)["enabled"] = SharedManagerIngressEnabledTemplate
-	return newSharedHelmOp(SharedExtrasName(), TargetNamespace, c, c.ExtrasChart, "extras",
+	op := newSharedHelmOp(SharedExtrasName(), TargetNamespace, c, c.ExtrasChart, "extras",
 		values, nil, SharedSelector())
+	return withMTLS(op, ManagerMTLSSecretName)
 }
 
 func extrasValues(c Cluster, opts ExtrasOptions, names Names) map[string]any {
@@ -84,7 +86,7 @@ func extrasValues(c Cluster, opts ExtrasOptions, names Names) map[string]any {
 				// nginx-only P2P Secret for the GRPCS backend and mTLS.
 				// Traefik uses TCP passthrough and does not consume it. REST
 				// keeps opts.TLSSecret.
-				"tlsSecret": c.MTLSSecretName,
+				"tlsSecret": ManagerMTLSSecretName,
 			},
 			"rest": map[string]any{
 				"enabled": opts.RESTEnabled,
@@ -102,7 +104,7 @@ func extrasValues(c Cluster, opts ExtrasOptions, names Names) map[string]any {
 					"insecureSkipVerify": true,
 				},
 			},
-			"mtlsSecret": c.MTLSSecretName,
+			"mtlsSecret": ManagerMTLSSecretName,
 		},
 		"scheduler": map[string]any{
 			"enabled": false,

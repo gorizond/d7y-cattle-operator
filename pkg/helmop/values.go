@@ -32,6 +32,10 @@ func ReplicasOrOne(annotation, value string) string {
 const certRevisionAnnotation = "p2p.dragonfly.io/cert-revision"
 
 func certPodAnnotations(revision string) map[string]any {
+	return revisionAnnotation(revision)
+}
+
+func revisionAnnotation(revision string) map[string]any {
 	if revision == "" {
 		return nil
 	}
@@ -39,44 +43,48 @@ func certPodAnnotations(revision string) map[string]any {
 }
 
 func tlsPaths() map[string]any {
+	return tlsPathsAt(CertDir)
+}
+
+func tlsPathsAt(dir string) map[string]any {
 	return map[string]any{
-		"caCert": CertDir + "/ca.crt",
-		"cert":   CertDir + "/tls.crt",
-		"key":    CertDir + "/tls.key",
+		"caCert": dir + "/ca.crt",
+		"cert":   dir + "/tls.crt",
+		"key":    dir + "/tls.key",
 	}
 }
 
-func mtlsVolume(secretName string) map[string]any {
+func secretVolume(name, secretName string) map[string]any {
 	return map[string]any{
-		"name": "mtls",
+		"name": name,
 		"secret": map[string]any{
 			"secretName": secretName,
 		},
 	}
 }
 
-func mtlsVolumeMount() map[string]any {
+func secretVolumeMount(name, path string) map[string]any {
 	return map[string]any{
-		"name":      "mtls",
-		"mountPath": CertDir,
+		"name":      name,
+		"mountPath": path,
 		"readOnly":  true,
 	}
 }
 
-func volumes(secretName string, base ...map[string]any) []any {
-	result := make([]any, 0, len(base)+1)
+func volumes(base ...map[string]any) []any {
+	result := make([]any, 0, len(base))
 	for _, volume := range base {
 		result = append(result, volume)
 	}
-	return append(result, mtlsVolume(secretName))
+	return result
 }
 
 func volumeMounts(base ...map[string]any) []any {
-	result := make([]any, 0, len(base)+1)
+	result := make([]any, 0, len(base))
 	for _, mount := range base {
 		result = append(result, mount)
 	}
-	return append(result, mtlsVolumeMount())
+	return result
 }
 
 func logVolume() map[string]any {

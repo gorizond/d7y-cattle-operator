@@ -22,6 +22,8 @@ func testCluster() Cluster {
 		SchedulerReplicas:           ReplicasTemplate("p2p.dragonfly.io/scheduler-replicas"),
 		SeedClientReplicas:          ReplicasTemplate("p2p.dragonfly.io/seedclient-replicas"),
 		MTLSCertRevision:            "rev1",
+		ManagerCertRevision:         "mgr1",
+		SchedulerCertRevision:       "sched1",
 		Labels:                      map[string]string{"app.kubernetes.io/managed-by": "d7y-cattle-operator"},
 	}
 }
@@ -74,7 +76,7 @@ func TestManagerHelmOp(t *testing.T) {
 	}
 	if len(op.Spec.DownstreamResources) != 2 ||
 		op.Spec.DownstreamResources[0].Kind != "Secret" ||
-		op.Spec.DownstreamResources[0].Name != "dragonfly-p2p-mtls" ||
+		op.Spec.DownstreamResources[0].Name != ManagerMTLSSecretName ||
 		op.Spec.DownstreamResources[1].Kind != "Secret" ||
 		op.Spec.DownstreamResources[1].Name != "dragonfly-manager-api" {
 		t.Errorf("downstreamResources = %+v", op.Spec.DownstreamResources)
@@ -168,7 +170,7 @@ func TestManagerHelmOp(t *testing.T) {
 			continue
 		}
 		secret := nested(t, volumeMap, "secret")
-		if secret["secretName"] != "dragonfly-p2p-mtls" {
+		if secret["secretName"] != ManagerMTLSSecretName {
 			t.Errorf("mTLS volume secret = %v", secret)
 		}
 		foundMTLS = true
@@ -176,7 +178,7 @@ func TestManagerHelmOp(t *testing.T) {
 	if !foundMTLS {
 		t.Error("manager values have no mTLS volume")
 	}
-	if got := valueAt(t, values, "manager", "podAnnotations", certRevisionAnnotation); got != "rev1" {
+	if got := valueAt(t, values, "manager", "podAnnotations", certRevisionAnnotation); got != "mgr1" {
 		t.Errorf("manager podAnnotations revision = %v", got)
 	}
 }
@@ -187,8 +189,8 @@ func TestManagerHelmOpWithoutCredentialsSecret(t *testing.T) {
 	op := Manager(cluster)
 
 	if len(op.Spec.DownstreamResources) != 1 ||
-		op.Spec.DownstreamResources[0].Name != cluster.MTLSSecretName {
-		t.Errorf("downstreamResources = %+v, want only the mTLS Secret", op.Spec.DownstreamResources)
+		op.Spec.DownstreamResources[0].Name != ManagerMTLSSecretName {
+		t.Errorf("downstreamResources = %+v, want only the manager Secret", op.Spec.DownstreamResources)
 	}
 	managerValues := nested(t, op.Spec.Helm.Values.Data, "manager")
 	if _, ok := managerValues["extraEnvVars"]; ok {

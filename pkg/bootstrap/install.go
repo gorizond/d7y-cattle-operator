@@ -14,6 +14,12 @@ const (
 	// SchedulerClusterIDAnnotation is the Cluster annotation used for the
 	// bootstrap scheduler ID. An empty value uses the placeholder ID 0.
 	SchedulerClusterIDAnnotation = "p2p.dragonfly.io/scheduler-cluster-id"
+	// EndMarker closes the injected bootstrap block so it can be replaced when
+	// the client certificate revision changes.
+	EndMarker = "# d7y-cattle-operator:p2p-install-end"
+	// ClientCertRevisionAnnotation stores the client Secret revision used by
+	// the injected block.
+	ClientCertRevisionAnnotation = "p2p.dragonfly.io/client-cert-revision"
 	schedulerIPsAnnotation       = "p2p.dragonfly.io/scheduler-ips"
 )
 
@@ -57,6 +63,10 @@ func BuildInstallEnv(cluster *provv1.Cluster, secret *corev1.Secret, schedulerID
 	if cfg.ManagerGRPCPort < 1 || cfg.ManagerGRPCPort > 65535 {
 		return "", fmt.Errorf("manager gRPC port %d is outside 1-65535", cfg.ManagerGRPCPort)
 	}
+	caBundle := secret.Data["ca-bundle.crt"]
+	if len(caBundle) == 0 {
+		caBundle = secret.Data["ca.crt"]
+	}
 	env, err := Env(Payload{
 		ManagerGRPC:        fmt.Sprintf("https://%s:%d", cfg.ManagerGRPCDomain, cfg.ManagerGRPCPort),
 		StaticURL:          cfg.StaticURL,
@@ -64,7 +74,7 @@ func BuildInstallEnv(cluster *provv1.Cluster, secret *corev1.Secret, schedulerID
 		NydusMirrorURL:     cfg.NydusMirrorURL,
 		SchedulerHost:      host,
 		SchedulerClusterID: schedulerID,
-		CACert:             secret.Data["ca.crt"],
+		CACert:             caBundle,
 		ClientCert:         secret.Data[corev1.TLSCertKey],
 		ClientKey:          secret.Data[corev1.TLSPrivateKeyKey],
 	})

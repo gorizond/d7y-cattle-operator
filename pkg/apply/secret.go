@@ -18,6 +18,7 @@ type SecretStore interface {
 	Get(namespace, name string, opts metav1.GetOptions) (*corev1.Secret, error)
 	Create(secret *corev1.Secret) (*corev1.Secret, error)
 	Update(secret *corev1.Secret) (*corev1.Secret, error)
+	Delete(namespace, name string, opts *metav1.DeleteOptions) error
 }
 
 // ReplicateSecret copies source into namespace and updates the copy when its

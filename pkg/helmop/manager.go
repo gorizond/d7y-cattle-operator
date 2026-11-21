@@ -33,7 +33,7 @@ func SharedManager(c Cluster) *fleetv1alpha1.HelmOp {
 }
 
 func withManagerSecrets(op *fleetv1alpha1.HelmOp, c Cluster) *fleetv1alpha1.HelmOp {
-	op = withMTLS(op, c.MTLSSecretName)
+	op = withMTLS(op, ManagerMTLSSecretName)
 	if c.ManagerAPICredentialsSecret != "" {
 		op.Spec.DownstreamResources = append(op.Spec.DownstreamResources,
 			fleetv1alpha1.DownstreamResource{Kind: "Secret", Name: c.ManagerAPICredentialsSecret})
@@ -58,9 +58,9 @@ func managerValues(c Cluster, fullname, keydbAddr string) map[string]any {
 				},
 			},
 		},
-		"extraVolumes":      volumes(c.MTLSSecretName, logVolume()),
-		"extraVolumeMounts": volumeMounts(logVolumeMount("/var/log/dragonfly/manager")),
-		"podAnnotations":    certPodAnnotations(c.MTLSCertRevision),
+		"extraVolumes":      volumes(secretVolume("mtls", ManagerMTLSSecretName), logVolume()),
+		"extraVolumeMounts": volumeMounts(secretVolumeMount("mtls", CertDir), logVolumeMount("/var/log/dragonfly/manager")),
+		"podAnnotations":    revisionAnnotation(c.ManagerCertRevision),
 	}
 	if c.ManagerAPICredentialsSecret != "" {
 		managerValues["extraEnvVars"] = managerCredentialsEnvVars(c.ManagerAPICredentialsSecret)
