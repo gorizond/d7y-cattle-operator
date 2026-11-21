@@ -222,8 +222,8 @@ Defaults: `mtlsSecretName=dragonfly-p2p-mtls`, `dragonfly.chart.name=dragonfly`,
 `dragonfly.chart.repo=https://gorizond.github.io/dragonflyoss-helm-charts`,
 `dragonfly.chart.version=1.10.1-patch.2`, `extras.chart.name=dragonfly-extras`,
 `extras.chart.version=0.1.10`, `hostSync.chart.name=p2p-host-sync`,
-`hostSync.chart.version=0.1.2`, `static.chart.name=p2p-static`,
-`static.chart.version=0.1.10`, `static.releaseName=p2p-static`,
+`hostSync.chart.version=0.1.3`, `static.chart.name=p2p-static`,
+`static.chart.version=0.1.11`, `static.releaseName=p2p-static`,
 `extras.ingress.controller=nginx`,
 `extras.ingress.grpcEnabled=true`, `extras.ingress.restEnabled=true`,
 `manager.grpcPort=443`, `leaderElect=false`. Scheduler node IPs come from
@@ -759,8 +759,8 @@ registry so RKE2 can still start.
 
 ## Bootstrap static chart
 
-`charts/p2p-static` serves the static `/bin` and `/nydus` asset volume through
-Nginx. The embedded host script is inlined into the machine bootstrap Secret;
+`charts/p2p-static` serves the static `/bin`, `/nydus`, `/client`, and
+`/snapshotter` asset volume through Nginx. The embedded host script is inlined into the machine bootstrap Secret;
 its payload is an env-file (no JSON, no `jq`, no python on the node). The script installs the host-only upstream nydus
 snapshotter (`v0.16.0`) plus the static `v2.4.5` daemon assets
 (including `nydus-overlayfs`), writes the global nydus containerd drop-in
@@ -814,9 +814,12 @@ checksum asset). A mismatch is fatal.
 `/etc/nydus/versions.env` and `/etc/nydus/updater.env`, installs the current
 `/usr/local/bin/nydus-updater` and `nydus-fs-select`, and triggers
 `nydus-updater.service` through hostPID/`nsenter` once per revision. The updater
-updates `dfdaemon`/`dfget`, the nydus binaries, and the upstream
-`containerd-nydus-grpc`, verifying release checksums and the snapshotter binary
-pin. It restarts the snapshotter only when a nydus/snapshotter binary or the
+tries the static store first (versioned client binaries; versioned/compat
+nydus and snapshotter tarballs), then GitHub; an empty `STATIC_URL` skips the
+static store. It updates `dfdaemon`/`dfget`, the nydus binaries, and the
+upstream `containerd-nydus-grpc`, verifying release checksums and the
+snapshotter binary pin when set (`NYDUS_SNAPSHOTTER_BINARY_SHA256_*` defaults
+are the verified v0.16.0 values). It restarts the snapshotter only when a nydus/snapshotter binary or the
 selected fs driver changed, and restarts `dfdaemon-bootstrap` only when the
 client binaries changed and that service is active. It never restarts the
 snapshotter or dfdaemon unconditionally.

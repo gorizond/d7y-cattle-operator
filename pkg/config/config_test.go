@@ -108,6 +108,10 @@ func TestLoadDefaults(t *testing.T) {
 	if cfg.ClientSHA256AMD64 != DefaultClientSHA256AMD64 || cfg.SnapshotterSHA256ARM64 != DefaultSnapshotterSHA256ARM64 {
 		t.Errorf("checksum defaults = %q/%q", cfg.ClientSHA256AMD64, cfg.SnapshotterSHA256ARM64)
 	}
+	if cfg.SnapshotterBinarySHA256AMD64 != "9bd24308ef51139310bf58927a97eec49567d0154606bc5774ad69d2ee492ff0" ||
+		cfg.SnapshotterBinarySHA256ARM64 != "399f7a5b800bb6d05c63bbb340e7fa1820b84609b882589a6a95dd8796d03859" {
+		t.Errorf("snapshotter binary defaults = %q/%q", cfg.SnapshotterBinarySHA256AMD64, cfg.SnapshotterBinarySHA256ARM64)
+	}
 	if cfg.DragonflyChartRepo != DefaultDragonflyChartRepo {
 		t.Errorf("DragonflyChartRepo = %q, want %q", cfg.DragonflyChartRepo, DefaultDragonflyChartRepo)
 	}

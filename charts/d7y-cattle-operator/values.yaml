@@ -88,14 +88,14 @@ hostSync:
   chart:
     repo: https://gorizond.github.io/d7y-cattle-operator
     name: p2p-host-sync
-    version: 0.1.2
+    version: 0.1.3
 
 # Operator-managed p2p-static release on the manager-labeled cluster.
 static:
   chart:
     repo: https://gorizond.github.io/d7y-cattle-operator
     name: p2p-static
-    version: 0.1.10
+    version: 0.1.11
   releaseName: p2p-static
 
 # GitHub release repositories and version fallbacks. Checksums are fallback
@@ -121,8 +121,8 @@ checksums:
     amd64: 24e4ceaae9c87e396e71e89bd3eb074f2cc6a5a14b1a2081c8d890481857a0e4
     arm64: 136e9c649a63c16b3d3322a15fcdf918e7dda9a4cbb043e2923451e87a8ba08f
   snapshotterBinary:
-    amd64: ""
-    arm64: ""
+    amd64: 9bd24308ef51139310bf58927a97eec49567d0154606bc5774ad69d2ee492ff0
+    arm64: 399f7a5b800bb6d05c63bbb340e7fa1820b84609b882589a6a95dd8796d03859
 
 # Strict node-local containerd registry mirror for seed/data clusters.
 containerdMirror:

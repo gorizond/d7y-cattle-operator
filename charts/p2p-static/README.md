@@ -1,7 +1,8 @@
 # p2p-static
 
 Nginx static server for the Dragonfly P2P bootstrap flow. It serves the static
-asset volume under `/bin/` and `/nydus/<version>/` only. The host bootstrap
+asset volume under `/bin/`, `/nydus/<version>/`, `/client/<version>/<arch>/`,
+and `/snapshotter/<version>/<arch>/`. The host bootstrap
 script is embedded in the operator (`pkg/machinebootstrap/assets/p2p-install.sh`)
 and is not served by this chart.
 
@@ -55,7 +56,9 @@ chart edits are needed. The standalone values below remain the defaults.
 Checksums are dynamic: the populate init container first fetches the release
 sidecar (`.sha256sum`/`.sha256`). Values `sha256`/`tarballSHA256` are fallback
 pins only, used when a release publishes no checksum asset (Dragonfly client
-v1.5.14). A mismatch fails the init container.
+v1.5.14). Dragonfly client releases publish no checksum/signature sidecar, so
+the client path uses the configured checksum directly instead of probing
+predictable 404 URLs. A mismatch fails the init container.
 
 ## Manager-host route
 

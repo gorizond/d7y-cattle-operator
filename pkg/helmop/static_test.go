@@ -7,7 +7,7 @@ import (
 
 func staticTestCluster() Cluster {
 	c := sharedTestCluster()
-	c.StaticChart = Chart{Repo: "https://charts.example.com", Name: "p2p-static", Version: "0.1.10"}
+	c.StaticChart = Chart{Repo: "https://charts.example.com", Name: "p2p-static", Version: "0.1.11"}
 	c.StaticReleaseName = "p2p-static"
 	c.StaticClientVersion = "v1.5.14"
 	c.StaticNydusVersion = "v2.4.5"
