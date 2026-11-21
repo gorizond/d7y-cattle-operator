@@ -12,13 +12,14 @@ and is not served by this chart.
 helm install p2p-static charts/p2p-static \
   --namespace dragonfly-system \
   --set ingress.enabled=true \
-  --set ingress.hosts[0].host=static.example.test \
-  --set static.existingClaim=static-bin
+  --set ingress.hosts[0].host=static.example.test
 ```
 
-`static.existingClaim` is optional. Without it the chart uses an `emptyDir`
-that survives for the pod lifetime; an existing claim survives pod restarts.
-`static.sizeLimit` optionally caps the `emptyDir`.
+The integrated operator deployment uses an `emptyDir` and never sets
+`static.existingClaim`; the volume survives for the pod lifetime and is
+re-populated after pod recreation. `static.existingClaim` remains available
+for a standalone opt-in PVC, and `static.sizeLimit` optionally caps the
+`emptyDir`.
 
 The static volume is self-populating: a `populate-static` init container reads
 `static.populate.client.versions`, `static.populate.nydus.arches`, and
@@ -75,24 +76,26 @@ helm install p2p-static charts/p2p-static \
 
 `manager.entryPoint` defaults to `websecure`; the IngressRoute uses
 `ingress.className` (default `traefik`). The route matches
-`Host("<manager-host>")` plus `PathPrefix("/bin")` or `PathPrefix("/nydus")`,
-and forwards to the `p2p-static` Service. The manager REST API keeps its own
+`Host("<manager-host>")` plus `PathPrefix` for `/bin`, `/nydus`, `/client`, or
+`/snapshotter`, and forwards to the `p2p-static` Service. The manager REST API keeps its own
 `/api` paths; these prefixes do not overlap.
 
 ## Asset volume
 
 The chart populates the static volume from pinned upstream releases; it does
 not vendor binaries. Defaults are nydus `v2.4.5`
-(`nydus-static-v2.4.5-linux-amd64.tgz`) and dragonfly-client `v1.5.14`
+(`nydus-static-v2.4.5-linux-<arch>.tgz`) and dragonfly-client `v1.5.14`
 (`dragonfly-client-v1.5.14-x86_64-unknown-linux-gnu.tar.gz`, SHA-256
 `ba080e62f1626ab2fc2a5a0629a5cd912cc15099508820403108abbe2f75b1f7`). This is
 the GNU build used by the host bootstrap: its `dfdaemon` is 42.1 MB with SHA-256
 `e0d03d4759310e49cc1eba05341d2d4acf678f4926f2c37d9a4127ea1b94bf85`; both the
 GNU and musl binaries report the same `1.5.14 (8887c145f)` build string, so the
 artifact hash, not the version banner, is the discriminator. Both tarballs are
-SHA-256 verified before extraction. `/nydus/<version>/` is preferred by the
-host updater and the installer's tarball fallback; `/bin/` is the legacy
-fallback and carries `dfget` for the P2P asset path. An existing
+SHA-256 verified before extraction. The host updater prefers
+`/client/<version>/<arch>/`, `/nydus/<version>/<arch>/`, and
+`/snapshotter/<version>/<arch>/`; nydus/snapshotter fall back to the legacy
+`/bin` and `/nydus/<version>/` paths, while the client falls back to the
+GitHub tarball. `/bin` also carries `dfget` for the host installer. An existing
 `/bin/dfdaemon` or `/bin/dfget` is preserved; the chart only fills missing
 files from the GNU client tarball. The upstream nydus-snapshotter `v0.16.0` release tarballs are mirrored under
 `/snapshotter/v0.16.0/<arch>/`; the embedded installer fetches the tarball
@@ -117,4 +120,6 @@ The self-test uses temporary roots, `SKIP_DOWNLOAD=1`, and a fake
 script, including env injection, certificate files/modes, dfget/dynconfig,
 scheduler ID, fscache/fusedev selection, nydus update, fail-open fallback, and
 the selector matrix. `scripts/test-p2p-static.sh` also renders this chart and
-checks that `/bin` and `/nydus` are served while `/p2p-install.sh` is not.
+checks that `/bin`, `/nydus`, `/client`, and `/snapshotter` are served and the
+manager route forwards all four prefixes, while `/p2p-install.sh` is not
+served.
