@@ -26,16 +26,7 @@ type ExtrasOptions struct {
 	VPAEnabled                     bool
 	Manager                        bool
 	Seed                           bool
-	// SchedulerPublicEnabled renders the Traefik TCP passthrough front for the
-	// fork chart's headless scheduler Service. It is independent of the manager
-	// Ingress toggle.
-	SchedulerPublicEnabled bool
-	// SchedulerDomain and SchedulerClusterID build the DNS alias
-	// d7y-scheduler.<cluster-id>.<domain>.
-	SchedulerDomain    string
-	SchedulerClusterID string
-	// SchedulerService is the fork chart's headless scheduler Service that
-	// backs the public Traefik TCP route.
+	// SchedulerService and SchedulerPort are retained for the VPA target.
 	SchedulerService string
 	SchedulerPort    int
 }
@@ -55,8 +46,9 @@ func Extras(c Cluster, opts ExtrasOptions) *fleetv1alpha1.HelmOp {
 }
 
 // SharedExtras returns the shared dragonfly-extras HelmOp. It targets seed
-// Clusters: the public scheduler front, its DNS alias and the VPA target names
-// are per-target Fleet templates. The manager Ingress is gated per target by a
+// Clusters: the scheduler Service/port for VPA and the VPA target names are
+// per-target Fleet templates; the public scheduler front is disabled. The
+// manager Ingress is gated per target by a
 // templated boolean on the d7y-operator-manager label: seed-only Clusters
 // render ingress.enabled=false, so the chart skips the manager Ingress and
 // IngressRouteTCP entirely.
@@ -66,9 +58,6 @@ func SharedExtras(c Cluster, opts ExtrasOptions) *fleetv1alpha1.HelmOp {
 	opts.IngressEnabled = true
 	opts.Manager = true
 	opts.Seed = true
-	opts.SchedulerPublicEnabled = true
-	opts.SchedulerDomain = c.P2PDomain
-	opts.SchedulerClusterID = SharedSchedulerClusterIDTemplate
 	opts.SchedulerService = names.ControlScheduler
 	opts.SchedulerPort = SchedulerPort
 	values := extrasValues(c, opts, names)
@@ -116,12 +105,9 @@ func extrasValues(c Cluster, opts ExtrasOptions, names Names) map[string]any {
 			"mtlsSecret": c.MTLSSecretName,
 		},
 		"scheduler": map[string]any{
-			"enabled":   opts.SchedulerPublicEnabled,
-			"clusterID": opts.SchedulerClusterID,
-			"domain":    opts.SchedulerDomain,
-			"publicIP":  SharedSchedulerPublicIPTemplate,
-			"service":   opts.SchedulerService,
-			"port":      opts.SchedulerPort,
+			"enabled": false,
+			"service": opts.SchedulerService,
+			"port":    opts.SchedulerPort,
 		},
 		"vpa": map[string]any{
 			"enabled":     opts.VPAEnabled,

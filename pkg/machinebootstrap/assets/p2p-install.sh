@@ -60,7 +60,7 @@ NYDUS_MIRROR_URL="${NYDUS_MIRROR_URL:-}"
 # ExecStartPre on every snapshotter start and picks fscache or fusedev from the
 # running kernel and the fscache/cachefiles prerequisites. The installer does
 # not pin the mode, so a kernel change is picked up without rerunning it.
-SCHEDULER_PORT=443
+SCHEDULER_PORT=8002
 PREFLIGHT_TIMEOUT="${P2P_PREFLIGHT_TIMEOUT:-3}"
 BIN_DIR="${ROOT}/usr/local/bin"
 SERVICE_DIR="${ROOT}/etc/systemd/system"

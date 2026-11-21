@@ -72,6 +72,7 @@ type Controller struct {
 	clusters     clusterStore
 	clusterCache clusterCache
 	machines     machineCache
+	downstream   schedulerPodLister
 
 	managerMu         sync.Mutex
 	managerHTTPClient *http.Client
@@ -92,6 +93,7 @@ func Register(ctx context.Context, clusters provctl.ClusterController, machines 
 		clusters:     clusters,
 		clusterCache: clusters.Cache(),
 		machines:     machines.Cache(),
+		downstream:   KubeSchedulerPodLister{},
 		opts:         opts,
 	}
 	clusters.OnChange(ctx, controllerName, c.reconcile)
@@ -132,14 +134,16 @@ func (c *Controller) reconcile(key string, cluster *provv1.Cluster) (result *pro
 
 	var errs []error
 
-	// Seed machine IPs drive both the certificate SANs and the seed's own
+	// Seed scheduler node IPs drive both the certificate SANs and the seed's
 	// scheduler-ips annotation.
 	var seedIPs []string
+	seedDiscoveryFailed := false
 	if roles.Seed {
 		var err error
-		seedIPs, err = c.seedMachineIPs(cluster)
+		seedIPs, err = c.discoverSeedSchedulerIPs(cluster)
 		if err != nil {
-			c.event(cluster, corev1.EventTypeWarning, "SchedulerMachineIPsFailed", err.Error())
+			seedDiscoveryFailed = true
+			c.event(cluster, corev1.EventTypeWarning, "SchedulerIPsUnavailable", err.Error())
 		}
 	}
 	mtlsReady := true
@@ -156,11 +160,13 @@ func (c *Controller) reconcile(key string, cluster *provv1.Cluster) (result *pro
 		}
 	}
 
-	if updated, err := c.ensureSchedulerIPs(cluster, roles, seedIPs); err != nil {
-		c.event(cluster, corev1.EventTypeWarning, "SchedulerIPsFailed", err.Error())
-	} else if updated != nil {
-		cluster = updated
-		status.rebase(updated)
+	if !seedDiscoveryFailed {
+		if updated, err := c.ensureSchedulerIPs(cluster, roles, seedIPs); err != nil {
+			c.event(cluster, corev1.EventTypeWarning, "SchedulerIPsFailed", err.Error())
+		} else if updated != nil {
+			cluster = updated
+			status.rebase(updated)
+		}
 	}
 
 	if updated, err := c.ensureContainerdHosts(cluster); err != nil {
@@ -175,7 +181,6 @@ func (c *Controller) reconcile(key string, cluster *provv1.Cluster) (result *pro
 	}
 
 	hc := c.helmopCluster(cluster)
-	hc.SchedulerHost = schedulerHost(c.opts.P2PDomain, c.clusterID(cluster))
 	c.warnUnsupportedChartVersion(cluster, hc.Chart.Version)
 
 	// Fleet targets shared HelmOps by Cluster label and renders the scheduler

@@ -115,16 +115,36 @@ func addPublicIPv4(ips *[]string, seen map[string]bool, raw string) {
 	*ips = append(*ips, value)
 }
 
-func (c *Controller) seedMachineIPs(cluster *provv1.Cluster) ([]string, error) {
-	if cluster == nil || c.machines == nil {
+func (c *Controller) discoverSeedSchedulerIPs(cluster *provv1.Cluster) ([]string, error) {
+	if cluster == nil {
 		return nil, nil
 	}
+	if c.downstream == nil || c.secrets == nil || c.machines == nil {
+		return nil, fmt.Errorf("downstream scheduler discovery is not configured")
+	}
+	name := cluster.Name + "-kubeconfig"
+	kubeconfigSecret, err := c.secrets.Get(cluster.Namespace, name, metav1.GetOptions{})
+	if err != nil {
+		return nil, fmt.Errorf("read kubeconfig Secret %s/%s: %w", cluster.Namespace, name, err)
+	}
+	kubeconfig := kubeconfigSecret.Data["value"]
+	if len(kubeconfig) == 0 {
+		return nil, fmt.Errorf("kubeconfig Secret %s/%s has no value", cluster.Namespace, name)
+	}
+	pods, err := c.downstream.ListSchedulerPods(c.ctx, kubeconfig)
+	if err != nil {
+		return nil, err
+	}
+	if len(pods) == 0 {
+		return nil, nil
+	}
+
 	machines, err := c.machines.List(cluster.Namespace, labels.Everything())
 	if err != nil {
-		return nil, fmt.Errorf("list machines for seed IPs: %w", err)
+		return nil, fmt.Errorf("list machines for scheduler nodes: %w", err)
 	}
-	seen := map[string]bool{}
-	var ips []string
+	byNode := map[string]*capiv1beta2.Machine{}
+	byIP := map[string]*capiv1beta2.Machine{}
 	for i := range machines {
 		machine := machines[i]
 		if machine == nil || machine.DeletionTimestamp != nil || machine.Namespace != cluster.Namespace {
@@ -135,6 +155,31 @@ func (c *Controller) seedMachineIPs(cluster *provv1.Cluster) ([]string, error) {
 			clusterName = machine.Labels[rkeClusterName]
 		}
 		if clusterName != cluster.Name {
+			continue
+		}
+		if machine.Status.NodeRef.Name != "" {
+			byNode[machine.Status.NodeRef.Name] = machine
+		}
+		for _, address := range machine.Status.Addresses {
+			if address.Type != capiv1beta2.MachineInternalIP && address.Type != capiv1beta2.MachineExternalIP {
+				continue
+			}
+			if ip := net.ParseIP(strings.TrimSpace(address.Address)); ip != nil {
+				byIP[ip.String()] = machine
+			}
+		}
+	}
+
+	seen := map[string]bool{}
+	var ips []string
+	for _, pod := range pods {
+		machine := byNode[pod.NodeName]
+		if machine == nil && pod.HostIP != "" {
+			if ip := net.ParseIP(strings.TrimSpace(pod.HostIP)); ip != nil {
+				machine = byIP[ip.String()]
+			}
+		}
+		if machine == nil {
 			continue
 		}
 		for _, address := range machine.Status.Addresses {

@@ -2,6 +2,7 @@ package cluster
 
 import (
 	"context"
+	"strings"
 	"testing"
 
 	provv1 "github.com/rancher/rancher/pkg/apis/provisioning.cattle.io/v1"
@@ -82,9 +83,12 @@ func TestReconcileSeedCreatesSharedHelmOps(t *testing.T) {
 			t.Errorf("%s schedulerClusterID = %v, want Fleet template", component, got)
 		}
 	}
-	wantAddr := helmop.SchedulerHostTemplate("example.com") + ":443"
-	if got := valueAtPath(t, values, "seedClient", "dynconfig", "scheduler", "addr"); got != wantAddr {
-		t.Errorf("seedClient dynconfig addr = %v, want %v", got, wantAddr)
+	templateValues, found, err := unstructured.NestedStringMap(data.Object, "spec", "helm", "templateValues")
+	if err != nil || !found {
+		t.Fatalf("data HelmOp templateValues = %v, found=%v, err=%v", templateValues, found, err)
+	}
+	if got := templateValues["seedClient"]; !strings.Contains(got, "addrs:") || !strings.Contains(got, `:8002`) || !strings.Contains(got, "scheduler-ips") {
+		t.Errorf("seedClient dynconfig template = %q, want scheduler addrs on :8002", got)
 	}
 }
 
@@ -210,6 +214,10 @@ func newTestController(t *testing.T) (*Controller, *fakeHelmOpStore, *fakeEventS
 	t.Helper()
 	secrets := newFakeSecretStore()
 	secrets.put(&corev1.Secret{
+		ObjectMeta: metav1.ObjectMeta{Name: "c1-kubeconfig", Namespace: "fleet-default"},
+		Data:       map[string][]byte{"value": []byte("fake-kubeconfig")},
+	})
+	secrets.put(&corev1.Secret{
 		ObjectMeta: metav1.ObjectMeta{Name: "dragonfly-p2p-mtls", Namespace: "dragonfly-system"},
 		Type:       corev1.SecretTypeTLS,
 		Data:       map[string][]byte{"ca.crt": []byte("ca"), "tls.crt": []byte("cert")},
@@ -226,6 +234,7 @@ func newTestController(t *testing.T) (*Controller, *fakeHelmOpStore, *fakeEventS
 		clusters:   newFakeClusterStore(),
 		configmaps: newFakeConfigMapStore(),
 		machines:   &fakeMachineCache{machines: []*capiv1beta2.Machine{seedMachine("c1", "c1-0", "203.0.113.10")}},
+		downstream: &fakeSchedulerPodLister{pods: []schedulerPod{{NodeName: "c1-node", HostIP: "203.0.113.10"}}},
 		registrar:  newFakeRegistrar(),
 		allocator:  newFakeAllocator(),
 		opts: Options{
@@ -429,9 +438,6 @@ func TestHelmopClusterCarriesSchedulerIdentityAndCertRevision(t *testing.T) {
 	cluster := testSeedCluster("42")
 
 	first := controller.helmopCluster(cluster)
-	if first.SchedulerHost != "" {
-		t.Errorf("SchedulerHost = %q, want empty until the certify path runs", first.SchedulerHost)
-	}
 	if first.MTLSCertRevision == "" {
 		t.Fatal("MTLSCertRevision is empty")
 	}

@@ -21,7 +21,6 @@ func testCluster() Cluster {
 		SchedulerClusterID:          42,
 		SchedulerReplicas:           ReplicasTemplate("p2p.dragonfly.io/scheduler-replicas"),
 		SeedClientReplicas:          ReplicasTemplate("p2p.dragonfly.io/seedclient-replicas"),
-		SchedulerHost:               "d7y-scheduler.c-m-test.example.com",
 		MTLSCertRevision:            "rev1",
 		Labels:                      map[string]string{"app.kubernetes.io/managed-by": "d7y-cattle-operator"},
 	}

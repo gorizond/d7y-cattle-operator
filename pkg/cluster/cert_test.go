@@ -131,7 +131,7 @@ func TestEnsureMTLSCertificateMachineListFailureKeepsCertificate(t *testing.T) {
 	if got := certPEM(t, controller); string(got) != string(before) {
 		t.Error("certificate changed after machine list failure")
 	}
-	if !hasEventReason(events.events, "SchedulerMachineIPsFailed") {
+	if !hasEventReason(events.events, "SchedulerIPsUnavailable") {
 		t.Errorf("events = %+v, want SchedulerMachineIPsFailed", events.events)
 	}
 }
@@ -252,6 +252,7 @@ func TestEnsureMTLSCertificatePublicIPRotationPreservesOldIP(t *testing.T) {
 	first := certPEM(t, controller)
 
 	controller.machines.(*fakeMachineCache).machines = []*capiv1beta2.Machine{seedMachine("c1", "c1-0", "203.0.113.11")}
+	controller.downstream.(*fakeSchedulerPodLister).pods = []schedulerPod{{NodeName: "c1-node", HostIP: "203.0.113.11"}}
 	if _, err := controller.reconcile("", cluster); err != nil {
 		t.Fatalf("rotation reconcile() error = %v", err)
 	}

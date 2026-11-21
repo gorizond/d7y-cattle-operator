@@ -2,7 +2,6 @@
 package helmop
 
 import (
-	"fmt"
 	"strings"
 
 	fleetv1alpha1 "github.com/rancher/fleet/pkg/apis/fleet.cattle.io/v1alpha1"
@@ -27,12 +26,9 @@ const (
 	// the manager through the edge.
 	ManagerGRPCEdgePort = 443
 	ManagerRESTPort     = 8080
-	// SchedulerPort is the scheduler gRPC container port exposed by the
-	// headless peer Service behind the public Traefik front.
+	// SchedulerPort is the scheduler gRPC port exposed on each scheduler
+	// node and by the headless peer Service.
 	SchedulerPort = 8002
-	// SchedulerPublicPort is the public Traefik websecure port used by
-	// bootstrap clients and DaemonSets.
-	SchedulerPublicPort = 443
 
 	// CertDir is where the mTLS Secret is mounted in Dragonfly pods.
 	CertDir = "/etc/dragonfly/certs"
@@ -130,29 +126,6 @@ func SharedSelector() map[string]string {
 	return map[string]string{LabelGate: "true", LabelRoleSeed: "true"}
 }
 
-// SchedulerHostTemplate returns the Fleet values template for the per-target
-// public scheduler host. An empty domain returns an empty host.
-func SchedulerHostTemplate(domain string) string {
-	domain = strings.TrimSpace(strings.Trim(domain, "."))
-	if domain == "" {
-		return ""
-	}
-	return fmt.Sprintf(`d7y-scheduler.${ index .ClusterLabels %q }.`, LabelClusterID) + domain
-}
-
-// SharedSchedulerAddrTemplate is the client-facing scheduler address used by
-// the dynconfig of the shared data release. It must stay a hostname: the
-// scheduler front is a Traefik TCP-TLS route matched by HostSNI, so dialing the
-// public IP has no SNI and fails with a transport error. The public IP is only
-// used for the scheduler advertiseIP and the extras external-dns target.
-func SharedSchedulerAddrTemplate(domain string) string {
-	host := SchedulerHostTemplate(domain)
-	if host == "" {
-		return ""
-	}
-	return fmt.Sprintf("%s:%d", host, SchedulerPublicPort)
-}
-
 // Names are the downstream resource names derived from a cluster name.
 type Names struct {
 	KeyDB            string
@@ -234,9 +207,6 @@ type Cluster struct {
 	// P2PDomain is the operator-wide scheduler base domain used to build the
 	// shared scheduler host template.
 	P2PDomain string
-	// SchedulerHost is the per-cluster public scheduler host used by local
-	// dynconfig (DaemonSets) and bootstrap clients.
-	SchedulerHost string
 	// MTLSCertRevision changes only when the P2P leaf certificate changes; it
 	// is stamped on pod templates to trigger a controlled rollout.
 	MTLSCertRevision string
@@ -346,7 +316,6 @@ func newHelmOpInNamespace(name, targetNamespace string, c Cluster, chart Chart, 
 func sharedCluster(c Cluster) Cluster {
 	c.Name = SharedClusterNameTemplate
 	c.Labels = nil
-	c.SchedulerHost = SchedulerHostTemplate(c.P2PDomain)
 	c.SchedulerClusterIDTemplate = SharedSchedulerClusterIDTemplate
 	c.Monitoring = false
 	c.P2PDataTLS = false

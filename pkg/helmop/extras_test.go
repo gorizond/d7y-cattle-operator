@@ -12,9 +12,6 @@ func TestExtrasHelmOp(t *testing.T) {
 		VPAEnabled:                     true,
 		Manager:                        true,
 		Seed:                           true,
-		SchedulerPublicEnabled:         true,
-		SchedulerDomain:                "example.com",
-		SchedulerClusterID:             "c-m-test",
 		SchedulerService:               "c1-control-scheduler",
 		SchedulerPort:                  SchedulerPort,
 	})
@@ -84,17 +81,8 @@ func TestExtrasHelmOp(t *testing.T) {
 	if got := valueAt(t, values, "ingress", "traefik", "serversTransport", "insecureSkipVerify"); got != true {
 		t.Errorf("traefik insecureSkipVerify = %v", got)
 	}
-	if got := valueAt(t, values, "scheduler", "enabled"); got != true {
-		t.Errorf("scheduler.enabled = %v", got)
-	}
-	if got := valueAt(t, values, "scheduler", "publicIP"); got != SharedSchedulerPublicIPTemplate {
-		t.Errorf("scheduler.publicIP = %v, want the scheduler-ips template", got)
-	}
-	if got := valueAt(t, values, "scheduler", "domain"); got != "example.com" {
-		t.Errorf("scheduler.domain = %v", got)
-	}
-	if got := valueAt(t, values, "scheduler", "clusterID"); got != "c-m-test" {
-		t.Errorf("scheduler.clusterID = %v", got)
+	if got := valueAt(t, values, "scheduler", "enabled"); got != false {
+		t.Errorf("scheduler.enabled = %v, want false", got)
 	}
 	if got := valueAt(t, values, "scheduler", "service"); got != "c1-control-scheduler" {
 		t.Errorf("scheduler.service = %v", got)

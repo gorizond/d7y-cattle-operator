@@ -116,12 +116,11 @@ func TestSharedValuesUseFleetTemplates(t *testing.T) {
 	if got := data["fullnameOverride"]; got != "${ .ClusterName }-data" {
 		t.Errorf("data fullnameOverride = %v", got)
 	}
-	wantAddr := SharedSchedulerAddrTemplate("example.com")
-	if got := valueAt(t, data, "seedClient", "dynconfig", "scheduler", "addr"); got != wantAddr {
-		t.Errorf("seedClient dynconfig addr = %v, want %v", got, wantAddr)
-	}
-	if got := valueAt(t, data, "client", "dynconfig", "scheduler", "addr"); got != wantAddr {
-		t.Errorf("client dynconfig addr = %v, want %v", got, wantAddr)
+	templateValues := SharedData(c).Spec.Helm.TemplateValues
+	for _, key := range []string{"seedClient", "client"} {
+		if got := templateValues[key]; !strings.Contains(got, "addrs:") || !strings.Contains(got, ":8002") {
+			t.Errorf("%s dynconfig template = %q, want scheduler addrs on :8002", key, got)
+		}
 	}
 	if got := valueAt(t, data, "client", "config", "host", "schedulerClusterID"); got != SharedSchedulerClusterIDTemplate {
 		t.Errorf("data schedulerClusterID = %v", got)
@@ -134,8 +133,8 @@ func TestSharedValuesUseFleetTemplates(t *testing.T) {
 	if got := valueAt(t, extras, "scheduler", "service"); got != "${ .ClusterName }-control-scheduler" {
 		t.Errorf("extras scheduler.service = %v", got)
 	}
-	if got := valueAt(t, extras, "scheduler", "publicIP"); got != SharedSchedulerPublicIPTemplate {
-		t.Errorf("extras scheduler.publicIP = %v", got)
+	if got := valueAt(t, extras, "scheduler", "enabled"); got != false {
+		t.Errorf("extras scheduler.enabled = %v, want false (no public scheduler front)", got)
 	}
 	if got := valueAt(t, extras, "vpa", "targets", "data", "name"); got != "${ .ClusterName }-data-seed-client" {
 		t.Errorf("extras data VPA target = %v", got)
@@ -185,38 +184,18 @@ func valuesContain(value any, substring string) bool {
 	return false
 }
 
-func TestSchedulerHostTemplate(t *testing.T) {
-	want := `d7y-scheduler.${ index .ClusterLabels "p2p.dragonfly.io/cluster-id" }.example.com`
-	if got := SchedulerHostTemplate("example.com"); got != want {
-		t.Errorf("SchedulerHostTemplate() = %q, want %q", got, want)
-	}
-	if got := SchedulerHostTemplate(""); got != "" {
-		t.Errorf("SchedulerHostTemplate(\"\") = %q, want empty", got)
-	}
-}
-
-// TestSharedDynconfigUsesSchedulerHost guards the Traefik TCP-TLS HostSNI
-// contract: the seed client's dynconfig must dial the scheduler hostname, not
-// the public IP, otherwise the TLS session carries no SNI and is not routed.
-func TestSharedDynconfigUsesSchedulerHost(t *testing.T) {
+func TestSharedDynconfigUsesSchedulerIPs(t *testing.T) {
 	c := sharedTestCluster()
-	values := SharedData(c).Spec.Helm.Values.Data
-	for _, path := range [][]string{
-		{"seedClient", "dynconfig", "scheduler", "addr"},
-		{"client", "dynconfig", "scheduler", "addr"},
-	} {
-		addr, _ := valueAt(t, values, path...).(string)
-		if !strings.Contains(addr, `d7y-scheduler.${ index .ClusterLabels`) {
-			t.Errorf("%v = %q, want the scheduler host template", path, addr)
-		}
-		if strings.Contains(addr, "scheduler-ips") {
-			t.Errorf("%v = %q, must not use the public-IP template for dynconfig", path, addr)
+	templateValues := SharedData(c).Spec.Helm.TemplateValues
+	for _, key := range []string{"seedClient", "client"} {
+		value := templateValues[key]
+		if !strings.Contains(value, "addrs:") || !strings.Contains(value, ":8002") || !strings.Contains(value, "scheduler-ips") {
+			t.Errorf("%s dynconfig template = %q, want scheduler-ips addrs on :8002", key, value)
 		}
 	}
-	// The IP remains required for the scheduler's advertised address.
 	control := SharedControl(c).Spec.Helm.Values.Data
 	if got := valueAt(t, control, "scheduler", "config", "server", "advertiseIP"); got != SharedSchedulerPublicIPTemplate {
-		t.Errorf("control advertiseIP = %v, want the public-IP template", got)
+		t.Errorf("control advertiseIP = %v, want the scheduler-ips template", got)
 	}
 }
 

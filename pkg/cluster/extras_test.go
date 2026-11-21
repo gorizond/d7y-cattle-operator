@@ -70,13 +70,10 @@ func TestSharedExtrasSchedulerFront(t *testing.T) {
 
 	values := helmValues(t, store.object("fleet-default/"+helmop.SharedExtrasName()))
 	for path, want := range map[string]any{
-		"scheduler.enabled":   true,
-		"scheduler.publicIP":  helmop.SharedSchedulerPublicIPTemplate,
-		"scheduler.domain":    "example.com",
-		"scheduler.clusterID": helmop.SharedSchedulerClusterIDTemplate,
-		"scheduler.service":   helmop.SharedClusterNameTemplate + "-control-scheduler",
-		"scheduler.port":      int64(helmop.SchedulerPort),
-		"vpa.enabled":         true,
+		"scheduler.enabled": false,
+		"scheduler.service": helmop.SharedClusterNameTemplate + "-control-scheduler",
+		"scheduler.port":    int64(helmop.SchedulerPort),
+		"vpa.enabled":       true,
 	} {
 		keys := strings.Split(path, ".")
 		if got := valueAtPath(t, values, keys...); got != want {
