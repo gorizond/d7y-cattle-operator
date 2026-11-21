@@ -549,6 +549,7 @@ func (f *fakeClusterStore) deliver(cluster *provv1.Cluster) {
 		cluster.Annotations[key] = value
 	}
 	cluster.ResourceVersion = f.cluster.ResourceVersion
+	cluster.Finalizers = append([]string(nil), f.cluster.Finalizers...)
 	cluster.Spec = *f.cluster.Spec.DeepCopy()
 }
 
