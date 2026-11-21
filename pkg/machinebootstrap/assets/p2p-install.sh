@@ -1027,30 +1027,20 @@ crictl_cmd() {
   fi
 }
 
-pod_has_running_container() {
-  crictl_cmd ps --state running --pod "$1" -q 2>/dev/null | grep -q .
-}
-
-client_containers_running() {
+client_present() {
   local pods pod
   if [ -z "$CRICTL" ] && ! command -v k3s >/dev/null 2>&1; then
     return 1
   fi
 
+  # The pod may be ContainerCreating while the host dfdaemon holds the
+  # metadata lock. Its presence, not a running container, is the handoff signal.
   pods="$(crictl_cmd pods --namespace "$NAMESPACE" --label component=client -q 2>/dev/null || true)"
-  for pod in $pods; do
-    pod_has_running_container "$pod" && return 0
-  done
-
+  [ -n "$pods" ] && return 0
   pods="$(crictl_cmd pods --namespace "$NAMESPACE" --label app.kubernetes.io/name=client -q 2>/dev/null || true)"
-  for pod in $pods; do
-    pod_has_running_container "$pod" && return 0
-  done
-
+  [ -n "$pods" ] && return 0
   pods="$(crictl_cmd pods --namespace "$NAMESPACE" --name '.*-data-client-.*' -q 2>/dev/null || true)"
-  for pod in $pods; do
-    pod_has_running_container "$pod" && return 0
-  done
+  [ -n "$pods" ] && return 0
 
   # Container-name fallback for crictl versions without pod label/name filters.
   for name in '^client$' '^dfdaemon$'; do
@@ -1066,7 +1056,7 @@ tcp_ready() {
 }
 
 client_ready() {
-  client_containers_running && return 0
+  client_present && return 0
   # The host bootstrap and the in-cluster client may use the same local ports,
   # so the port fallback is only meaningful after the host bootstrap is off.
   if ! bootstrap_enabled && tcp_ready "$CLIENT_PORT"; then
@@ -1080,7 +1070,7 @@ if client_ready; then
     systemctl disable --now "$UNIT"
     mkdir -p "$(dirname "$MARKER")"
     date -u '+%Y-%m-%dT%H:%M:%SZ' > "$MARKER"
-    log "in-cluster client is running; host bootstrap disabled"
+    log "in-cluster client pod present; host bootstrap disabled"
   fi
 else
   if ! bootstrap_enabled || ! bootstrap_active; then
