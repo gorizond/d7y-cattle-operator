@@ -319,7 +319,9 @@ releases keep fixed defaults:
 - The shared extras release enables the manager Ingress unconditionally. A seed
   Cluster without a local manager renders an Ingress with no local backend.
 - A seed-labeled Cluster without `p2p.dragonfly.io/scheduler-cluster-id`
-  renders an empty scheduler ID; the seed label is the deployment contract.
+  renders an empty scheduler ID in shared Helm values; the seed label is the
+  deployment contract. Machine bootstrap is separate and uses the `0`
+  placeholder instead of waiting for registration.
 
 ### Pilot data resource sizing
 
@@ -632,7 +634,7 @@ The operator only acts on Clusters labeled `d7y-operator-cattle: "true"`.
 |---|---|---|
 | `p2p.dragonfly.io/manager` | `"true"` | Manager role: manager and its database, KeyDB as external Redis |
 | `p2p.dragonfly.io/seed` | `"true"` | Seed role: scheduler, seed client/client (nydus runs on the host) |
-| `p2p.dragonfly.io/scheduler-cluster-id` | integer | Scheduler cluster ID; the seed role requires one, and when absent the operator auto-allocates it and writes both `scheduler-cluster-id` and the durable `scheduler-cluster-id-auto` marker. User-owned IDs are never overwritten. |
+| `p2p.dragonfly.io/scheduler-cluster-id` | integer | Scheduler cluster ID; the seed role requires one, and when absent the operator auto-allocates it and writes both `scheduler-cluster-id` and the durable `scheduler-cluster-id-auto` marker. User-owned IDs are never overwritten. Machine bootstrap does not block on this annotation; before registration it injects the `SCHEDULER_CLUSTER_ID=0` placeholder. |
 | `p2p.dragonfly.io/scheduler-replicas` | integer | Scheduler replicas (default `1`) |
 | `p2p.dragonfly.io/seedclient-replicas` | integer | Seed client replicas (default `1`) |
 | `p2p.dragonfly.io/monitoring` | label selector, `true`, or `enabled` | Enable metrics and ServiceMonitors for manager/scheduler/seedClient/client when the selector matches the Cluster labels; empty, invalid, or non-matching disables. Requires the Prometheus Operator ServiceMonitor CRD. |
@@ -722,8 +724,11 @@ its payload is an env-file (no JSON, no `jq`, no python on the node). The script
 snapshotter (`v0.16.0-p2p.2`) plus the static `v2.4.5` daemon assets
 (including `nydus-overlayfs`), writes the global nydus containerd drop-in
 `config-v3.toml.d/90-nydus.toml`, starts it before RKE2, and installs a daily
-host updater. There is no in-cluster nydus DaemonSet or HelmOp. See
-`pkg/machinebootstrap/README.md` for the embedded script and
+host updater. There is no in-cluster nydus DaemonSet or HelmOp. The injector
+does not wait for `p2p.dragonfly.io/scheduler-cluster-id`: if it is still
+empty, the block carries the `SCHEDULER_CLUSTER_ID=0` placeholder and a
+`SchedulerClusterIDPlaceholder` warning until manager registration writes the
+real ID. See `pkg/machinebootstrap/README.md` for the embedded script and
 `charts/p2p-static/README.md` for the static chart values and risks.
 
 ## Known pilot risk: extras target names

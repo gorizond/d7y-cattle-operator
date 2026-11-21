@@ -73,8 +73,8 @@ func Env(p Payload) (string, error) {
 		return "", fmt.Errorf("bootstrap: scheduler_host must be a DNS name")
 	}
 	id, err := strconv.ParseInt(strings.TrimSpace(p.SchedulerClusterID), 10, 64)
-	if err != nil || id < 1 {
-		return "", fmt.Errorf("bootstrap: scheduler_cluster_id must be a positive integer")
+	if err != nil || id < 0 {
+		return "", fmt.Errorf("bootstrap: scheduler_cluster_id must be a non-negative integer")
 	}
 	if len(p.CACert) == 0 || len(p.ClientCert) == 0 || len(p.ClientKey) == 0 {
 		return "", fmt.Errorf("bootstrap: CA, client certificate, and client key are required")

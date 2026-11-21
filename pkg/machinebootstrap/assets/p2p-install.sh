@@ -298,10 +298,11 @@ case "$SCHEDULER_HOST" in
 esac
 
 case "$SCHEDULER_CLUSTER_ID" in
-  ""|*[!0-9]*) die "scheduler_cluster_id must be a positive integer" ;;
+  ""|*[!0-9]*) die "scheduler_cluster_id must be a non-negative integer" ;;
 esac
-if [ "$SCHEDULER_CLUSTER_ID" -lt 1 ] 2>/dev/null; then
-  die "scheduler_cluster_id must be a positive integer"
+# 0 is the pre-registration placeholder for the first seed node.
+if [ "$SCHEDULER_CLUSTER_ID" -lt 0 ] 2>/dev/null; then
+  die "scheduler_cluster_id must be a non-negative integer"
 fi
 
 # nydusd bootstrap id/domain_id. Precedence: optional env value, then the

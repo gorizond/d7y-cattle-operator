@@ -277,3 +277,41 @@ func TestReconcilePatchFailureEmitsEvent(t *testing.T) {
 		t.Errorf("events = %+v, want BootstrapPatchFailed", events.events)
 	}
 }
+
+func TestReconcileMissingSchedulerIDInjectsPlaceholder(t *testing.T) {
+	controller, secrets, _, clusters, events, _ := testController()
+	delete(clusters.clusters["fleet-default/c1"].Annotations, "p2p.dragonfly.io/scheduler-cluster-id")
+
+	if _, err := controller.reconcile("fleet-default/machine-1-machine-bootstrap", secrets.secret.DeepCopy()); err != nil {
+		t.Fatalf("reconcile() error = %v", err)
+	}
+	value := string(secrets.secret.Data[bootstrapValueKey])
+	if !strings.Contains(value, "SCHEDULER_CLUSTER_ID='0'\n") {
+		t.Fatalf("bootstrap block is missing the scheduler ID placeholder: %q", value)
+	}
+	if !strings.Contains(value, bootstrap.Marker) {
+		t.Fatalf("bootstrap marker is missing: %q", value)
+	}
+	if secrets.updates != 1 {
+		t.Errorf("Secret updates = %d, want 1", secrets.updates)
+	}
+	var placeholder, injected bool
+	for _, event := range events.events {
+		switch event.Reason {
+		case "SchedulerClusterIDPlaceholder":
+			placeholder = event.Type == corev1.EventTypeWarning && strings.Contains(event.Message, "placeholder")
+		case "BootstrapInjected":
+			injected = true
+		}
+	}
+	if !placeholder || !injected {
+		t.Errorf("events = %+v, want placeholder warning and BootstrapInjected", events.events)
+	}
+
+	if _, err := controller.reconcile("fleet-default/machine-1-machine-bootstrap", secrets.secret.DeepCopy()); err != nil {
+		t.Fatalf("second reconcile() error = %v", err)
+	}
+	if secrets.updates != 1 {
+		t.Errorf("Secret updates = %d, want 1 after idempotent re-sync", secrets.updates)
+	}
+}

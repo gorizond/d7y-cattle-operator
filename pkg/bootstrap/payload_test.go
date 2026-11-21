@@ -96,7 +96,6 @@ func TestEnvRejectsInvalid(t *testing.T) {
 		"manager without https":  {ManagerGRPC: "http://manager", StaticURL: "http://static", SchedulerClusterID: "2", CACert: []byte("ca"), ClientCert: []byte("cert"), ClientKey: []byte("key")},
 		"static without scheme":  {ManagerGRPC: "https://manager", StaticURL: "static", SchedulerClusterID: "2", CACert: []byte("ca"), ClientCert: []byte("cert"), ClientKey: []byte("key")},
 		"missing ID":             {ManagerGRPC: "https://manager", StaticURL: "http://static", SchedulerHost: "scheduler.example.com", CACert: []byte("ca"), ClientCert: []byte("cert"), ClientKey: []byte("key")},
-		"zero ID":                {ManagerGRPC: "https://manager", StaticURL: "http://static", SchedulerHost: "scheduler.example.com", SchedulerClusterID: "0", CACert: []byte("ca"), ClientCert: []byte("cert"), ClientKey: []byte("key")},
 		"missing cert":           {ManagerGRPC: "https://manager", StaticURL: "http://static", SchedulerHost: "scheduler.example.com", SchedulerClusterID: "2", CACert: []byte("ca"), ClientCert: []byte("cert")},
 		"missing scheduler host": {ManagerGRPC: "https://manager", StaticURL: "http://static", SchedulerClusterID: "2", CACert: []byte("ca"), ClientCert: []byte("cert"), ClientKey: []byte("key")},
 		"invalid scheduler host": {ManagerGRPC: "https://manager", StaticURL: "http://static", SchedulerHost: "bad_host", SchedulerClusterID: "2", CACert: []byte("ca"), ClientCert: []byte("cert"), ClientKey: []byte("key")},
@@ -109,5 +108,17 @@ func TestEnvRejectsInvalid(t *testing.T) {
 				t.Fatal("Env() error = nil, want an error")
 			}
 		})
+	}
+}
+
+func TestEnvAllowsZeroSchedulerIDPlaceholder(t *testing.T) {
+	payload := testPayload()
+	payload.SchedulerClusterID = "0"
+	raw, err := Env(payload)
+	if err != nil {
+		t.Fatalf("Env() error = %v", err)
+	}
+	if !strings.Contains(raw, "SCHEDULER_CLUSTER_ID=0\n") {
+		t.Errorf("payload = %q, want the zero scheduler ID placeholder", raw)
 	}
 }

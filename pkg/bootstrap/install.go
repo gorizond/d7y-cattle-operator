@@ -10,8 +10,10 @@ import (
 
 const (
 	// Marker identifies an injected bootstrap block for idempotency.
-	Marker                       = "# d7y-cattle-operator:p2p-install"
-	schedulerClusterIDAnnotation = "p2p.dragonfly.io/scheduler-cluster-id"
+	Marker = "# d7y-cattle-operator:p2p-install"
+	// SchedulerClusterIDAnnotation is the Cluster annotation used for the
+	// bootstrap scheduler ID. An empty value uses the placeholder ID 0.
+	SchedulerClusterIDAnnotation = "p2p.dragonfly.io/scheduler-cluster-id"
 	schedulerIPsAnnotation       = "p2p.dragonfly.io/scheduler-ips"
 )
 
@@ -29,16 +31,20 @@ type InstallConfig struct {
 
 // BuildInstallEnv builds the env-file assignments for the embedded p2p install
 // block. schedulerID overrides the Cluster annotation when non-empty; otherwise
-// the Cluster annotation is used.
+// the Cluster annotation is used, falling back to placeholder 0 before the
+// manager registration writes it.
 func BuildInstallEnv(cluster *provv1.Cluster, secret *corev1.Secret, schedulerID string, cfg InstallConfig) (string, error) {
 	if secret == nil {
 		return "", fmt.Errorf("mTLS Secret is not configured")
 	}
 	if schedulerID == "" && cluster != nil {
-		schedulerID = strings.TrimSpace(cluster.Annotations[schedulerClusterIDAnnotation])
+		schedulerID = strings.TrimSpace(cluster.Annotations[SchedulerClusterIDAnnotation])
 	}
 	if schedulerID == "" {
-		return "", fmt.Errorf("scheduler cluster ID annotation is empty")
+		// The first seed node can bootstrap before manager registration writes
+		// the annotation. ID 0 is a placeholder; the host dfdaemon is not
+		// started while SCHEDULER_IPS is empty.
+		schedulerID = "0"
 	}
 	clusterID := strings.TrimSpace(cfg.ClusterIDFallback)
 	if cluster != nil && strings.TrimSpace(cluster.Status.ClusterName) != "" {
