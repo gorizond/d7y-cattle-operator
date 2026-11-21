@@ -64,20 +64,26 @@ waits up to `P2P_ASSETS_READY_TIMEOUT` seconds (default 60) for
 service and switches the remaining downloads to direct.
 `dfget --scheduling-policy always --endpoint /var/run/dragonfly/dfdaemon.sock
 --timeout 10m [--digest sha256:<sum>] <url> -O <tmp>` fetches the pinned nydus
-tarball (`nydus-static-v2.4.5-linux-amd64.tgz`) and the patched snapshotter.
+tarball (`nydus-static-v2.4.5-linux-amd64.tgz`) and the upstream
+`containerd/nydus-snapshotter` `v0.16.0` tarball (extracts
+`bin/containerd-nydus-grpc`).
 The static-store and P2P URLs carry version+arch:
 `/nydus/<version>/<arch>/nydus-static.tgz` and
 `/snapshotter/<version>/<arch>/<asset>`. The nydus order is P2P, static-store
 tarball, GitHub release; the snapshotter order is the pinned per-arch checksum,
 P2P with digest, static store, GitHub release. Every nydus tarball and
 snapshotter is SHA-256 verified; a mismatch is discarded and never installed.
-A final direct checksum mismatch is fatal. The snapshotter fork publishes only
-an amd64 asset, so arm64 reports the missing asset and takes the fail-open
-path instead of installing an amd64 snapshotter.
+A final direct checksum mismatch is fatal. Upstream v0.16.0 publishes amd64
+and arm64 tarballs with `bin/containerd-nydus-grpc`; both the tarball and the
+extracted binary are pinned per arch. The amd64 binary matches the 236-node
+reference `9bd24308…`. Upstream v0.16.0 reads mirrors only from its optional
+mirrors-config directory and does **not** implicitly consume containerd's
+`certs.d`; that fork-only behavior is gone. Set `NYDUS_MIRROR_URL` to populate
+`/etc/nydus/mirrors`, or rely on the origin registry/kubeconfig keychain.
 
 The client, nydus, and snapshotter versions come from the bootstrap payload
 (`CLIENT_VERSION`, `NYDUS_VERSION`, `NYDUS_SNAPSHOTTER_VERSION`; defaults
-`v1.5.14`, `v2.4.5`, `v0.16.0-p2p.2`). The p2p-static chart values must be kept
+`v1.5.14`, `v2.4.5`, `v0.16.0`). The p2p-static chart values must be kept
 in sync manually. `P2P_ASSETS=0` disables the early dfdaemon/P2P path entirely;
 the variable is a plain env entry, so it can be added to the bootstrap payload
 for rollback.

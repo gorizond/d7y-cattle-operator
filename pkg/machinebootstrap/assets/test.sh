@@ -155,7 +155,7 @@ assert_contains "${ROOT_ONE}/etc/nydus/config.toml" 'nydusd_path = "/usr/local/b
 assert_contains "${ROOT_ONE}/etc/nydus/config.toml" 'nydusimage_path = "/usr/local/bin/nydus-image"'
 assert_contains "${ROOT_ONE}/etc/nydus/config.toml" 'enable_referrer_detect = true'
 assert_contains "${ROOT_ONE}/etc/nydus/config.toml" 'enable_index_detect = true'
-assert_contains "${ROOT_ONE}/etc/nydus/config.toml" 'containerd/certs.d'
+assert_not_contains "${ROOT_ONE}/etc/nydus/config.toml" "reads containerd's certs.d directly"
 assert_contains "${WORK}/run1.log" 'selected fs_driver=fusedev'
 assert_contains "${WORK}/run1.log" "CONFIG_EROFS_FS_ONDEMAND is 'n'"
 assert_not_contains "${ROOT_ONE}/etc/nydus/config.toml" 'fscache'
@@ -167,10 +167,11 @@ root = "/var/lib/containerd-nydus"
 address = "/run/containerd-nydus/containerd-nydus-grpc.sock"
 daemon_mode = "multiple"
 
-# The patched snapshotter reads containerd's certs.d directly
-# (/var/lib/rancher/rke2/agent/etc/containerd/certs.d, then
-# /etc/containerd/certs.d), so it honors the same hosts.toml mirrors and
-# headers that containerd used for the pull. No local MITM proxy or CA is installed.
+# Upstream v0.16.0 reads mirrors only from its optional mirrors-config section
+# (configured below); it does not implicitly consume containerd's certs.d.
+# The installer writes /etc/nydus/mirrors when NYDUS_MIRROR_URL is set,
+# otherwise nydusd uses the origin registry (or the dfdaemon proxy in the
+# non-mirror config). No local MITM proxy or CA is installed.
 [daemon]
   nydusd_config = "/etc/nydus/nydusd-config.json"
   nydusd_path = "/usr/local/bin/nydusd"
@@ -469,9 +470,11 @@ assert_not_contains "$INSTALL" 'enable_oci_tar'
 assert_contains "$INSTALL" 'fallback_direct'
 assert_contains "$INSTALL" 'SCHEDULER_PORT=8002'
 assert_contains "$INSTALL" 'NYDUS_VERSION="${NYDUS_VERSION:-v2.4.5}"'
-assert_contains "$INSTALL" 'NYDUS_SNAPSHOTTER_REPO="${NYDUS_SNAPSHOTTER_REPO:-gorizond/nydus-snapshotter}"'
-assert_contains "$INSTALL" 'NYDUS_SNAPSHOTTER_VERSION="${NYDUS_SNAPSHOTTER_VERSION:-v0.16.0-p2p.2}"'
-assert_contains "$INSTALL" 'NYDUS_SNAPSHOTTER_ASSET="${NYDUS_SNAPSHOTTER_ASSET:-nydus-snapshotter-linux-${NYDUS_SNAPSHOTTER_ARCH}}"'
+assert_contains "$INSTALL" 'NYDUS_SNAPSHOTTER_REPO="${NYDUS_SNAPSHOTTER_REPO:-containerd/nydus-snapshotter}"'
+assert_contains "$INSTALL" 'NYDUS_SNAPSHOTTER_VERSION="${NYDUS_SNAPSHOTTER_VERSION:-v0.16.0}"'
+assert_contains "$INSTALL" 'NYDUS_SNAPSHOTTER_ASSET="${NYDUS_SNAPSHOTTER_ASSET:-nydus-snapshotter-${NYDUS_SNAPSHOTTER_VERSION}-linux-${NYDUS_SNAPSHOTTER_ARCH}.tar.gz}"'
+assert_not_contains "$INSTALL" 'p2p.2'
+assert_not_contains "$INSTALL" 'gorizond/nydus-snapshotter'
 assert_contains "$INSTALL" 'DRAGONFLY_CLIENT_LIBC="${DRAGONFLY_CLIENT_LIBC:-gnu}"'
 assert_contains "$INSTALL" 'TARGET_ARCH="${TARGET_ARCH:-$(uname -m)}"'
 assert_contains "$INSTALL" 'x86_64|amd64)'
@@ -481,7 +484,10 @@ assert_contains "$INSTALL" 'ba080e62f1626ab2fc2a5a0629a5cd912cc15099508820403108
 assert_contains "$INSTALL" '370ff792a1c6957a7244b770d6cd12792668e326b2282b3017fea2cbfa3510af'
 assert_contains "$INSTALL" '1ad7b793a1996577e462b0bf5c1a22e4450b9c04f7e9e99d4b274ccc92f19072'
 assert_contains "$INSTALL" '85925af702d79fc3a8b9d501a5267ddc9f81449ff9fe94841845eb98eda84593'
-assert_contains "$INSTALL" '8f4f68f306ba391cd294cdcb273267732cb82f4ae466564013204198dd003b0b'
+assert_contains "$INSTALL" '24e4ceaae9c87e396e71e89bd3eb074f2cc6a5a14b1a2081c8d890481857a0e4'
+assert_contains "$INSTALL" '9bd24308ef51139310bf58927a97eec49567d0154606bc5774ad69d2ee492ff0'
+assert_contains "$INSTALL" '136e9c649a63c16b3d3322a15fcdf918e7dda9a4cbb043e2923451e87a8ba08f'
+assert_contains "$INSTALL" '399f7a5b800bb6d05c63bbb340e7fa1820b84609b882589a6a95dd8796d03859'
 assert_contains "$INSTALL" "'%s/download/%s/%s'"
 assert_contains "$INSTALL" "'%s/latest/download/%s'"
 assert_contains "$INSTALL" 'curl -fL'
@@ -531,7 +537,7 @@ assert_file "${ROOT_MIRROR}/etc/nydus/mirrors.enabled"
 assert_contains "${ROOT_MIRROR}/etc/nydus/config.toml" '[remote.mirrors_config]'
 assert_contains "${ROOT_MIRROR}/etc/nydus/config.toml" 'dir = "/etc/nydus/mirrors"'
 assert_contains "${ROOT_MIRROR}/etc/nydus/config.toml" 'enable_index_detect = true'
-assert_contains "${ROOT_MIRROR}/etc/nydus/config.toml" 'containerd/certs.d'
+assert_not_contains "${ROOT_MIRROR}/etc/nydus/config.toml" "reads containerd's certs.d directly"
 assert_not_contains "${ROOT_MIRROR}/etc/nydus/nydusd-config.json" '127.0.0.1:4001'
 assert_not_contains "${ROOT_MIRROR}/etc/nydus/nydusd-config.json" '"proxy"'
 assert_not_contains "${ROOT_MIRROR}/etc/nydus/nydusd-config.json" 'use_http'
@@ -657,13 +663,28 @@ tar -czf "$RELEASE_NYDUS_TGZ" -C "${WORK}/release-nydus" nydus-static
 RELEASE_NYDUS_SHA="$(sha256sum "$RELEASE_NYDUS_TGZ" | cut -d' ' -f1)"
 cp "$RELEASE_NYDUS_TGZ" "${CURL_ASSET_DIR}/nydus-static.tgz"
 cp "$RELEASE_NYDUS_TGZ" "${CURL_ASSET_DIR}/nydus-static-v2.4.5-linux-amd64.tgz"
-printf '#!/bin/sh\nexit 0\n' > "${CURL_ASSET_DIR}/nydus-snapshotter-linux-amd64"
-RELEASE_SNAP_SHA="$(sha256sum "${CURL_ASSET_DIR}/nydus-snapshotter-linux-amd64" | cut -d' ' -f1)"
+RELEASE_SNAP_SRC="${WORK}/release-snap/bin"
+RELEASE_SNAP_TGZ="${WORK}/nydus-snapshotter-v0.16.0-linux-amd64.tar.gz"
+mkdir -p "$RELEASE_SNAP_SRC"
+printf '#!/bin/sh\nexit 0\n' > "$RELEASE_SNAP_SRC/containerd-nydus-grpc"
+tar -czf "$RELEASE_SNAP_TGZ" -C "${WORK}/release-snap" bin
+RELEASE_SNAP_SHA="$(sha256sum "$RELEASE_SNAP_TGZ" | cut -d' ' -f1)"
+RELEASE_SNAP_BIN_SHA="$(sha256sum "$RELEASE_SNAP_SRC/containerd-nydus-grpc" | cut -d' ' -f1)"
+cp "$RELEASE_SNAP_TGZ" "${CURL_ASSET_DIR}/nydus-snapshotter-v0.16.0-linux-amd64.tar.gz"
+RELEASE_SNAP_ARM_SRC="${WORK}/release-snap-arm/bin"
+RELEASE_SNAP_ARM_TGZ="${WORK}/nydus-snapshotter-v0.16.0-linux-arm64.tar.gz"
+mkdir -p "$RELEASE_SNAP_ARM_SRC"
+printf '#!/bin/sh\nexit 0\n' > "$RELEASE_SNAP_ARM_SRC/containerd-nydus-grpc"
+tar -czf "$RELEASE_SNAP_ARM_TGZ" -C "${WORK}/release-snap-arm" bin
+RELEASE_SNAP_ARM_SHA="$(sha256sum "$RELEASE_SNAP_ARM_TGZ" | cut -d' ' -f1)"
+RELEASE_SNAP_ARM_BIN_SHA="$(sha256sum "$RELEASE_SNAP_ARM_SRC/containerd-nydus-grpc" | cut -d' ' -f1)"
+cp "$RELEASE_SNAP_ARM_TGZ" "${CURL_ASSET_DIR}/nydus-snapshotter-v0.16.0-linux-arm64.tar.gz"
 
 ROOT_RELEASE="${WORK}/root-release"
 P2P_ROOT="$ROOT_RELEASE" SKIP_MODULES=1 SKIP_SYSTEMD=1 SKIP_PREFLIGHT=1 CONTAINERD_MAJOR=1 \
-  NYDUS_SNAPSHOTTER_VERSION=v9.9.9 NYDUS_SNAPSHOTTER_REPO=example-org/example-repo \
-  NYDUS_GITHUB_SHA256="$RELEASE_NYDUS_SHA" NYDUS_SNAPSHOTTER_SHA256="$RELEASE_SNAP_SHA" P2P_ASSETS=0 \
+  NYDUS_SNAPSHOTTER_VERSION=v0.16.0 NYDUS_SNAPSHOTTER_REPO=example-org/example-repo \
+  NYDUS_GITHUB_SHA256="$RELEASE_NYDUS_SHA" NYDUS_SNAPSHOTTER_SHA256="$RELEASE_SNAP_SHA" \
+  NYDUS_SNAPSHOTTER_BINARY_SHA256="$RELEASE_SNAP_BIN_SHA" P2P_ASSETS=0 \
   PATH="${FAKE_BIN}:${PATH}" CURL_LOG="$CURL_LOG" CURL_ASSET_DIR="$CURL_ASSET_DIR" \
   "$RUNNER" "$INSTALL" "$CFG" > "${WORK}/release.log" 2>&1
 
@@ -674,17 +695,18 @@ if [ "$(stat -c '%a' "${ROOT_RELEASE}/usr/local/bin/containerd-nydus-grpc")" != 
   echo "p2p-static self-test: snapshotter is not mode 0755" >&2
   exit 1
 fi
-assert_contains "$CURL_LOG" 'http://static.example.test/snapshotter/v9.9.9/amd64/nydus-snapshotter-linux-amd64'
+assert_contains "$CURL_LOG" 'http://static.example.test/snapshotter/v0.16.0/amd64/nydus-snapshotter-v0.16.0-linux-amd64.tar.gz'
 assert_contains "${WORK}/release.log" 'nydus tarball: using static store'
 
 ROOT_NO_ASSET="${WORK}/root-no-asset"
 P2P_ROOT="$ROOT_NO_ASSET" SKIP_MODULES=1 SKIP_SYSTEMD=1 SKIP_PREFLIGHT=1 CONTAINERD_MAJOR=1 \
-  NYDUS_SNAPSHOTTER_VERSION=v9.9.9 NYDUS_SNAPSHOTTER_REPO=example-org/example-repo \
-  NYDUS_GITHUB_SHA256="$RELEASE_NYDUS_SHA" NYDUS_SNAPSHOTTER_SHA256="$RELEASE_SNAP_SHA" P2P_ASSETS=0 \
-  FAKE_CURL_FAIL_ASSET=nydus-snapshotter-linux-amd64 \
+  NYDUS_SNAPSHOTTER_VERSION=v0.16.0 NYDUS_SNAPSHOTTER_REPO=example-org/example-repo \
+  NYDUS_GITHUB_SHA256="$RELEASE_NYDUS_SHA" NYDUS_SNAPSHOTTER_SHA256="$RELEASE_SNAP_SHA" \
+  NYDUS_SNAPSHOTTER_BINARY_SHA256="$RELEASE_SNAP_BIN_SHA" P2P_ASSETS=0 \
+  FAKE_CURL_FAIL_ASSET=nydus-snapshotter-v0.16.0-linux-amd64.tar.gz \
   PATH="${FAKE_BIN}:${PATH}" CURL_LOG="${WORK}/curl-fail.log" CURL_ASSET_DIR="$CURL_ASSET_DIR" \
   "$RUNNER" "$INSTALL" "$CFG" > "${WORK}/no-asset.log" 2>&1
-assert_contains "${WORK}/no-asset.log" 'nydus-snapshotter release asset'
+assert_contains "${WORK}/no-asset.log" 'upstream nydus-snapshotter v0.16.0 amd64 tarball'
 assert_contains "${WORK}/no-asset.log" 'is unavailable'
 if [ -f "${ROOT_NO_ASSET}/usr/local/bin/containerd-nydus-grpc" ]; then
   echo "p2p-static self-test: missing release asset installed a snapshotter" >&2
@@ -727,12 +749,13 @@ case "${FAKE_DFGET_MODE:-ok}" in
 esac
 case "$url" in
   *nydus-static-v2.4.5-linux-amd64.tgz) cp "${FAKE_NYDUS_TARBALL:?}" "$out" ;;
-  *nydus-snapshotter-linux-amd64) cp "${FAKE_SNAPSHOTTER:?}" "$out" ;;
+  *nydus-snapshotter-v0.16.0-linux-amd64.tar.gz) cp "${FAKE_SNAPSHOTTER:?}" "$out" ;;
   *) exit 22 ;;
 esac
 FAKEDFGET
 chmod 0755 "${FAKE_BIN}/dfget"
-FAKE_SNAPSHOTTER_SHA="$(sha256sum "${CURL_ASSET_DIR}/nydus-snapshotter-linux-amd64" | cut -d' ' -f1)"
+FAKE_SNAPSHOTTER_SHA="$RELEASE_SNAP_SHA"
+FAKE_SNAPSHOTTER_BIN_SHA="$RELEASE_SNAP_BIN_SHA"
 
 DFGET_LOG="${WORK}/dfget.log"
 p2p_run() {
@@ -740,11 +763,12 @@ p2p_run() {
   shift 4
   : > "$DFGET_LOG"
   env P2P_ROOT="$root" SKIP_MODULES=1 SKIP_SYSTEMD=1 SKIP_PREFLIGHT=1 CONTAINERD_MAJOR=1 \
-    NYDUS_SNAPSHOTTER_VERSION=v9.9.9 NYDUS_SNAPSHOTTER_REPO=example-org/example-repo \
+    NYDUS_SNAPSHOTTER_VERSION=v0.16.0 NYDUS_SNAPSHOTTER_REPO=example-org/example-repo \
     NYDUS_GITHUB_SHA256="$RELEASE_NYDUS_SHA" NYDUS_SNAPSHOTTER_SHA256="$FAKE_SNAPSHOTTER_SHA" \
+    NYDUS_SNAPSHOTTER_BINARY_SHA256="$FAKE_SNAPSHOTTER_BIN_SHA" \
     P2P_ASSETS="$p2p" FAKE_DFGET_MODE="$mode" \
     DFGET_BIN="${FAKE_BIN}/dfget" DFGET_LOG="$DFGET_LOG" \
-    FAKE_NYDUS_TARBALL="$RELEASE_NYDUS_TGZ" FAKE_SNAPSHOTTER="${CURL_ASSET_DIR}/nydus-snapshotter-linux-amd64" \
+    FAKE_NYDUS_TARBALL="$RELEASE_NYDUS_TGZ" FAKE_SNAPSHOTTER="$RELEASE_SNAP_TGZ" \
     PATH="${FAKE_BIN}:${PATH}" CURL_LOG="$CURL_LOG" CURL_ASSET_DIR="$CURL_ASSET_DIR" \
     "$@" "$RUNNER" "$INSTALL" "$cfg"
 }
@@ -769,7 +793,7 @@ assert_contains "$DFGET_LOG" 'policy=always endpoint=/var/run/dragonfly/dfdaemon
 
 ROOT_P2P_GITHUB="${WORK}/root-p2p-github"
 p2p_run "$ROOT_P2P_GITHUB" "$CFG" 1 fail \
-  FAKE_CURL_FAIL_STATIC_ASSETS="nydus-static.tgz nydus-snapshotter-linux-amd64" \
+  FAKE_CURL_FAIL_STATIC_ASSETS="nydus-static.tgz nydus-snapshotter-v0.16.0-linux-amd64.tar.gz" \
   > "${WORK}/p2p-github.log" 2>&1
 assert_file "${ROOT_P2P_GITHUB}/usr/local/bin/nydusd"
 assert_file "${ROOT_P2P_GITHUB}/usr/local/bin/containerd-nydus-grpc"
@@ -836,7 +860,7 @@ env TARGET_ARCH= P2P_ROOT="$ROOT_ARCH_AMD" SKIP_MODULES=1 SKIP_SYSTEMD=1 SKIP_PR
   "$RUNNER" "$INSTALL" "$CFG" > "${WORK}/arch-amd64.log" 2>&1
 assert_contains "${WORK}/arch-amd64.log" 'pins: client v1.5.14 ba080e62f1626ab2fc2a5a0629a5cd912cc15099508820403108abbe2f75b1f7'
 assert_contains "${WORK}/arch-amd64.log" 'nydus v2.4.5 1ad7b793a1996577e462b0bf5c1a22e4450b9c04f7e9e99d4b274ccc92f19072'
-assert_contains "${WORK}/arch-amd64.log" 'snapshotter v0.16.0-p2p.2 8f4f68f306ba391cd294cdcb273267732cb82f4ae466564013204198dd003b0b'
+assert_contains "${WORK}/arch-amd64.log" 'snapshotter v0.16.0 24e4ceaae9c87e396e71e89bd3eb074f2cc6a5a14b1a2081c8d890481857a0e4 (binary 9bd24308ef51139310bf58927a97eec49567d0154606bc5774ad69d2ee492ff0)'
 assert_contains "$ARCH_AMD_CURL" 'http://static.example.test/client/v1.5.14/amd64/dfdaemon'
 assert_contains "$ARCH_AMD_CURL" 'http://static.example.test/nydus/v2.4.5/amd64/nydus-static.tgz'
 
@@ -848,20 +872,22 @@ env TARGET_ARCH= P2P_ROOT="$ROOT_ARCH_ARM_PINS" SKIP_DOWNLOAD=1 SKIP_MODULES=1 S
 assert_contains "${WORK}/arch-arm64-pins.log" 'host=arm64 client=aarch64 nydus=arm64 snapshotter=arm64'
 assert_contains "${WORK}/arch-arm64-pins.log" 'pins: client v1.5.14 370ff792a1c6957a7244b770d6cd12792668e326b2282b3017fea2cbfa3510af'
 assert_contains "${WORK}/arch-arm64-pins.log" 'nydus v2.4.5 85925af702d79fc3a8b9d501a5267ddc9f81449ff9fe94841845eb98eda84593'
-assert_contains "${WORK}/arch-arm64-pins.log" 'snapshotter v0.16.0-p2p.2 unavailable'
+assert_contains "${WORK}/arch-arm64-pins.log" 'snapshotter v0.16.0 136e9c649a63c16b3d3322a15fcdf918e7dda9a4cbb043e2923451e87a8ba08f (binary 399f7a5b800bb6d05c63bbb340e7fa1820b84609b882589a6a95dd8796d03859)'
 
-# Arm64 URL selection plus the explicit missing-snapshotter fallback. The
-# nydus checksum is overridden only to accept the tiny test tarball.
+# Arm64 URL selection with the upstream arm64 snapshotter tarball. The
+# checksums are overridden only to accept the tiny test artifacts.
 ROOT_ARCH_ARM="${WORK}/root-arch-arm64"
 ARCH_ARM_CURL="${WORK}/curl-arch-arm64.log"
 : > "$ARCH_ARM_CURL"
 env TARGET_ARCH= P2P_ROOT="$ROOT_ARCH_ARM" SKIP_MODULES=1 SKIP_SYSTEMD=1 SKIP_PREFLIGHT=1 CONTAINERD_MAJOR=1 \
   NYDUS_GITHUB_SHA256="$RELEASE_NYDUS_SHA" NYDUS_ALLOW_GITHUB=0 P2P_ASSETS=0 \
+  NYDUS_SNAPSHOTTER_SHA256="$RELEASE_SNAP_ARM_SHA" NYDUS_SNAPSHOTTER_BINARY_SHA256="$RELEASE_SNAP_ARM_BIN_SHA" \
   PATH="$ARCH_ARM_BIN:$FAKE_BIN:$PATH" CURL_LOG="$ARCH_ARM_CURL" CURL_ASSET_DIR="$CURL_ASSET_DIR" \
   "$RUNNER" "$INSTALL" "$CFG" > "${WORK}/arch-arm64.log" 2>&1
-assert_contains "${WORK}/arch-arm64.log" 'no pinned nydus-snapshotter asset for arm64'
+assert_contains "${WORK}/arch-arm64.log" 'nydus-snapshotter: using'
 assert_contains "$ARCH_ARM_CURL" 'http://static.example.test/client/v1.5.14/arm64/dfdaemon'
 assert_contains "$ARCH_ARM_CURL" 'http://static.example.test/nydus/v2.4.5/arm64/nydus-static.tgz'
+assert_contains "$ARCH_ARM_CURL" 'http://static.example.test/snapshotter/v0.16.0/arm64/nydus-snapshotter-v0.16.0-linux-arm64.tar.gz'
 if grep -q '/amd64/' "$ARCH_ARM_CURL"; then
   echo "p2p-static self-test: arm64 run fetched an amd64 asset" >&2
   exit 1

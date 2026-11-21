@@ -32,17 +32,18 @@ DFGET_CONFIG="/etc/dragonfly/dfget.yaml"
 DYNCONFIG="/etc/dragonfly/dynconfig.yaml"
 NYDUS_DIR="/etc/nydus"
 # Static-store assets for nydusd/nydus-image/nydus-overlayfs. The host
-# snapshotter is a separate patched release, see below.
+# snapshotter is the upstream containerd/nydus-snapshotter release, see below.
 NYDUS_VERSION="${NYDUS_VERSION:-v2.4.5}"
 NYDUS_BINARIES="nydusd
 nydus-image
 nydus-overlayfs"
-# Patched nydus-snapshotter release (host containerd-nydus-grpc binary). It
-# reads containerd certs.d/hosts.toml, so a docker.io ref resolves through the
-# same mirror that containerd used for the pull. Installed to the existing
+# Upstream nydus-snapshotter release. v0.16.0 publishes a tarball containing
+# bin/containerd-nydus-grpc for amd64 and arm64. Upstream reads mirrors only
+# from [remote.mirrors_config] (certs.d-style hosts.toml under its dir); it
+# does not implicitly read containerd's certs.d. Installed to the existing
 # /usr/local/bin/containerd-nydus-grpc path and run by the same unit.
-NYDUS_SNAPSHOTTER_REPO="${NYDUS_SNAPSHOTTER_REPO:-gorizond/nydus-snapshotter}"
-NYDUS_SNAPSHOTTER_VERSION="${NYDUS_SNAPSHOTTER_VERSION:-v0.16.0-p2p.2}"
+NYDUS_SNAPSHOTTER_REPO="${NYDUS_SNAPSHOTTER_REPO:-containerd/nydus-snapshotter}"
+NYDUS_SNAPSHOTTER_VERSION="${NYDUS_SNAPSHOTTER_VERSION:-v0.16.0}"
 NYDUS_SNAPSHOTTER_BINARY="containerd-nydus-grpc"
 # Optional official Nydus release fallback for the daemon binaries when the
 # static store is not populated. The tarball contains nydusd, nydus-image, and
@@ -137,25 +138,27 @@ DRAGONFLY_CLIENT_ROOT="${DRAGONFLY_CLIENT_ROOT:-dragonfly-client-${DRAGONFLY_CLI
 DRAGONFLY_CLIENT_ASSET="${DRAGONFLY_CLIENT_ASSET:-${DRAGONFLY_CLIENT_ROOT}.tar.gz}"
 DRAGONFLY_CLIENT_URL="${DRAGONFLY_CLIENT_URL:-https://github.com/${DRAGONFLY_CLIENT_REPO}/releases/download/${DRAGONFLY_CLIENT_VERSION}/${DRAGONFLY_CLIENT_ASSET}}"
 NYDUS_SNAPSHOTTER_ARCH="$HOST_ARCH"
-NYDUS_SNAPSHOTTER_ASSET="${NYDUS_SNAPSHOTTER_ASSET:-nydus-snapshotter-linux-${NYDUS_SNAPSHOTTER_ARCH}}"
+NYDUS_SNAPSHOTTER_ASSET="${NYDUS_SNAPSHOTTER_ASSET:-nydus-snapshotter-${NYDUS_SNAPSHOTTER_VERSION}-linux-${NYDUS_SNAPSHOTTER_ARCH}.tar.gz}"
 
-# Per-architecture SHA-256 pins. The snapshotter fork currently publishes an
-# amd64 asset only; arm64 keeps the client/nydus pins and reports the missing
-# snapshotter asset instead of silently installing an amd64 binary.
+# Per-architecture SHA-256 pins for the upstream v0.16.0 release tarballs.
+# The reference 236 node runs the amd64 binary with SHA-256 9bd24308...
 case "$HOST_ARCH" in
   amd64)
     : "${DRAGONFLY_CLIENT_SHA256:=ba080e62f1626ab2fc2a5a0629a5cd912cc15099508820403108abbe2f75b1f7}"
     : "${NYDUS_GITHUB_SHA256:=1ad7b793a1996577e462b0bf5c1a22e4450b9c04f7e9e99d4b274ccc92f19072}"
-    : "${NYDUS_SNAPSHOTTER_SHA256:=8f4f68f306ba391cd294cdcb273267732cb82f4ae466564013204198dd003b0b}"
+    : "${NYDUS_SNAPSHOTTER_SHA256:=24e4ceaae9c87e396e71e89bd3eb074f2cc6a5a14b1a2081c8d890481857a0e4}"
+    : "${NYDUS_SNAPSHOTTER_BINARY_SHA256:=9bd24308ef51139310bf58927a97eec49567d0154606bc5774ad69d2ee492ff0}"
     ;;
   arm64)
     : "${DRAGONFLY_CLIENT_SHA256:=370ff792a1c6957a7244b770d6cd12792668e326b2282b3017fea2cbfa3510af}"
     : "${NYDUS_GITHUB_SHA256:=85925af702d79fc3a8b9d501a5267ddc9f81449ff9fe94841845eb98eda84593}"
+    : "${NYDUS_SNAPSHOTTER_SHA256:=136e9c649a63c16b3d3322a15fcdf918e7dda9a4cbb043e2923451e87a8ba08f}"
+    : "${NYDUS_SNAPSHOTTER_BINARY_SHA256:=399f7a5b800bb6d05c63bbb340e7fa1820b84609b882589a6a95dd8796d03859}"
     ;;
 esac
 
 log "target ${TARGET_ARCH}: host=${HOST_ARCH} client=${DRAGONFLY_CLIENT_ARCH} nydus=${NYDUS_ARCH} snapshotter=${NYDUS_SNAPSHOTTER_ARCH}"
-log "pins: client ${DRAGONFLY_CLIENT_VERSION} ${DRAGONFLY_CLIENT_SHA256}, nydus ${NYDUS_VERSION} ${NYDUS_GITHUB_SHA256}, snapshotter ${NYDUS_SNAPSHOTTER_VERSION} ${NYDUS_SNAPSHOTTER_SHA256:-unavailable}"
+log "pins: client ${DRAGONFLY_CLIENT_VERSION} ${DRAGONFLY_CLIENT_SHA256}, nydus ${NYDUS_VERSION} ${NYDUS_GITHUB_SHA256}, snapshotter ${NYDUS_SNAPSHOTTER_VERSION} ${NYDUS_SNAPSHOTTER_SHA256:-unavailable} (binary ${NYDUS_SNAPSHOTTER_BINARY_SHA256:-unavailable})"
 
 detect_containerd_major() {
   local candidate version
@@ -455,9 +458,9 @@ fetch_nydus_snapshotter_checksum() {
   local out="$1" url candidate
   url="$(nydus_snapshotter_release_url)"
   for candidate in \
-    "${STATIC_URL%/}/snapshotter/${NYDUS_SNAPSHOTTER_VERSION}/${HOST_ARCH}/${NYDUS_SNAPSHOTTER_ASSET}.sha256" \
-    "${url}.sha256" \
-    "${STATIC_URL%/}/bin/${NYDUS_SNAPSHOTTER_ASSET}.sha256"; do
+    "${STATIC_URL%/}/snapshotter/${NYDUS_SNAPSHOTTER_VERSION}/${HOST_ARCH}/${NYDUS_SNAPSHOTTER_ASSET}.sha256sum" \
+    "${url}.sha256sum" \
+    "${url}.sha256"; do
     if curl -fsSL --retry 3 --connect-timeout 10 --max-time 300 -o "$out" "$candidate" && [ -s "$out" ]; then
       log "nydus-snapshotter checksum: using ${candidate}"
       return 0
@@ -467,19 +470,49 @@ fetch_nydus_snapshotter_checksum() {
   return 1
 }
 
-# Fetch the checksum first, then the binary through P2P with that digest, then
-# the static store, then GitHub. A checksum mismatch from the final direct
-# source is fatal; a P2P mismatch is discarded and retried directly.
+# Upstream v0.16.0 publishes a tarball with bin/containerd-nydus-grpc. Verify
+# both the tarball and the extracted binary: the binary pin is the reference
+# already running on the 236 node (9bd24308... on amd64).
+extract_nydus_snapshotter_binary() {
+  local tarball="$1" out="$2" extract
+  extract="${TMP}/snapshotter-extract-$$"
+  rm -rf "$extract"
+  mkdir -p "$extract"
+  if ! tar -xzf "$tarball" -C "$extract"; then
+    log "invalid nydus-snapshotter tarball: ${tarball}"
+    rm -rf "$extract"
+    return 1
+  fi
+  if [ ! -s "${extract}/bin/${NYDUS_SNAPSHOTTER_BINARY}" ]; then
+    log "nydus-snapshotter tarball is missing bin/${NYDUS_SNAPSHOTTER_BINARY}: ${tarball}"
+    rm -rf "$extract"
+    return 1
+  fi
+  cp "${extract}/bin/${NYDUS_SNAPSHOTTER_BINARY}" "$out"
+  chmod 0755 "$out"
+  rm -rf "$extract"
+  if [ -n "${NYDUS_SNAPSHOTTER_BINARY_SHA256:-}" ]; then
+    if ! verify_sha256 "$out" "$NYDUS_SNAPSHOTTER_BINARY_SHA256" "nydus-snapshotter ${NYDUS_SNAPSHOTTER_VERSION} binary"; then
+      rm -f "$out"
+      return 1
+    fi
+  fi
+  return 0
+}
+
+# Fetch the upstream tarball through P2P, static store, then GitHub; verify the
+# tarball SHA-256 and the extracted binary SHA-256 before install.
 install_nydus_snapshotter_asset() {
-  local p2p_ready="$1" out="$2" url checksum expected candidate
+  local p2p_ready="$1" out="$2" url checksum expected candidate tarball
   url="$(nydus_snapshotter_release_url)"
-  checksum="${out}.sha256"
-  rm -f "$out" "$checksum"
+  checksum="${out}.sha256sum"
+  tarball="${out}.tgz"
+  rm -f "$out" "$tarball" "$checksum"
   expected="${NYDUS_SNAPSHOTTER_SHA256:-}"
   if [ -z "$expected" ]; then
     log "no pinned nydus-snapshotter asset for ${HOST_ARCH} (${NYDUS_SNAPSHOTTER_REPO} ${NYDUS_SNAPSHOTTER_VERSION}); trying release checksum"
     if ! fetch_nydus_snapshotter_checksum "$checksum"; then
-      log "nydus-snapshotter checksum is unavailable: ${url}.sha256"
+      log "nydus-snapshotter checksum is unavailable: ${url}.sha256sum"
       return 1
     fi
     IFS=' ' read -r expected _ < "$checksum"
@@ -489,30 +522,35 @@ install_nydus_snapshotter_asset() {
       return 1
     fi
   fi
-  if [ "$p2p_ready" = "1" ] && p2p_fetch "$url" "$out" "$expected"; then
-    if verify_sha256 "$out" "$expected" "nydus-snapshotter (P2P)"; then
+  if [ "$p2p_ready" = "1" ] && p2p_fetch "$url" "$tarball" "$expected"; then
+    if verify_sha256 "$tarball" "$expected" "nydus-snapshotter ${NYDUS_SNAPSHOTTER_VERSION} tarball (P2P)" &&
+      extract_nydus_snapshotter_binary "$tarball" "$out"; then
       log "nydus-snapshotter: using P2P"
-      rm -f "$checksum"
+      rm -f "$tarball" "$checksum"
       return 0
     fi
-    log "nydus P2P snapshotter failed checksum verification; discarding"
-    rm -f "$out"
+    log "nydus P2P snapshotter failed verification; discarding"
+    rm -f "$tarball" "$out"
   fi
   for candidate in \
     "${STATIC_URL%/}/snapshotter/${NYDUS_SNAPSHOTTER_VERSION}/${HOST_ARCH}/${NYDUS_SNAPSHOTTER_ASSET}" \
     "${STATIC_URL%/}/bin/${NYDUS_SNAPSHOTTER_ASSET}" \
     "$url"; do
-    if curl -fsSL --retry 3 --connect-timeout 10 --max-time 300 -o "$out" "$candidate" && [ -s "$out" ]; then
-      if verify_sha256 "$out" "$expected" "nydus-snapshotter"; then
+    if curl -fsSL --retry 3 --connect-timeout 10 --max-time 300 -o "$tarball" "$candidate" && [ -s "$tarball" ]; then
+      if ! verify_sha256 "$tarball" "$expected" "nydus-snapshotter ${NYDUS_SNAPSHOTTER_VERSION} tarball"; then
+        rm -f "$tarball" "$checksum"
+        die "checksum verification failed for ${candidate}"
+      fi
+      if extract_nydus_snapshotter_binary "$tarball" "$out"; then
         log "nydus-snapshotter: using ${candidate}"
-        rm -f "$checksum"
+        rm -f "$tarball" "$checksum"
         return 0
       fi
-      rm -f "$checksum"
-      die "checksum verification failed for ${candidate}"
+      rm -f "$tarball" "$checksum"
+      die "nydus-snapshotter tarball failed binary verification: ${candidate}"
     fi
   done
-  rm -f "$checksum"
+  rm -f "$tarball" "$checksum"
   return 1
 }
 
@@ -1111,10 +1149,11 @@ root = "/var/lib/containerd-nydus"
 address = "/run/containerd-nydus/containerd-nydus-grpc.sock"
 daemon_mode = "multiple"
 
-# The patched snapshotter reads containerd's certs.d directly
-# (/var/lib/rancher/rke2/agent/etc/containerd/certs.d, then
-# /etc/containerd/certs.d), so it honors the same hosts.toml mirrors and
-# headers that containerd used for the pull. No local MITM proxy or CA is installed.
+# Upstream v0.16.0 reads mirrors only from its optional mirrors-config section
+# (configured below); it does not implicitly consume containerd's certs.d.
+# The installer writes /etc/nydus/mirrors when NYDUS_MIRROR_URL is set,
+# otherwise nydusd uses the origin registry (or the dfdaemon proxy in the
+# non-mirror config). No local MITM proxy or CA is installed.
 [daemon]
   nydusd_config = "/etc/nydus/nydusd-config.json"
   nydusd_path = "/usr/local/bin/nydusd"
@@ -1442,8 +1481,8 @@ UNIT
 } | write_file "${SERVICE_DIR}/nydus-snapshotter-bootstrap.service" 0644
 
 # Host-only updater: keeps the pinned static nydus binaries current and
-# restarts the host unit when anything changed. The patched nydus-snapshotter
-# binary comes from its GitHub release and is updated by rerunning this
+# restarts the host unit when anything changed. The upstream nydus-snapshotter
+# binary comes from its release tarball and is updated by rerunning this
 # script, not by the static-store updater. It never touches Kubernetes.
 {
   printf 'STATIC_URL=%q\n' "$STATIC_URL"
@@ -1653,8 +1692,8 @@ else
 
   snapshotter_tmp="${BIN_DIR}/.${NYDUS_SNAPSHOTTER_BINARY}.tmp.$$"
   if ! install_nydus_snapshotter_asset "$p2p_ready" "$snapshotter_tmp"; then
-    rm -f "$snapshotter_tmp" "${snapshotter_tmp}.sha256"
-    fallback_direct "nydus-snapshotter release asset ${NYDUS_SNAPSHOTTER_ASSET} (${NYDUS_SNAPSHOTTER_VERSION}) is unavailable from ${NYDUS_SNAPSHOTTER_REPO}"
+    rm -f "$snapshotter_tmp" "${snapshotter_tmp}.tgz" "${snapshotter_tmp}.sha256sum"
+    fallback_direct "upstream nydus-snapshotter ${NYDUS_SNAPSHOTTER_VERSION} ${HOST_ARCH} tarball ${NYDUS_SNAPSHOTTER_ASSET} is unavailable from ${NYDUS_SNAPSHOTTER_REPO}"
   fi
   chmod 0755 "$snapshotter_tmp"
   mv -f "$snapshotter_tmp" "${BIN_DIR}/${NYDUS_SNAPSHOTTER_BINARY}"

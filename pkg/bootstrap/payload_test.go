@@ -127,7 +127,7 @@ func TestEnvVersions(t *testing.T) {
 	payload := testPayload()
 	payload.ClientVersion = "v1.5.14"
 	payload.NydusVersion = "v2.4.5"
-	payload.SnapshotterVersion = "v0.16.0-p2p.2"
+	payload.SnapshotterVersion = "v0.16.0"
 	raw, err := Env(payload)
 	if err != nil {
 		t.Fatalf("Env() error = %v", err)
@@ -135,7 +135,7 @@ func TestEnvVersions(t *testing.T) {
 	for _, want := range []string{
 		"CLIENT_VERSION=v1.5.14\n",
 		"NYDUS_VERSION=v2.4.5\n",
-		"NYDUS_SNAPSHOTTER_VERSION=v0.16.0-p2p.2\n",
+		"NYDUS_SNAPSHOTTER_VERSION=v0.16.0\n",
 	} {
 		if !strings.Contains(raw, want) {
 			t.Errorf("payload missing %q: %q", want, raw)

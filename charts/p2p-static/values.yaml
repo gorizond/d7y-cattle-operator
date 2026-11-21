@@ -81,14 +81,16 @@ static:
           tarballSHA256: 85925af702d79fc3a8b9d501a5267ddc9f81449ff9fe94841845eb98eda84593
     snapshotter:
       enabled: true
-      version: v0.16.0-p2p.2
-      # The patched fork publishes amd64 only. Do not add an arm64 entry with
-      # the amd64 asset: the installer fails clearly instead of mixing builds.
+      version: v0.16.0
       arches:
         - arch: amd64
-          asset: nydus-snapshotter-linux-amd64
-          url: https://github.com/gorizond/nydus-snapshotter/releases/download/v0.16.0-p2p.2/nydus-snapshotter-linux-amd64
-          sha256: 8f4f68f306ba391cd294cdcb273267732cb82f4ae466564013204198dd003b0b
+          asset: nydus-snapshotter-v0.16.0-linux-amd64.tar.gz
+          url: https://github.com/containerd/nydus-snapshotter/releases/download/v0.16.0/nydus-snapshotter-v0.16.0-linux-amd64.tar.gz
+          sha256: 24e4ceaae9c87e396e71e89bd3eb074f2cc6a5a14b1a2081c8d890481857a0e4
+        - arch: arm64
+          asset: nydus-snapshotter-v0.16.0-linux-arm64.tar.gz
+          url: https://github.com/containerd/nydus-snapshotter/releases/download/v0.16.0/nydus-snapshotter-v0.16.0-linux-arm64.tar.gz
+          sha256: 136e9c649a63c16b3d3322a15fcdf918e7dda9a4cbb043e2923451e87a8ba08f
     selector:
       enabled: true
 

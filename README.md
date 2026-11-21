@@ -500,16 +500,16 @@ yet:
 - Existing certificate/config files are preserved, but no P2P services are
   enabled. A later successful run (or an existing seed cluster) installs the
   full public-P2P configuration.
-- Nydus is installed on the host: the patched `containerd-nydus-grpc`
-  snapshotter release `v0.16.0-p2p.2` plus static-store `v2.4.5` `nydusd`,
+- Nydus is installed on the host: the upstream `containerd/nydus-snapshotter`
+  release `v0.16.0` plus static-store `v2.4.5` `nydusd`,
   `nydus-image`, and `nydus-overlayfs` assets. It is the global CRI
   snapshotter. `enable_oci_tar` is not set (it is not a nydus field). A daily
   host timer runs `nydus-updater` to refresh the static assets and restart the
   host unit only when something changed. The updater never uses P2P (a
   post-cluster node has no host dfdaemon socket); it tries the static store
   first and falls back to the pinned `dragonflyoss/nydus` GitHub release
-  tarball, verifying its SHA-256 before installing anything. The patched
-  snapshotter is updated by rerunning `p2p-install.sh`.
+  tarball, verifying its SHA-256 before installing anything. The snapshotter
+  is updated by rerunning `p2p-install.sh`.
 - Host `dfdaemon-bootstrap` is the cold-start P2P client. A boot helper starts
   it before RKE2 even if the switch disabled it at the previous shutdown; a
   30s host timer detects the node's in-cluster `client` pod via `crictl` and
@@ -538,9 +538,9 @@ rather than reusing an amd64 asset. Static-store and P2P URLs include the
 version and arch: `/client/<version>/<arch>/`,
 `/nydus/<version>/<arch>/nydus-static.tgz`, and
 `/snapshotter/<version>/<arch>/<asset>`. Legacy `/bin/` and
-`/nydus/<version>/` paths remain as fallbacks. The patched snapshotter fork
-publishes only the amd64 asset; arm64 reports the missing asset and takes the
-normal fail-open path instead of mixing an amd64 snapshotter.
+`/nydus/<version>/` paths remain as fallbacks. Upstream nydus-snapshotter
+`v0.16.0` publishes amd64 and arm64 tarballs; both carry a pinned tarball and
+`bin/containerd-nydus-grpc` binary SHA-256.
 
 Source order is P2P first, then the static-store mirror, then the pinned GitHub
 releases. The nydus tarball and snapshotter use per-arch SHA-256 pins (client
@@ -550,7 +550,7 @@ mismatch is discarded and never installed. The P2P data path is plaintext
 
 The operator can pin `CLIENT_VERSION`, `NYDUS_VERSION`, and
 `NYDUS_SNAPSHOTTER_VERSION` in the bootstrap payload; defaults are
-`v1.5.14`, `v2.4.5`, and `v0.16.0-p2p.2`. The p2p-static chart values must be
+`v1.5.14`, `v2.4.5`, and `v0.16.0`. The p2p-static chart values must be
 kept in sync manually when those versions change. `P2P_ASSETS=0` disables the
 early dfdaemon/P2P path completely; `auto` uses it only when the scheduler IPs
 and `dfget` are present. The variable is a plain
@@ -724,152 +724,43 @@ recommendation-only VPAs. The operator creates the shared `d7y-extras` HelmOp:
 
 ## Host nydus snapshotter
 
-`p2p-install.sh` installs the patched host snapshotter from
-`gorizond/nydus-snapshotter` release `v0.16.0-p2p.2` (asset
-`nydus-snapshotter-linux-amd64` plus its `.sha256`) to
-`/usr/local/bin/containerd-nydus-grpc`; the existing
-`nydus-snapshotter-bootstrap.service` runs it. The patched build reads
-containerd's `certs.d/<host>/hosts.toml` (RKE2 path
-`/var/lib/rancher/rke2/agent/etc/containerd/certs.d`, then
-`/etc/containerd/certs.d`), so a `docker.io` pull resolves through the same
-mirror and headers that containerd used for the pull. Without a certs.d
-override it keeps the previous `docker.io` -> `registry-1.docker.io` behavior.
+`p2p-install.sh` installs the upstream `containerd/nydus-snapshotter`
+`v0.16.0` tarball (`nydus-snapshotter-v0.16.0-linux-amd64.tar.gz` or
+`...-arm64.tar.gz`) to `/usr/local/bin/containerd-nydus-grpc`; the existing
+`nydus-snapshotter-bootstrap.service` runs it. The amd64 binary matches the
+already-running 236-node reference: SHA-256
+`9bd24308ef51139310bf58927a97eec49567d0154606bc5774ad69d2ee492ff0` (tarball
+SHA-256 `24e4ceaae9c87e396e71e89bd3eb074f2cc6a5a14b1a2081c8d890481857a0e4`).
+The arm64 binary is SHA-256
+`399f7a5b800bb6d05c63bbb340e7fa1820b84609b882589a6a95dd8796d03859` (tarball
+`136e9c649a63c16b3d3322a15fcdf918e7dda9a4cbb043e2923451e87a8ba08f`).
 
-The installer defaults are `NYDUS_SNAPSHOTTER_REPO=gorizond/nydus-snapshotter`,
-`NYDUS_SNAPSHOTTER_VERSION=v0.16.0-p2p.2`, and
-`NYDUS_SNAPSHOTTER_ASSET=nydus-snapshotter-linux-amd64`; override them for
-another fork release. The other nydus daemon assets (`nydusd`, `nydus-image`,
-`nydus-overlayfs`) stay pinned in the static store at `NYDUS_VERSION`
-(`v2.4.5`). A missing release asset falls back to the direct registry so RKE2
-can still start. There is no MITM proxy or local CA on the node.
+**Behavior change vs the old fork:** upstream v0.16.0 does not implicitly read
+containerd's `certs.d/<host>/hosts.toml`. It reads the optional
+`[remote.mirrors_config] dir` (a certs.d-style directory), and our installer
+writes `/etc/nydus/mirrors` only when `NYDUS_MIRROR_URL` is set. Without that
+setting, nydusd uses the origin registry (or the dfdaemon proxy in the
+non-mirror config). Private-registry auth can use the existing
+`[remote.auth] enable_kubeconfig_keychain`; there is no MITM proxy or local CA
+on the node. The `[experimental] enable_referrer_detect`/
+`enable_index_detect` options and `[remote.mirrors_config]` are valid upstream
+v0.16.0 options.
 
-The `containerd-mirror` chart is created only for seed clusters
-(`p2p.dragonfly.io/seed: "true"`) and writes only
-`certs.d/_default/hosts.toml` pointing at dfdaemon
-`127.0.0.1:4001`. There are no per-registry `docker.io`/`index.docker.io`
-files and no `X-Dragonfly-Registry` headers: dfdaemon 1.5.14 infers the
-upstream registry from containerd's `?ns=` and passes it to the proxy. The
-DaemonSet reconciles the `_default` file periodically and removes the legacy
-per-registry files written by older chart versions; non-seed clusters get no
-`_default` from the operator.
-
-## Cluster annotations
-
-The operator only acts on Clusters labeled `d7y-operator-cattle: "true"`.
-
-| Annotation | Value | Effect |
-|---|---|---|
-| `p2p.dragonfly.io/manager` | `"true"` | Manager role: manager and its database, KeyDB as external Redis |
-| `p2p.dragonfly.io/seed` | `"true"` | Seed role: scheduler, seed client/client (nydus runs on the host) |
-| `p2p.dragonfly.io/scheduler-cluster-id` | integer | Scheduler cluster ID; the seed role requires one, and when absent the operator auto-allocates it and writes both `scheduler-cluster-id` and the durable `scheduler-cluster-id-auto` marker. User-owned IDs are never overwritten. Machine bootstrap does not block on this annotation; before registration it injects the `SCHEDULER_CLUSTER_ID=0` placeholder. |
-| `p2p.dragonfly.io/scheduler-replicas` | integer | Scheduler replicas (default `1`) |
-| `p2p.dragonfly.io/seedclient-replicas` | integer | Seed client replicas (default `1`) |
-| `p2p.dragonfly.io/monitoring` | label selector, `true`, or `enabled` | Enable metrics and ServiceMonitors for manager/scheduler/seedClient/client when the selector matches the Cluster labels; empty, invalid, or non-matching disables. Requires the Prometheus Operator ServiceMonitor CRD. |
-| `p2p.dragonfly.io/p2p-data-tls` | `"true"` or `"enabled"` | Keep mTLS on the P2P data path (`seedClient`/`client` upload and scheduler `seedPeer`). Default/off uses plaintext P2P data; scheduler server, manager gRPC/API, and monitoring TLS are unaffected. |
-
-When monitoring is enabled, a Dragonfly component with `enable=false` is
-explicitly given `metrics.enable=false` and `metrics.serviceMonitor.enable=false`
-so the fork chart does not render an empty metrics Service for it. When
-monitoring is disabled, the operator leaves the chart metrics defaults
-untouched.
-
-P2P data TLS is disabled by default. The operator omits the upload server/client
-certificate paths from both data workloads and the scheduler `seedPeer.tls`
-block. Set `p2p.dragonfly.io/p2p-data-tls: "enabled"` (or `"true"`) to restore
-mTLS on the data path. Scheduler `server.tls`, manager gRPC/API TLS, and
-monitoring TLS are always retained. The bootstrap `p2p-install.sh` config keeps
-scheduler control TLS and leaves upload plaintext, matching the cluster default.
-
-### Cluster deletion finalizer
-
-Every gated Cluster (`d7y-operator-cattle: "true"`) gets the
-`p2p.dragonfly.io/finalizer` after the roles resolve. On deletion the operator
-runs the same idempotent cleanup path as a disabled gate: it removes the
-operator-managed HelmOps/Bundles and calls `deleteSchedulerPKI`, which removes
-`<cluster>-p2p-scheduler` from the Cluster namespace and the scheduler source
-Secret from the operator namespace. Only then is the finalizer removed and the
-Cluster allowed to disappear.
-
-The scheduler Secret is in the operator namespace while the Cluster is in the
-Cluster's namespace, so Kubernetes ownerRef garbage collection cannot remove
-it; the finalizer is the deletion hook. The operator does not add a
-cross-namespace ownerRef to the Secret. Cleanup deletes are NotFound-tolerant,
-so a retry after a partial pass is safe. If cleanup or the finalizer removal
-fails, the controller emits `FinalizerCleanupFailed`, keeps the finalizer, and
-returns the error so Wrangler requeues with backoff; it does not spin or drop
-the finalizer on a transient failure. Deletion does not write Cluster status.
-A failure to add the finalizer is logged and retried on the next reconcile
-without blocking the normal pass.
-
-## Manager root credentials
-
-The manager credentials Secret (`managerApiCredentialsSecret`) is the source of
-truth for both the operator's manager REST sign-in and the manager's initial
-root account. The operator ensures the Secret in its own namespace, then copies
-it into the shared manager HelmOp namespace so Fleet can deliver it into
-`dragonfly-system` on every manager-labeled Cluster.
-
-| Key | Meaning | Operator behaviour |
-|---|---|---|
-| `username` | Manager API/root login name | Preserved when non-empty; otherwise set to `root` |
-| `password` | Manager API/root password, 8–20 characters | Preserved when valid; otherwise a generated 16-character alphanumeric password |
-| `jwt-key` | Manager JWT signing key | Preserved when non-empty; otherwise 32 random bytes encoded as a 43-character base64url string |
-
-The manager chart has no admin-password value. The operator renders two
-`manager.extraEnvVars` entries as `secretKeyRef`s against the Secret:
-
-- `DRAGONFLY_INITIAL_ROOT_PASSWORD` → key `password`
-- `MANAGER_AUTH_JWT_KEY` → key `jwt-key`
-
-Only the Secret name and key names are written to Helm values; the values stay
-in the Kubernetes Secret and are never logged. The initial root user is created
-only while the manager users table is empty. The manager database is ephemeral,
-so after a database reset the env var re-seeds the same root password instead of
-the chart default. A pre-existing non-root `username` is preserved, but the
-initial-root env var only seeds the `root` account.
-
-## Manager API client and scheduler ID allocator
-
-`pkg/managerapi` is a stdlib-only client for the Dragonfly v2.5.4 manager REST
-API:
-
-- JWT `POST /api/v1/users/signin` with `name`/`password` (the Secret key remains
-  `username`); response `token` + `expire`; Bearer auth; one re-signin on 401.
-- List/create SchedulerCluster and SeedPeerCluster, GET by ID, and idempotent
-  `Ensure*` helpers.
-- Pagination follows the `Link` header `rel=next`; list responses may be `null`
-  (treated as empty) and `page`/`per_page`/exact `name` filters are supported.
-- SeedPeerCluster → SchedulerCluster linking uses the explicit
-  `PUT /api/v1/seed-peer-clusters/{seed_id}/scheduler-clusters/{scheduler_id}`
-  endpoint; the create bodies never send `id`, `seed_peer_cluster_id`, or
-  `scheduler_cluster_id`.
-- 404 → `ErrNotFound`, 409 → `ErrConflict` (re-read), 401/403 → auth failure,
-  422 → `ErrUnprocessable` (no retry); 5xx/timeouts surface as errors for the
-  controller's future backoff.
-- `block_list` is sent as an empty object (`{}`) because the contract expects an
-  object and the nested shape is not confirmed.
-
-`pkg/registry` allocates scheduler cluster IDs with a mutex and cache: ID 1 is
-reserved, automatic allocation starts at 2, manager IDs are skipped, an
-existing annotation is returned unchanged and never overwritten, and repeated
-or concurrent calls for the same cluster return the cached ID.
-
-The seed reconcile uses both packages: it ensures the SchedulerCluster and
-SeedPeerCluster by exact name, links them with the explicit PUT endpoint, and
-writes the server-assigned ID to `scheduler-cluster-id` plus the durable
-`scheduler-cluster-id-auto` marker in auto mode. If the marker equals
-`scheduler-cluster-id`, the ID is auto-owned and may be updated after manager DB
-loss; if the marker is absent or different, the ID is user-owned and is never
-overwritten (`d7y.io/IdMismatch` on server mismatch). This decision survives operator
-restarts. Registration failures set `d7y.io/RegistrationFailed` or `d7y.io/Retrying` and block
-control/data without blocking manager/KeyDB.
+The installer defaults are
+`NYDUS_SNAPSHOTTER_REPO=containerd/nydus-snapshotter`,
+`NYDUS_SNAPSHOTTER_VERSION=v0.16.0`, and the per-arch
+`nydus-snapshotter-v0.16.0-linux-<arch>.tar.gz` asset. Override them for
+another upstream release. The other nydus daemon assets (`nydusd`,
+`nydus-image`, `nydus-overlayfs`) stay pinned in the static store at
+`NYDUS_VERSION` (`v2.4.5`). A missing release asset falls back to the direct
+registry so RKE2 can still start.
 
 ## Bootstrap static chart
 
 `charts/p2p-static` serves the static `/bin` and `/nydus` asset volume through
 Nginx. The embedded host script is inlined into the machine bootstrap Secret;
-its payload is an env-file (no JSON, no `jq`, no python on the node). The script installs the host-only patched nydus
-snapshotter (`v0.16.0-p2p.2`) plus the static `v2.4.5` daemon assets
+its payload is an env-file (no JSON, no `jq`, no python on the node). The script installs the host-only upstream nydus
+snapshotter (`v0.16.0`) plus the static `v2.4.5` daemon assets
 (including `nydus-overlayfs`), writes the global nydus containerd drop-in
 `config-v3.toml.d/90-nydus.toml`, starts it before RKE2, and installs a daily
 host updater. There is no in-cluster nydus DaemonSet or HelmOp. The injector
@@ -933,14 +824,14 @@ that predates those fields would affect REST only.
 
 Nydus runs only on the host, installed by `p2p-install.sh`; the operator no
 longer creates a nydus chart, DaemonSet, HelmOp, RuntimeClass, or VPA. The
-script installs the patched `v0.16.0-p2p.2` snapshotter plus static `v2.4.5`
+script installs the upstream `v0.16.0` snapshotter plus static `v2.4.5`
 daemon assets (including `nydus-overlayfs`), writes `/etc/nydus/config.toml`
 (multiple/fusedev, `[experimental]` `enable_referrer_detect`/
 `enable_index_detect`, no tarfs), the registry-backend `nydusd-config.json`,
 and the global containerd drop-in. It starts the host unit before RKE2 and runs
 a daily updater for the static binaries. Do not add
 `enable_oci_tar` (it is not a nydus field). Pilot must verify the drop-in merge
-with `containerd config dump`, the v0.16.0-p2p.2 unit flags, and the host restart
+with `containerd config dump`, the upstream v0.16.0 unit flags, and the host restart
 procedure. Tarfs is intentionally disabled; enabling it requires kernel >= 6.4
 and a matching nydusd. Ordinary-OCI Zran is not claimed.
 

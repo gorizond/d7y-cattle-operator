@@ -40,8 +40,13 @@ grep -q 'dragonfly-client-v1.5.14-aarch64-unknown-linux-gnu.tar.gz' "$tmp/p2p-st
 grep -q '370ff792a1c6957a7244b770d6cd12792668e326b2282b3017fea2cbfa3510af' "$tmp/p2p-static.yaml" || fail "p2p-static arm64 client checksum is not asserted"
 grep -q 'nydus-static-v2.4.5-linux-arm64.tgz' "$tmp/p2p-static.yaml" || fail "p2p-static is missing the arm64 nydus tarball"
 grep -q '85925af702d79fc3a8b9d501a5267ddc9f81449ff9fe94841845eb98eda84593' "$tmp/p2p-static.yaml" || fail "p2p-static arm64 nydus checksum is not asserted"
-grep -q 'nydus-snapshotter-linux-amd64' "$tmp/p2p-static.yaml" || fail "p2p-static is missing the snapshotter mirror"
-grep -q '8f4f68f306ba391cd294cdcb273267732cb82f4ae466564013204198dd003b0b' "$tmp/p2p-static.yaml" || fail "p2p-static snapshotter checksum is not asserted"
+grep -q 'nydus-snapshotter-v0.16.0-linux-amd64.tar.gz' "$tmp/p2p-static.yaml" || fail "p2p-static is missing the amd64 snapshotter mirror"
+grep -q '24e4ceaae9c87e396e71e89bd3eb074f2cc6a5a14b1a2081c8d890481857a0e4' "$tmp/p2p-static.yaml" || fail "p2p-static amd64 snapshotter checksum is not asserted"
+grep -q 'nydus-snapshotter-v0.16.0-linux-arm64.tar.gz' "$tmp/p2p-static.yaml" || fail "p2p-static is missing the arm64 snapshotter mirror"
+grep -q '136e9c649a63c16b3d3322a15fcdf918e7dda9a4cbb043e2923451e87a8ba08f' "$tmp/p2p-static.yaml" || fail "p2p-static arm64 snapshotter checksum is not asserted"
+if grep -q 'p2p.2' "$tmp/p2p-static.yaml"; then
+  fail "p2p-static still references p2p.2"
+fi
 grep -q 'client|v1.5.14|arm64|' "$tmp/p2p-static.yaml" || fail "p2p-static populate plan is missing the arm64 client layout"
 grep -q 'nydus|v2.4.5|arm64|' "$tmp/p2p-static.yaml" || fail "p2p-static populate plan is missing the arm64 nydus layout"
 grep -q 'location /nydus/' "$tmp/p2p-static.yaml" || fail "p2p-static is missing the versioned nydus asset route"
@@ -86,19 +91,22 @@ tar -czf "$tmp/cli-amd.tar.gz" -C "$tmp/cli-amd" dragonfly-client-v1.5.14-x86_64
 tar -czf "$tmp/cli-arm.tar.gz" -C "$tmp/cli-arm" dragonfly-client-v1.5.14-aarch64-unknown-linux-gnu
 tar -czf "$tmp/nyd-amd.tgz" -C "$tmp/nyd-amd" nydus-static
 tar -czf "$tmp/nyd-arm.tgz" -C "$tmp/nyd-arm" nydus-static
-printf '#!/bin/sh\nexit 0\n' > "$tmp/snapshotter"
+printf '#!/bin/sh\nexit 0\n' > "$tmp/nydus-snapshotter-v0.16.0-linux-amd64.tar.gz"
+printf '#!/bin/sh\nexit 0\n' > "$tmp/nydus-snapshotter-v0.16.0-linux-arm64.tar.gz"
 sha_cli_amd="$(sha256sum "$tmp/cli-amd.tar.gz" | cut -d' ' -f1)"
 sha_cli_arm="$(sha256sum "$tmp/cli-arm.tar.gz" | cut -d' ' -f1)"
 sha_nyd_amd="$(sha256sum "$tmp/nyd-amd.tgz" | cut -d' ' -f1)"
 sha_nyd_arm="$(sha256sum "$tmp/nyd-arm.tgz" | cut -d' ' -f1)"
-sha_snap="$(sha256sum "$tmp/snapshotter" | cut -d' ' -f1)"
+sha_snap_amd="$(sha256sum "$tmp/nydus-snapshotter-v0.16.0-linux-amd64.tar.gz" | cut -d' ' -f1)"
+sha_snap_arm="$(sha256sum "$tmp/nydus-snapshotter-v0.16.0-linux-arm64.tar.gz" | cut -d' ' -f1)"
 cat > "$populate_plan" <<EOF
 client|v1.5.14|amd64|https://example.test/cli-amd.tar.gz|${sha_cli_amd}|dragonfly-client-v1.5.14-x86_64-unknown-linux-gnu
 client|v1.5.14|arm64|https://example.test/cli-arm.tar.gz|${sha_cli_arm}|dragonfly-client-v1.5.14-aarch64-unknown-linux-gnu
 compat-client|v1.5.14
 nydus|v2.4.5|amd64|https://example.test/nyd-amd.tgz|${sha_nyd_amd}|nydus-static
 nydus|v2.4.5|arm64|https://example.test/nyd-arm.tgz|${sha_nyd_arm}|nydus-static
-snapshotter|v0.16.0-p2p.2|amd64|https://example.test/snapshotter|${sha_snap}|nydus-snapshotter-linux-amd64
+snapshotter|v0.16.0|amd64|https://example.test/nydus-snapshotter-v0.16.0-linux-amd64.tar.gz|${sha_snap_amd}|nydus-snapshotter-v0.16.0-linux-amd64.tar.gz
+snapshotter|v0.16.0|arm64|https://example.test/nydus-snapshotter-v0.16.0-linux-arm64.tar.gz|${sha_snap_arm}|nydus-snapshotter-v0.16.0-linux-arm64.tar.gz
 EOF
 cat > "$populate_bin/curl" <<'POPULATECURL'
 #!/bin/sh
@@ -116,7 +124,8 @@ case "$url" in
   *cli-arm.tar.gz) cp "${POPULATE_CLI_ARM:?}" "$out" ;;
   *nyd-amd.tgz) cp "${POPULATE_NYD_AMD:?}" "$out" ;;
   *nyd-arm.tgz) cp "${POPULATE_NYD_ARM:?}" "$out" ;;
-  *snapshotter) cp "${POPULATE_SNAPSHOTTER:?}" "$out" ;;
+  *nydus-snapshotter-v0.16.0-linux-amd64.tar.gz) cp "${POPULATE_SNAPSHOTTER_AMD:?}" "$out" ;;
+  *nydus-snapshotter-v0.16.0-linux-arm64.tar.gz) cp "${POPULATE_SNAPSHOTTER_ARM:?}" "$out" ;;
   *) exit 22 ;;
 esac
 POPULATECURL
@@ -126,7 +135,8 @@ STATIC_DIR="$static_dir" SELECTOR_SRC="$chart/files/nydus-fs-select.sh" \
   NYDUS_BINARIES="nydusd nydus-image nydus-overlayfs" \
   POPULATE_CLI_AMD="$tmp/cli-amd.tar.gz" POPULATE_CLI_ARM="$tmp/cli-arm.tar.gz" \
   POPULATE_NYD_AMD="$tmp/nyd-amd.tgz" POPULATE_NYD_ARM="$tmp/nyd-arm.tgz" \
-  POPULATE_SNAPSHOTTER="$tmp/snapshotter" \
+  POPULATE_SNAPSHOTTER_AMD="$tmp/nydus-snapshotter-v0.16.0-linux-amd64.tar.gz" \
+  POPULATE_SNAPSHOTTER_ARM="$tmp/nydus-snapshotter-v0.16.0-linux-arm64.tar.gz" \
   PATH="$populate_bin:$PATH" \
   sh "$populate" >"$tmp/populate.log" 2>&1
 for arch in amd64 arm64; do
@@ -138,8 +148,9 @@ for arch in amd64 arm64; do
   done
   [ -s "$static_dir/nydus/v2.4.5/$arch/nydus-static.tgz" ] || fail "populate-static did not mirror nydus/v2.4.5/$arch/nydus-static.tgz"
 done
-[ -s "$static_dir/snapshotter/v0.16.0-p2p.2/amd64/nydus-snapshotter-linux-amd64" ] || fail "populate-static did not mirror the amd64 snapshotter"
-for binary in dfget nydusd nydus-image nydus-overlayfs nydus-fs-select nydus-snapshotter-linux-amd64; do
+[ -s "$static_dir/snapshotter/v0.16.0/amd64/nydus-snapshotter-v0.16.0-linux-amd64.tar.gz" ] || fail "populate-static did not mirror the amd64 snapshotter"
+[ -s "$static_dir/snapshotter/v0.16.0/arm64/nydus-snapshotter-v0.16.0-linux-arm64.tar.gz" ] || fail "populate-static did not mirror the arm64 snapshotter"
+for binary in dfget nydusd nydus-image nydus-overlayfs nydus-fs-select nydus-snapshotter-v0.16.0-linux-amd64.tar.gz; do
   [ -s "$static_dir/bin/$binary" ] || fail "populate-static did not create the /bin compatibility $binary"
 done
 [ -s "$static_dir/nydus/v2.4.5/nydusd" ] || fail "populate-static did not create the legacy nydus/v2.4.5/nydusd"
@@ -156,11 +167,13 @@ STATIC_DIR="$static_dir_arm" SELECTOR_SRC="$chart/files/nydus-fs-select.sh" \
   NYDUS_BINARIES="nydusd nydus-image nydus-overlayfs" \
   POPULATE_CLI_AMD="$tmp/cli-amd.tar.gz" POPULATE_CLI_ARM="$tmp/cli-arm.tar.gz" \
   POPULATE_NYD_AMD="$tmp/nyd-amd.tgz" POPULATE_NYD_ARM="$tmp/nyd-arm.tgz" \
-  POPULATE_SNAPSHOTTER="$tmp/snapshotter" \
+  POPULATE_SNAPSHOTTER_AMD="$tmp/nydus-snapshotter-v0.16.0-linux-amd64.tar.gz" \
+  POPULATE_SNAPSHOTTER_ARM="$tmp/nydus-snapshotter-v0.16.0-linux-arm64.tar.gz" \
   PATH="$populate_bin:$PATH" \
   sh "$populate" >"$tmp/populate-arm.log" 2>&1
 [ "$(cat "$static_dir_arm/bin/dfdaemon")" = "arm64-dfdaemon" ] || fail "populate-static did not fill /bin from the arm64 layout"
 [ "$(cat "$static_dir_arm/bin/nydusd")" = "arm64-nydusd" ] || fail "populate-static did not fill /bin nydusd from the arm64 layout"
 [ -s "$static_dir_arm/client/v1.5.14/arm64/dfget" ] || fail "populate-static did not create the arm64 client layout"
+[ -s "$static_dir_arm/bin/nydus-snapshotter-v0.16.0-linux-arm64.tar.gz" ] || fail "populate-static did not fill the arm64 /bin snapshotter"
 
 echo "p2p-static render checks passed"

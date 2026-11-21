@@ -168,10 +168,11 @@ root = "/var/lib/containerd-nydus"
 address = "/run/containerd-nydus/containerd-nydus-grpc.sock"
 daemon_mode = "multiple"
 
-# The patched snapshotter reads containerd's certs.d directly
-# (/var/lib/rancher/rke2/agent/etc/containerd/certs.d, then
-# /etc/containerd/certs.d), so it honors the same hosts.toml mirrors and
-# headers that containerd used for the pull. No local MITM proxy or CA is installed.
+# Upstream v0.16.0 reads mirrors only from its optional mirrors-config section
+# (configured below); it does not implicitly consume containerd's certs.d.
+# The installer writes /etc/nydus/mirrors when NYDUS_MIRROR_URL is set,
+# otherwise nydusd uses the origin registry (or the dfdaemon proxy in the
+# non-mirror config). No local MITM proxy or CA is installed.
 [daemon]
   nydusd_config = "/etc/nydus/nydusd-config.json"
   nydusd_path = "/usr/local/bin/nydusd"

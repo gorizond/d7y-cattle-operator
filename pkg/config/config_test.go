@@ -245,7 +245,7 @@ func TestLoadEnvOverride(t *testing.T) {
 	t.Setenv("NGINX_STATIC_URL", "http://static.env.example.com")
 	t.Setenv("CLIENT_VERSION", "v1.5.15")
 	t.Setenv("NYDUS_VERSION", "v2.4.6")
-	t.Setenv("NYDUS_SNAPSHOTTER_VERSION", "v0.16.0-p2p.3")
+	t.Setenv("NYDUS_SNAPSHOTTER_VERSION", "v0.16.1")
 	t.Setenv("KUBECONFIG", "/tmp/kubeconfig")
 
 	cfg, err := Load(nil)
@@ -326,7 +326,7 @@ func TestLoadEnvOverride(t *testing.T) {
 	if cfg.Namespace != "env-namespace" {
 		t.Errorf("Namespace = %q", cfg.Namespace)
 	}
-	if cfg.ClientVersion != "v1.5.15" || cfg.NydusVersion != "v2.4.6" || cfg.SnapshotterVersion != "v0.16.0-p2p.3" {
+	if cfg.ClientVersion != "v1.5.15" || cfg.NydusVersion != "v2.4.6" || cfg.SnapshotterVersion != "v0.16.1" {
 		t.Errorf("versions = %q/%q/%q", cfg.ClientVersion, cfg.NydusVersion, cfg.SnapshotterVersion)
 	}
 

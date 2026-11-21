@@ -33,7 +33,7 @@ const (
 	DefaultHostSyncChartVersion          = "0.1.1"
 	DefaultClientVersion                 = "v1.5.14"
 	DefaultNydusVersion                  = "v2.4.5"
-	DefaultSnapshotterVersion            = "v0.16.0-p2p.2"
+	DefaultSnapshotterVersion            = "v0.16.0"
 	DefaultExtrasIngressController       = "nginx"
 	DefaultExtrasIngressClassName        = ""
 	DefaultExtrasIngressGRPCEnabled      = true
@@ -133,7 +133,7 @@ func Load(args []string) (*Config, error) {
 	fs.StringVar(&cfg.HostSyncChartVersion, "host-sync-chart-version", envOr("HOST_SYNC_CHART_VERSION", DefaultHostSyncChartVersion), "p2p-host-sync chart version")
 	fs.StringVar(&cfg.ClientVersion, "client-version", envOr("CLIENT_VERSION", DefaultClientVersion), "Dragonfly client release used by the host bootstrap")
 	fs.StringVar(&cfg.NydusVersion, "nydus-version", envOr("NYDUS_VERSION", DefaultNydusVersion), "nydus static release used by the host bootstrap")
-	fs.StringVar(&cfg.SnapshotterVersion, "nydus-snapshotter-version", envOr("NYDUS_SNAPSHOTTER_VERSION", DefaultSnapshotterVersion), "patched nydus-snapshotter release used by the host bootstrap")
+	fs.StringVar(&cfg.SnapshotterVersion, "nydus-snapshotter-version", envOr("NYDUS_SNAPSHOTTER_VERSION", DefaultSnapshotterVersion), "upstream nydus-snapshotter release used by the host bootstrap")
 	fs.StringVar(&cfg.ExtrasIngressController, "extras-ingress-controller", envOr("EXTRAS_INGRESS_CONTROLLER", DefaultExtrasIngressController), "extras Ingress controller: nginx or traefik")
 	fs.StringVar(&cfg.ExtrasIngressClassName, "extras-ingress-class-name", envOr("EXTRAS_INGRESS_CLASS_NAME", DefaultExtrasIngressClassName), "extras Ingress class name (empty uses the cluster default)")
 	fs.BoolVar(&cfg.ExtrasIngressGRPCEnabled, "extras-ingress-grpc-enabled", defaultGRPCEnabled, "render the extras gRPC Ingress")

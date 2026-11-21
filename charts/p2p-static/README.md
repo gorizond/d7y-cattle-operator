@@ -37,14 +37,12 @@ overridable under `static.populate`; `static.populate.enabled=false` restores
 the old externally-populated behavior.
 
 There is no PVC. The chart uses `emptyDir`, so everything is re-downloaded
-after pod recreation. Defaults include amd64 and arm64 for client and nydus and
-amd64 for the snapshotter; that is roughly 550 MiB after population (the /bin compatibility copies add ~150 MiB) plus
-transient download/extract space during init. On a slow first start this means
-fetching roughly 185 MiB before nginx becomes ready. Narrow the version/arch
-lists or set `static.sizeLimit` (for example `1Gi`) if that cost is
-unacceptable. `static.populate.snapshotter.arches` intentionally has no arm64
-entry: the patched fork publishes amd64 only, and the host installer fails
-clearly rather than mixing an amd64 snapshotter into arm64.
+after pod recreation. Defaults include amd64 and arm64 for client, nydus, and
+the upstream nydus-snapshotter `v0.16.0`; that is roughly 550–560 MiB after
+population (the `/bin` compatibility copies add ~150 MiB) plus transient
+download/extract space during init. On a slow first start this means fetching
+roughly 205 MiB before nginx becomes ready. Narrow the version/arch lists or
+set `static.sizeLimit` (for example `1Gi`) if that cost is unacceptable.
 
 ## Manager-host route
 
@@ -80,9 +78,10 @@ SHA-256 verified before extraction. `/nydus/<version>/` is preferred by the
 host updater and the installer's tarball fallback; `/bin/` is the legacy
 fallback and carries `dfget` for the P2P asset path. An existing
 `/bin/dfdaemon` or `/bin/dfget` is preserved; the chart only fills missing
-files from the GNU client tarball. The patched nydus-snapshotter release is not served by this chart; the
-embedded installer fetches it through P2P, then the static store, then its
-GitHub release, and verifies its `.sha256` asset. The embedded operator script
+files from the GNU client tarball. The upstream nydus-snapshotter `v0.16.0` release tarballs are mirrored under
+`/snapshotter/v0.16.0/<arch>/`; the embedded installer fetches the tarball
+through P2P, then the static store, then the upstream GitHub release, and
+verifies both the tarball and the extracted `bin/containerd-nydus-grpc`. The embedded operator script
 checks executability of host binaries, not signatures, and `nydus-fs-select`
 is shipped from the operator asset and checked against it by
 `scripts/test-p2p-static.sh`. The chart's populate test also asserts that
