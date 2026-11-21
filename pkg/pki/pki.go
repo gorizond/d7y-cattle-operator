@@ -453,6 +453,16 @@ func Fingerprint(certPEM []byte) string {
 	return hex.EncodeToString(sum[:])
 }
 
+// ShortFingerprint returns a label-safe fingerprint (32 hex bytes, ≤63
+// characters) for Kubernetes label values.
+func ShortFingerprint(certPEM []byte) string {
+	fingerprint := Fingerprint(certPEM)
+	if len(fingerprint) > 32 {
+		return fingerprint[:32]
+	}
+	return fingerprint
+}
+
 // CertTrustedByBundle reports whether the leaf chains to any CA certificate
 // present in the supplied trust bundle.
 func CertTrustedByBundle(certPEM, bundlePEM []byte) bool {

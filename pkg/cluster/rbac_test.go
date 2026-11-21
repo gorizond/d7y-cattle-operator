@@ -70,7 +70,7 @@ func TestOperatorRBACMachineBootstrapAccess(t *testing.T) {
 	text := string(data)
 	for _, want := range []string{
 		`resources: ["secrets"]`,
-		`verbs: ["get", "list", "watch", "create", "update", "patch"]`,
+		`verbs: ["get", "list", "watch", "create", "update", "patch", "delete"]`,
 		`resources: ["machines"]`,
 		`verbs: ["get", "list", "watch"]`,
 	} {
