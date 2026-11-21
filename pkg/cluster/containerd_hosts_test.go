@@ -71,6 +71,7 @@ func TestReconcileCreatesContainerdHostsForK3s(t *testing.T) {
 	controller, store, _ := newTestController(t)
 	cluster := testSeedCluster("42")
 	cluster.Spec.KubernetesVersion = "v1.35.9+k3s1"
+	cluster.Annotations[AnnotationSchedulerIPs] = "203.0.113.10"
 	clusterStore := controller.clusters.(*fakeClusterStore)
 	clusterStore.set(cluster)
 
@@ -167,6 +168,7 @@ func TestReconcileUsesRKEPathsAndPreservesUserEntries(t *testing.T) {
 	controller, _, _ := newTestController(t)
 	cluster := testSeedCluster("42")
 	cluster.Spec.KubernetesVersion = "v1.35.9+rke2r1"
+	cluster.Annotations[AnnotationSchedulerIPs] = "203.0.113.10"
 	cluster.Spec.RKEConfig = &provv1.RKEConfig{}
 	cluster.Spec.RKEConfig.MachineSelectorFiles = []rkev1.RKEProvisioningFiles{{
 		MachineLabelSelector: &metav1.LabelSelector{MatchLabels: map[string]string{"role": "user"}},
@@ -239,7 +241,11 @@ func TestContainerdCertsDirDefaultsToK3s(t *testing.T) {
 
 func TestContainerdHostsConfigMapUpdatesOnPortChange(t *testing.T) {
 	controller, _, _ := newTestController(t)
-	cluster := testSeedCluster("42")
+	cluster := &provv1.Cluster{ObjectMeta: metav1.ObjectMeta{
+		Name:      "c1",
+		Namespace: "fleet-default",
+		Labels:    map[string]string{LabelEnabled: "true"},
+	}}
 	clusterStore := controller.clusters.(*fakeClusterStore)
 	clusterStore.set(cluster)
 
@@ -261,8 +267,12 @@ func TestContainerdHostsConfigMapUpdatesOnPortChange(t *testing.T) {
 	if cmStore.updates != 1 {
 		t.Errorf("ConfigMap updates = %d, want 1", cmStore.updates)
 	}
-	if got := len(clusterStore.get().Spec.RKEConfig.MachineSelectorFiles); got != 1 {
-		t.Errorf("machineSelectorFiles = %d, want 1", got)
+	gotFiles := 0
+	if cfg := clusterStore.get().Spec.RKEConfig; cfg != nil {
+		gotFiles = len(cfg.MachineSelectorFiles)
+	}
+	if gotFiles != 0 {
+		t.Errorf("machineSelectorFiles = %d, want 0 without scheduler IPs", gotFiles)
 	}
 }
 
@@ -271,9 +281,10 @@ func TestContainerdHostsClusterPatchFailureSetsCondition(t *testing.T) {
 	clusterStore := controller.clusters.(*fakeClusterStore)
 	clusterStore.updateErr = errors.New("cluster update denied")
 	cluster := &provv1.Cluster{ObjectMeta: metav1.ObjectMeta{
-		Name:      "c1",
-		Namespace: "fleet-default",
-		Labels:    map[string]string{LabelEnabled: "true"},
+		Name:        "c1",
+		Namespace:   "fleet-default",
+		Labels:      map[string]string{LabelEnabled: "true"},
+		Annotations: map[string]string{AnnotationSchedulerIPs: "203.0.113.10"},
 	}}
 	clusterStore.set(cluster)
 
@@ -292,4 +303,77 @@ func TestContainerdHostsClusterPatchFailureSetsCondition(t *testing.T) {
 	if !found {
 		t.Errorf("events = %+v, want ContainerdHostsFailed", events.events)
 	}
+}
+
+func TestContainerdHostsEntryIsGatedBySchedulerIPs(t *testing.T) {
+	controller, _, _ := newTestController(t)
+	cluster := &provv1.Cluster{ObjectMeta: metav1.ObjectMeta{
+		Name:      "c1",
+		Namespace: "fleet-default",
+		Labels:    map[string]string{LabelEnabled: "true"},
+	}, Spec: provv1.ClusterSpec{KubernetesVersion: "v1.35.9+k3s1"}}
+	clusterStore := controller.clusters.(*fakeClusterStore)
+	clusterStore.set(cluster)
+
+	if _, err := controller.reconcile("", cluster); err != nil {
+		t.Fatalf("empty annotation reconcile() error = %v", err)
+	}
+	gotFiles := 0
+	if cfg := clusterStore.get().Spec.RKEConfig; cfg != nil {
+		gotFiles = len(cfg.MachineSelectorFiles)
+	}
+	if gotFiles != 0 {
+		t.Fatalf("empty scheduler IPs machineSelectorFiles = %d, want 0", gotFiles)
+	}
+
+	stored := clusterStore.get()
+	if stored.Annotations == nil {
+		stored.Annotations = map[string]string{}
+	}
+	stored.Annotations[AnnotationSchedulerIPs] = "203.0.113.10"
+	if _, err := controller.reconcile("", stored); err != nil {
+		t.Fatalf("non-empty annotation reconcile() error = %v", err)
+	}
+	entry := operatorSelectorEntry(t, clusterStore.get(), containerdHostsName(cluster.Name))
+	for _, key := range []string{"_default", "docker.io", "index.docker.io"} {
+		if !containsItem(entry, key) {
+			t.Errorf("non-empty scheduler IPs missing %q", key)
+		}
+	}
+
+	stored = clusterStore.get()
+	delete(stored.Annotations, AnnotationSchedulerIPs)
+	if _, err := controller.reconcile("", stored); err != nil {
+		t.Fatalf("removed annotation reconcile() error = %v", err)
+	}
+	if got := len(clusterStore.get().Spec.RKEConfig.MachineSelectorFiles); got != 0 {
+		t.Fatalf("removed scheduler IPs machineSelectorFiles = %d, want 0", got)
+	}
+}
+
+func operatorSelectorEntry(t *testing.T, cluster *provv1.Cluster, name string) rkev1.RKEProvisioningFiles {
+	t.Helper()
+	if cluster.Spec.RKEConfig == nil {
+		t.Fatal("rkeConfig is nil")
+	}
+	for _, entry := range cluster.Spec.RKEConfig.MachineSelectorFiles {
+		for _, source := range entry.FileSources {
+			if source.ConfigMap.Name == name {
+				return entry
+			}
+		}
+	}
+	t.Fatalf("machineSelectorFiles has no entry for %q", name)
+	return rkev1.RKEProvisioningFiles{}
+}
+
+func containsItem(entry rkev1.RKEProvisioningFiles, key string) bool {
+	for _, source := range entry.FileSources {
+		for _, item := range source.ConfigMap.Items {
+			if item.Key == key {
+				return true
+			}
+		}
+	}
+	return false
 }

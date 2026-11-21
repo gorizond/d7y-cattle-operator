@@ -193,7 +193,7 @@ func TestEnsureMTLSCertificateDNSFailureBootstrapsAndAppliesHelmOps(t *testing.T
 	if _, err := controller.reconcile("", cluster); err != nil {
 		t.Fatalf("resolved reconcile() error = %v", err)
 	}
-	if got := clusterStore.annotation(helmop.AnnotationSchedulerPublicIP); got != "203.0.113.10" {
+	if got := clusterStore.annotation(AnnotationSchedulerIPs); got != "203.0.113.10" {
 		t.Errorf("scheduler public IP annotation = %q, want the resolved address", got)
 	}
 	rotated := certPEM(t, controller)

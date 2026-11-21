@@ -1,0 +1,150 @@
+package cluster
+
+import (
+	"context"
+	"fmt"
+	"net"
+	"sort"
+	"strings"
+	"time"
+
+	provv1 "github.com/rancher/rancher/pkg/apis/provisioning.cattle.io/v1"
+	corev1 "k8s.io/api/core/v1"
+	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
+	"k8s.io/apimachinery/pkg/labels"
+	"k8s.io/apimachinery/pkg/watch"
+
+	"github.com/gorizond/d7y-cattle-operator/pkg/pki"
+)
+
+const (
+	AnnotationSchedulerIPs = "p2p.dragonfly.io/scheduler-ips"
+	// legacySchedulerPublicIP is removed from gated Clusters during reconcile.
+	legacySchedulerPublicIP = "p2p.dragonfly.io/scheduler-public-ip"
+)
+
+type clusterCache interface {
+	List(namespace string, selector labels.Selector) ([]*provv1.Cluster, error)
+}
+
+type helmOpWatcher interface {
+	Watch(ctx context.Context, namespace string, opts metav1.ListOptions) (watch.Interface, error)
+}
+
+// ensureSchedulerIPs computes scheduler-ips for a managed cluster. A seed
+// cluster publishes its own currently resolved scheduler IPs; other gated
+// clusters aggregate the scheduler-ips of other seed clusters. The legacy
+// scheduler-public-ip annotation is removed during the same reconcile.
+func (c *Controller) ensureSchedulerIPs(cluster *provv1.Cluster, roles Roles, resolvedIPs []string) (*provv1.Cluster, error) {
+	if cluster == nil || c.clusters == nil {
+		return nil, nil
+	}
+	seen := map[string]bool{}
+	var ips []string
+	if roles.Seed {
+		for _, raw := range resolvedIPs {
+			addPublicIPv4(&ips, seen, raw)
+		}
+	} else {
+		if c.clusterCache == nil {
+			return nil, nil
+		}
+		clusters, err := c.clusterCache.List(cluster.Namespace, labels.Everything())
+		if err != nil {
+			return nil, fmt.Errorf("list managed clusters: %w", err)
+		}
+		for _, candidate := range clusters {
+			if candidate == nil || candidate.Name == cluster.Name {
+				continue
+			}
+			if candidate.Labels[LabelEnabled] != "true" || candidate.Annotations[AnnotationSeed] != "true" {
+				continue
+			}
+			for _, raw := range strings.Split(candidate.Annotations[AnnotationSchedulerIPs], ",") {
+				addPublicIPv4(&ips, seen, raw)
+			}
+		}
+	}
+	sort.Strings(ips)
+	desired := strings.Join(ips, ",")
+	current := strings.TrimSpace(cluster.Annotations[AnnotationSchedulerIPs])
+	_, hasLegacy := cluster.Annotations[legacySchedulerPublicIP]
+	if desired == current && !hasLegacy {
+		return nil, nil
+	}
+
+	updated := cluster.DeepCopy()
+	delete(updated.Annotations, legacySchedulerPublicIP)
+	if desired == "" {
+		delete(updated.Annotations, AnnotationSchedulerIPs)
+	} else {
+		if updated.Annotations == nil {
+			updated.Annotations = map[string]string{}
+		}
+		updated.Annotations[AnnotationSchedulerIPs] = desired
+	}
+	result, err := c.clusters.Update(updated)
+	if err != nil {
+		return nil, fmt.Errorf("update scheduler IPs annotation: %w", err)
+	}
+	message := "scheduler IPs updated: " + desired
+	if desired == "" {
+		message = "scheduler IPs removed"
+	}
+	c.event(cluster, corev1.EventTypeNormal, "SchedulerIPsUpdated", message)
+	return result, nil
+}
+
+func addPublicIPv4(ips *[]string, seen map[string]bool, raw string) {
+	ip := net.ParseIP(strings.TrimSpace(raw))
+	if ip == nil || ip.To4() == nil || !pki.IsPublicIP(ip) {
+		return
+	}
+	value := ip.String()
+	if seen[value] {
+		return
+	}
+	seen[value] = true
+	*ips = append(*ips, value)
+}
+
+func (c *Controller) enqueueGatedClusters() {
+	if c.clusterCache == nil || c.clusters == nil {
+		return
+	}
+	clusters, err := c.clusterCache.List(metav1.NamespaceAll, labels.Everything())
+	if err != nil {
+		return
+	}
+	for _, cluster := range clusters {
+		if cluster != nil && cluster.Labels[LabelEnabled] == "true" {
+			c.clusters.Enqueue(cluster.Namespace, cluster.Name)
+		}
+	}
+}
+
+func (c *Controller) watchHelmOps(watcher helmOpWatcher) {
+	for {
+		if c.ctx.Err() != nil {
+			return
+		}
+		watch, err := watcher.Watch(c.ctx, metav1.NamespaceAll, metav1.ListOptions{})
+		if err != nil {
+			select {
+			case <-c.ctx.Done():
+				return
+			case <-time.After(5 * time.Second):
+			}
+			continue
+		}
+		for range watch.ResultChan() {
+			c.enqueueGatedClusters()
+		}
+		watch.Stop()
+		select {
+		case <-c.ctx.Done():
+			return
+		case <-time.After(time.Second):
+		}
+	}
+}

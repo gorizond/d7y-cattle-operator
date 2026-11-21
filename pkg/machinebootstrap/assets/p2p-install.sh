@@ -9,12 +9,19 @@ if [ "$P2P_ROOT" = "/" ]; then
 fi
 ROOT="${P2P_ROOT%/}"
 
-# The same installer supports RKE2 and k3s. Keep the RKE2 defaults when the
-# distro marker is absent so pre-RKE2 nodes behave exactly as before.
-DISTRO="rke2"
-if [ -d "${ROOT}/var/lib/rancher/k3s" ]; then
-  DISTRO="k3s"
+# The operator supplies P2P_DISTRO from the provisioning Cluster version; the
+# filesystem check is the fallback for manual runs on an already-installed node.
+DISTRO="${P2P_DISTRO:-}"
+if [ -z "$DISTRO" ]; then
+  DISTRO="rke2"
+  if [ -d "${ROOT}/var/lib/rancher/k3s" ]; then
+    DISTRO="k3s"
+  fi
 fi
+case "$DISTRO" in
+  k3s|rke2) ;;
+  *) DISTRO="k3s" ;;
+esac
 DISTRO_SERVICE_TARGETS="rke2-server.service rke2-agent.service"
 if [ "$DISTRO" = "k3s" ]; then
   DISTRO_SERVICE_TARGETS="k3s.service"
@@ -339,6 +346,10 @@ TOML
 }
 
 fallback_direct() {
+  if [ -z "${SCHEDULER_IPS:-}" ]; then
+    log "P2P unavailable: $*; scheduler IPs are empty, keeping the nydus containerd config"
+    exit 1
+  fi
   log "P2P unavailable: $*; using direct registry so RKE2 can start"
   write_direct_template
   if [ "$REAL_ROOT" = "1" ] && [ "${SKIP_SYSTEMD:-0}" != "1" ] && command -v systemctl >/dev/null 2>&1; then
@@ -364,7 +375,7 @@ tcp_check() {
 }
 
 preflight() {
-  local manager_host manager_port
+  local manager_host manager_port ip scheduler_ok
   if [ "${SKIP_PREFLIGHT:-0}" = "1" ]; then
     log "preflight skipped"
     return 0
@@ -376,16 +387,26 @@ preflight() {
   if ! tcp_check "$manager_host" "$manager_port"; then
     fallback_direct "manager gRPC ${manager_host}:${manager_port} is unreachable"
   fi
-  if command -v getent >/dev/null 2>&1 && ! getent ahosts "$SCHEDULER_HOST" >/dev/null 2>&1; then
-    fallback_direct "scheduler DNS ${SCHEDULER_HOST} did not resolve"
+  scheduler_ok=0
+  for ip in $(printf '%s' "$SCHEDULER_IPS" | tr ',' '\n'); do
+    ip="${ip//[[:space:]]/}"
+    [ -n "$ip" ] || continue
+    if tcp_check "$ip" "$SCHEDULER_PORT"; then
+      scheduler_ok=1
+      break
+    fi
+  done
+  if [ "$scheduler_ok" != "1" ]; then
+    fallback_direct "no scheduler IP is reachable on port ${SCHEDULER_PORT}"
   fi
-  if ! tcp_check "$SCHEDULER_HOST" "$SCHEDULER_PORT"; then
-    fallback_direct "scheduler ${SCHEDULER_HOST}:${SCHEDULER_PORT} is unreachable"
-  fi
-  log "preflight ok: manager ${manager_host}:${manager_port}, scheduler ${SCHEDULER_HOST}:${SCHEDULER_PORT}"
+  log "preflight ok: manager ${manager_host}:${manager_port}, scheduler IPs ${SCHEDULER_IPS}"
 }
 
-preflight
+if [ -n "${SCHEDULER_IPS:-}" ]; then
+  preflight
+else
+  log "scheduler IPs are empty; installing nydus and dfdaemon without starting dfdaemon-bootstrap"
+fi
 
 # Declarative boot-time module loading for the nydus stack. cachefiles pulls
 # fscache as a dependency; the selector below tolerates missing modules and
@@ -464,10 +485,28 @@ host:
   schedulerClusterID: $SCHEDULER_CLUSTER_ID
 EOF
 
-write_file "${ROOT}${DYNCONFIG}" 0644 <<EOF
+if [ -n "${SCHEDULER_IPS:-}" ]; then
+  addrs=""
+  old_ifs="$IFS"
+  IFS=','
+  for ip in $SCHEDULER_IPS; do
+    ip="${ip//[[:space:]]/}"
+    [ -n "$ip" ] || continue
+    addrs="${addrs}${addrs:+, }\"${ip}:${SCHEDULER_PORT}\""
+  done
+  IFS="$old_ifs"
+  write_file "${ROOT}${DYNCONFIG}" 0644 <<EOF
 scheduler:
-  addr: "$SCHEDULER_HOST:$SCHEDULER_PORT"
+  addrs: [${addrs}]
 EOF
+  printf '%s\n' "$SCHEDULER_IPS" | write_file "${ROOT}/etc/dragonfly/scheduler-ips" 0644
+else
+  write_file "${ROOT}${DYNCONFIG}" 0644 <<'EOF'
+scheduler:
+  addrs: []
+EOF
+  rm -f "${ROOT}/etc/dragonfly/scheduler-ips"
+fi
 
 # /etc/nydus/config.toml is written below by nydus-fs-select after both nydusd
 # configs exist, so the initial install and every snapshotter start use the
@@ -882,6 +921,7 @@ After=network-online.target
 Wants=network-online.target
 Before=${DISTRO_SERVICE_TARGETS}
 ConditionPathExists=/etc/dragonfly/dfget.yaml
+ConditionPathExists=/etc/dragonfly/scheduler-ips
 
 [Service]
 Type=simple
@@ -1214,12 +1254,20 @@ if [ "$REAL_ROOT" = "1" ] && [ "${SKIP_SYSTEMD:-0}" != "1" ]; then
   systemctl daemon-reload || fallback_direct "systemctl daemon-reload failed"
   systemctl enable dfdaemon-bootstrap.service dfdaemon-bootstrap-boot.service nydus-snapshotter-bootstrap.service nydus-updater.timer dfdaemon-bootstrap-switch.timer || \
     fallback_direct "failed to enable bootstrap services"
-  systemctl restart dfdaemon-bootstrap.service nydus-snapshotter-bootstrap.service || \
-    fallback_direct "failed to start bootstrap services"
-  systemctl start nydus-updater.timer dfdaemon-bootstrap-switch.timer || \
-    fallback_direct "failed to start host timers"
-  sleep 2
-  systemctl is-active --quiet dfdaemon-bootstrap.service || fallback_direct "dfdaemon bootstrap failed to start"
+  if [ -n "${SCHEDULER_IPS:-}" ]; then
+    systemctl restart dfdaemon-bootstrap.service nydus-snapshotter-bootstrap.service || \
+      fallback_direct "failed to start bootstrap services"
+    systemctl start nydus-updater.timer dfdaemon-bootstrap-switch.timer || \
+      fallback_direct "failed to start host timers"
+    sleep 2
+    systemctl is-active --quiet dfdaemon-bootstrap.service || fallback_direct "dfdaemon bootstrap failed to start"
+  else
+    systemctl restart nydus-snapshotter-bootstrap.service || \
+      fallback_direct "failed to start nydus bootstrap service"
+    systemctl start nydus-updater.timer || \
+      fallback_direct "failed to start host timers"
+    sleep 2
+  fi
   systemctl is-active --quiet nydus-snapshotter-bootstrap.service || fallback_direct "nydus bootstrap failed to start"
 fi
 

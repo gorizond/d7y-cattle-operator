@@ -64,10 +64,6 @@ const (
 	// AnnotationSchedulerClusterID is the Fleet template input for the
 	// scheduler cluster ID. The controller writes it during registration.
 	AnnotationSchedulerClusterID = "p2p.dragonfly.io/scheduler-cluster-id"
-	// AnnotationSchedulerPublicIP is stamped per Cluster so shared values can
-	// render the resolved public advertiseIP without changing the DNS-based
-	// resolution itself.
-	AnnotationSchedulerPublicIP  = "p2p.dragonfly.io/scheduler-public-ip"
 	AnnotationSchedulerReplicas  = "p2p.dragonfly.io/scheduler-replicas"
 	AnnotationSeedClientReplicas = "p2p.dragonfly.io/seedclient-replicas"
 	// SharedClusterNameTemplate is the per-target cluster name made available
@@ -77,12 +73,10 @@ const (
 	// true only when the Cluster carries the manager role label. It must render
 	// to a bare YAML bool; a quoted "false" would be truthy in Helm.
 	SharedManagerIngressEnabledTemplate = `${ if eq (index .ClusterLabels "` + LabelRoleManager + `") "true" }true${ else }false${ end }`
-	// SharedSchedulerPublicIPTemplate resolves the per-target public LB IP
-	// stamped on the Cluster annotation.
-	// The annotation may be absent on a Cluster (for example when a user has not
-	// pinned it yet); default keeps Fleet's missingkey=error from failing the
-	// whole values render for that cluster.
-	SharedSchedulerPublicIPTemplate = `${ index .ClusterAnnotations "p2p.dragonfly.io/scheduler-public-ip" | default "" }`
+	// SharedSchedulerPublicIPTemplate resolves the first scheduler-ips entry.
+	// The annotation may be absent on a Cluster; default keeps Fleet's
+	// missingkey=error from failing the whole values render for that cluster.
+	SharedSchedulerPublicIPTemplate = `${ default "" (first (splitList "," (default "" (index .ClusterAnnotations "p2p.dragonfly.io/scheduler-ips")))) }`
 	// SharedSchedulerClusterIDTemplate resolves the per-target scheduler ID
 	// written by the registration flow.
 	SharedSchedulerClusterIDTemplate = `${ index .ClusterAnnotations "p2p.dragonfly.io/scheduler-cluster-id" }`
@@ -240,9 +234,6 @@ type Cluster struct {
 	// P2PDomain is the operator-wide scheduler base domain used to build the
 	// shared scheduler host template.
 	P2PDomain string
-	// SchedulerPublicIP is the currently resolved public scheduler address
-	// used as the scheduler advertiseIP and the external-dns target.
-	SchedulerPublicIP string
 	// SchedulerHost is the per-cluster public scheduler host used by local
 	// dynconfig (DaemonSets) and bootstrap clients.
 	SchedulerHost string
@@ -356,7 +347,6 @@ func sharedCluster(c Cluster) Cluster {
 	c.Name = SharedClusterNameTemplate
 	c.Labels = nil
 	c.SchedulerHost = SchedulerHostTemplate(c.P2PDomain)
-	c.SchedulerPublicIP = SharedSchedulerPublicIPTemplate
 	c.SchedulerClusterIDTemplate = SharedSchedulerClusterIDTemplate
 	c.Monitoring = false
 	c.P2PDataTLS = false

@@ -30,7 +30,6 @@ type ExtrasOptions struct {
 	// fork chart's headless scheduler Service. It is independent of the manager
 	// Ingress toggle.
 	SchedulerPublicEnabled bool
-	SchedulerPublicIP      string
 	// SchedulerDomain and SchedulerClusterID build the DNS alias
 	// d7y-scheduler.<cluster-id>.<domain>.
 	SchedulerDomain    string
@@ -68,7 +67,6 @@ func SharedExtras(c Cluster, opts ExtrasOptions) *fleetv1alpha1.HelmOp {
 	opts.Manager = true
 	opts.Seed = true
 	opts.SchedulerPublicEnabled = true
-	opts.SchedulerPublicIP = SharedSchedulerPublicIPTemplate
 	opts.SchedulerDomain = c.P2PDomain
 	opts.SchedulerClusterID = SharedSchedulerClusterIDTemplate
 	opts.SchedulerService = names.ControlScheduler
@@ -121,7 +119,7 @@ func extrasValues(c Cluster, opts ExtrasOptions, names Names) map[string]any {
 			"enabled":   opts.SchedulerPublicEnabled,
 			"clusterID": opts.SchedulerClusterID,
 			"domain":    opts.SchedulerDomain,
-			"publicIP":  opts.SchedulerPublicIP,
+			"publicIP":  SharedSchedulerPublicIPTemplate,
 			"service":   opts.SchedulerService,
 			"port":      opts.SchedulerPort,
 		},

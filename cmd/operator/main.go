@@ -63,7 +63,6 @@ func run() error {
 	if err != nil {
 		return fmt.Errorf("Bundle client: %w", err)
 	}
-
 	apiHost, err := hostFromURL(cfg.ManagerAPIURL)
 	if err != nil {
 		return fmt.Errorf("manager API URL: %w", err)

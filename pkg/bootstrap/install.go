@@ -12,6 +12,7 @@ const (
 	// Marker identifies an injected bootstrap block for idempotency.
 	Marker                       = "# d7y-cattle-operator:p2p-install"
 	schedulerClusterIDAnnotation = "p2p.dragonfly.io/scheduler-cluster-id"
+	schedulerIPsAnnotation       = "p2p.dragonfly.io/scheduler-ips"
 )
 
 // InstallConfig carries the operator-wide values used to build the p2p install
@@ -50,7 +51,7 @@ func BuildInstallEnv(cluster *provv1.Cluster, secret *corev1.Secret, schedulerID
 	if cfg.ManagerGRPCPort < 1 || cfg.ManagerGRPCPort > 65535 {
 		return "", fmt.Errorf("manager gRPC port %d is outside 1-65535", cfg.ManagerGRPCPort)
 	}
-	return Env(Payload{
+	env, err := Env(Payload{
 		ManagerGRPC:        fmt.Sprintf("https://%s:%d", cfg.ManagerGRPCDomain, cfg.ManagerGRPCPort),
 		StaticURL:          cfg.StaticURL,
 		SmartProxyURL:      cfg.SmartProxyURL,
@@ -61,6 +62,18 @@ func BuildInstallEnv(cluster *provv1.Cluster, secret *corev1.Secret, schedulerID
 		ClientCert:         secret.Data[corev1.TLSCertKey],
 		ClientKey:          secret.Data[corev1.TLSPrivateKeyKey],
 	})
+	if err != nil {
+		return "", err
+	}
+	distro := "k3s"
+	if cluster != nil && strings.Contains(strings.ToLower(cluster.Spec.KubernetesVersion), "+rke2") {
+		distro = "rke2"
+	}
+	ips := ""
+	if cluster != nil {
+		ips = strings.TrimSpace(cluster.Annotations[schedulerIPsAnnotation])
+	}
+	return "P2P_DISTRO=" + distro + "\nSCHEDULER_IPS=" + ips + "\n" + env, nil
 }
 
 func schedulerHost(domain, clusterID string) string {

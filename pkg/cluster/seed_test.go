@@ -18,6 +18,7 @@ import (
 func TestReconcileSeedCreatesSharedHelmOps(t *testing.T) {
 	controller, store, events := newTestController(t)
 	cluster := testSeedCluster("42")
+	cluster.Annotations[AnnotationSchedulerIPs] = "203.0.113.10"
 
 	if _, err := controller.reconcile("", cluster); err != nil {
 		t.Fatalf("reconcile() error = %v", err)
@@ -98,7 +99,7 @@ func TestReconcileStampsClusterIDAndPublicIP(t *testing.T) {
 	if got := clusterStore.label(helmop.LabelClusterID); got != "c-m-test" {
 		t.Errorf("cluster-id label = %q, want c-m-test", got)
 	}
-	if got := clusterStore.annotation(helmop.AnnotationSchedulerPublicIP); got != "203.0.113.10" {
+	if got := clusterStore.annotation(AnnotationSchedulerIPs); got != "203.0.113.10" {
 		t.Errorf("scheduler public IP annotation = %q, want the resolved IP", got)
 	}
 	if got := clusterStore.label(helmop.LabelRoleSeed); got != "" {

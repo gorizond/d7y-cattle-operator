@@ -13,7 +13,6 @@ func TestExtrasHelmOp(t *testing.T) {
 		Manager:                        true,
 		Seed:                           true,
 		SchedulerPublicEnabled:         true,
-		SchedulerPublicIP:              "203.0.113.10",
 		SchedulerDomain:                "example.com",
 		SchedulerClusterID:             "c-m-test",
 		SchedulerService:               "c1-control-scheduler",
@@ -88,8 +87,8 @@ func TestExtrasHelmOp(t *testing.T) {
 	if got := valueAt(t, values, "scheduler", "enabled"); got != true {
 		t.Errorf("scheduler.enabled = %v", got)
 	}
-	if got := valueAt(t, values, "scheduler", "publicIP"); got != "203.0.113.10" {
-		t.Errorf("scheduler.publicIP = %v", got)
+	if got := valueAt(t, values, "scheduler", "publicIP"); got != SharedSchedulerPublicIPTemplate {
+		t.Errorf("scheduler.publicIP = %v, want the scheduler-ips template", got)
 	}
 	if got := valueAt(t, values, "scheduler", "domain"); got != "example.com" {
 		t.Errorf("scheduler.domain = %v", got)

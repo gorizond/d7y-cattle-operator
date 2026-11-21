@@ -56,10 +56,12 @@ func (c *Controller) ensureContainerdHosts(cluster *provv1.Cluster) (*provv1.Clu
 	if updated.Spec.RKEConfig == nil {
 		updated.Spec.RKEConfig = &provv1.RKEConfig{}
 	}
+	includeHosts := strings.TrimSpace(cluster.Annotations[AnnotationSchedulerIPs]) != ""
 	files, changed := withContainerdHostsSelector(
 		updated.Spec.RKEConfig.MachineSelectorFiles,
 		name,
 		containerdCertsDir(updated.Spec.KubernetesVersion),
+		includeHosts,
 	)
 	if !changed {
 		return nil, nil
@@ -161,10 +163,8 @@ func containerdHostsData(port int) map[string]string {
 	}
 }
 
-func withContainerdHostsSelector(files []rkev1.RKEProvisioningFiles, name, dir string) ([]rkev1.RKEProvisioningFiles, bool) {
-	desired := containerdHostsFileSource(name, dir)
+func withContainerdHostsSelector(files []rkev1.RKEProvisioningFiles, name, dir string, include bool) ([]rkev1.RKEProvisioningFiles, bool) {
 	out := make([]rkev1.RKEProvisioningFiles, 0, len(files)+1)
-	reused := false
 	for i := range files {
 		entry := *files[i].DeepCopy()
 		filtered := make([]rkev1.ProvisioningFileSource, 0, len(entry.FileSources))
@@ -181,19 +181,15 @@ func withContainerdHostsSelector(files []rkev1.RKEProvisioningFiles, name, dir s
 			continue
 		}
 		if len(filtered) == 0 {
-			if reused {
-				continue
-			}
-			entry.MachineLabelSelector = &metav1.LabelSelector{}
-			entry.FileSources = []rkev1.ProvisioningFileSource{desired}
-			out = append(out, entry)
-			reused = true
+			// Drop an entry that only referenced this ConfigMap. If it also
+			// carries user sources, keep the user entry without ours.
 			continue
 		}
 		entry.FileSources = filtered
 		out = append(out, entry)
 	}
-	if !reused {
+	if include {
+		desired := containerdHostsFileSource(name, dir)
 		out = append(out, rkev1.RKEProvisioningFiles{
 			MachineLabelSelector: &metav1.LabelSelector{},
 			FileSources:          []rkev1.ProvisioningFileSource{desired},

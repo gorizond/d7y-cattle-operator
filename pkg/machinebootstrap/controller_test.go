@@ -149,6 +149,9 @@ func TestReconcileInsertsBeforeDoInstall(t *testing.T) {
 	if !strings.Contains(value, "MANAGER_GRPC='https://grpc.example.com:443'") {
 		t.Fatalf("bootstrap block is missing the inline manager env: %q", value)
 	}
+	if !strings.Contains(value, "P2P_DISTRO='k3s'") || !strings.Contains(value, "SCHEDULER_IPS=''") {
+		t.Fatalf("bootstrap block is missing the empty scheduler IP env: %q", value)
+	}
 	if len(events.events) != 1 || events.events[0].Reason != "BootstrapInjected" {
 		t.Errorf("events = %+v, want BootstrapInjected", events.events)
 	}
@@ -218,6 +221,18 @@ func TestInlineBlockDelimiterCollision(t *testing.T) {
 	}
 	if !strings.Contains(block, "\nD7Y_P2P_EOF_1\nbash /tmp/d7y-p2p-install.sh || true") {
 		t.Fatalf("block did not close with the suffixed delimiter: %q", block)
+	}
+}
+
+func TestReconcileCarriesSchedulerIPs(t *testing.T) {
+	controller, secrets, _, clusters, _, _ := testController()
+	clusters.clusters["fleet-default/c1"].Annotations["p2p.dragonfly.io/scheduler-ips"] = "203.0.113.10,203.0.113.11"
+	if _, err := controller.reconcile("", secrets.secret.DeepCopy()); err != nil {
+		t.Fatalf("reconcile() error = %v", err)
+	}
+	value := string(secrets.secret.Data[bootstrapValueKey])
+	if !strings.Contains(value, "SCHEDULER_IPS='203.0.113.10,203.0.113.11'") {
+		t.Fatalf("bootstrap block is missing scheduler IPs: %q", value)
 	}
 }
 

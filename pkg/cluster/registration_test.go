@@ -583,6 +583,9 @@ func (f *fakeClusterStore) get() *provv1.Cluster {
 	return f.cluster.DeepCopy()
 }
 
+func (f *fakeClusterStore) Enqueue(namespace, name string) {
+}
+
 func (f *fakeClusterStore) updateCount() int {
 	f.mu.Lock()
 	defer f.mu.Unlock()
