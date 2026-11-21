@@ -84,7 +84,7 @@ func extrasValues(c Cluster, opts ExtrasOptions, names Names) map[string]any {
 				// nginx-only P2P Secret for the GRPCS backend and mTLS.
 				// Traefik uses TCP passthrough and does not consume it. REST
 				// keeps opts.TLSSecret.
-				"tlsSecret": c.MTLSSecretName,
+				"tlsSecret": ManagerMTLSSecretName,
 			},
 			"rest": map[string]any{
 				"enabled": opts.RESTEnabled,
@@ -102,7 +102,7 @@ func extrasValues(c Cluster, opts ExtrasOptions, names Names) map[string]any {
 					"insecureSkipVerify": true,
 				},
 			},
-			"mtlsSecret": c.MTLSSecretName,
+			"mtlsSecret": ManagerMTLSSecretName,
 		},
 		"scheduler": map[string]any{
 			"enabled": false,

@@ -26,7 +26,8 @@ func inlineInstallBlockFor(rawBody, env string) string {
 		quoteEnv(env) + body + "\n" +
 		delimiter + "\n" +
 		"bash /tmp/d7y-p2p-install.sh || true\n" +
-		"fi\n"
+		"fi\n" +
+		bootstrap.EndMarker + "\n"
 }
 
 func quoteEnv(env string) string {
@@ -51,13 +52,21 @@ func shellQuote(value string) string {
 	return "'" + strings.ReplaceAll(value, "'", "'\\''") + "'"
 }
 
-// insertInlineBlock inserts block before the first do_install "$@" line,
-// falling back to before the last exit 0 and then the end.
-func insertInlineBlock(raw, block string) string {
-	if strings.Contains(raw, bootstrap.Marker) {
-		return raw
-	}
+// insertInlineBlock replaces an existing injected block, otherwise inserts a
+// new block before the first do_install "$@" line, falling back to before the
+// last exit 0 and then the end.
+func insertInlineBlock(raw, block string) (string, error) {
 	lines := strings.Split(raw, "\n")
+	if start, end, ok, err := existingBlock(lines); err != nil {
+		return "", err
+	} else if ok {
+		blockLines := strings.Split(strings.TrimSuffix(block, "\n"), "\n")
+		out := make([]string, 0, len(lines)-(end-start)+len(blockLines))
+		out = append(out, lines[:start]...)
+		out = append(out, blockLines...)
+		out = append(out, lines[end:]...)
+		return strings.Join(out, "\n"), nil
+	}
 	at := -1
 	for i, line := range lines {
 		if strings.TrimSpace(line) == `do_install "$@"` {
@@ -74,17 +83,50 @@ func insertInlineBlock(raw, block string) string {
 	}
 	if at < 0 {
 		if raw == "" {
-			return block
+			return block, nil
 		}
 		if strings.HasSuffix(raw, "\n") {
-			return raw + block
+			return raw + block, nil
 		}
-		return raw + "\n" + block
+		return raw + "\n" + block, nil
 	}
 	blockLines := strings.Split(strings.TrimSuffix(block, "\n"), "\n")
 	out := make([]string, 0, len(lines)+len(blockLines))
 	out = append(out, lines[:at]...)
 	out = append(out, blockLines...)
 	out = append(out, lines[at:]...)
-	return strings.Join(out, "\n")
+	return strings.Join(out, "\n"), nil
+}
+
+// existingBlock returns the half-open line range of the previously injected
+// block. Blocks written by older versions have no end marker; their shape is
+// still recognized by the bash invocation followed by fi.
+func existingBlock(lines []string) (int, int, bool, error) {
+	start := -1
+	for i, line := range lines {
+		if strings.TrimSpace(line) == bootstrap.Marker {
+			start = i
+			break
+		}
+	}
+	if start < 0 {
+		return 0, 0, false, nil
+	}
+	for i := start + 1; i < len(lines); i++ {
+		if strings.TrimSpace(lines[i]) == bootstrap.EndMarker {
+			return start, i + 1, true, nil
+		}
+	}
+	bashLine := -1
+	for i := start + 1; i < len(lines); i++ {
+		trimmed := strings.TrimSpace(lines[i])
+		if trimmed == `bash /tmp/d7y-p2p-install.sh || true` {
+			bashLine = i
+			continue
+		}
+		if bashLine >= 0 && trimmed == "fi" {
+			return start, i + 1, true, nil
+		}
+	}
+	return 0, 0, false, fmt.Errorf("machinebootstrap: existing p2p marker has an unrecognized block shape")
 }

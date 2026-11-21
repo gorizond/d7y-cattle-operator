@@ -24,7 +24,7 @@ helm template e "$extras" --namespace dragonfly-system \
   --set ingress.enabled=true \
   --set ingress.grpc.host=grpc.example.com \
   --set ingress.grpc.service=c1-manager \
-  --set ingress.grpc.tlsSecret=dragonfly-p2p-mtls \
+  --set ingress.grpc.tlsSecret=dragonfly-p2p-manager \
   --set ingress.rest.host=api.example.com \
   --set ingress.rest.service=c1-manager \
   --set ingress.tls.enabled=true \
@@ -35,11 +35,11 @@ rest_ingress=$(doc Ingress e-manager-api "$tmp/nginx.yaml")
 [ -n "$rest_ingress" ] || fail "nginx REST Ingress missing"
 echo "$grpc_ingress" | grep -q 'nginx.ingress.kubernetes.io/backend-protocol: GRPCS' || fail "nginx gRPC backend-protocol must be GRPCS"
 if echo "$grpc_ingress" | grep -q 'backend-protocol: GRPC$'; then fail "nginx gRPC must not use plaintext GRPC"; fi
-echo "$grpc_ingress" | grep -q 'nginx.ingress.kubernetes.io/proxy-ssl-secret: "dragonfly-system/dragonfly-p2p-mtls"' || fail "nginx gRPC proxy-ssl-secret missing"
+echo "$grpc_ingress" | grep -q 'nginx.ingress.kubernetes.io/proxy-ssl-secret: "dragonfly-system/dragonfly-p2p-manager"' || fail "nginx gRPC proxy-ssl-secret missing"
 echo "$grpc_ingress" | grep -q 'nginx.ingress.kubernetes.io/proxy-ssl-verify: "on"' || fail "nginx gRPC proxy-ssl-verify missing"
 echo "$grpc_ingress" | grep -q 'nginx.ingress.kubernetes.io/proxy-ssl-name: "grpc.example.com"' || fail "nginx gRPC proxy-ssl-name missing"
 echo "$grpc_ingress" | grep -q 'nginx.ingress.kubernetes.io/auth-tls-verify-client: "on"' || fail "nginx gRPC auth-tls missing"
-echo "$grpc_ingress" | grep -q 'secretName: "dragonfly-p2p-mtls"' || fail "nginx gRPC edge must serve the P2P TLS Secret"
+echo "$grpc_ingress" | grep -q 'secretName: "dragonfly-p2p-manager"' || fail "nginx gRPC edge must serve the P2P TLS Secret"
 echo "$rest_ingress" | grep -q 'secretName: "demo-manager-public-tls"' || fail "nginx REST TLS Secret missing"
 echo "$rest_ingress" | grep -q 'nginx.ingress.kubernetes.io/backend-protocol: HTTPS' || fail "nginx REST backend-protocol missing"
 

@@ -52,7 +52,7 @@ func TestSharedExtrasTemplatedManagerBackends(t *testing.T) {
 	if got := valueAtPath(t, values, "ingress", "rest", "port"); got != int64(8080) {
 		t.Errorf("ingress.rest.port = %v", got)
 	}
-	if got := valueAtPath(t, values, "ingress", "mtlsSecret"); got != "dragonfly-p2p-mtls" {
+	if got := valueAtPath(t, values, "ingress", "mtlsSecret"); got != helmop.ManagerMTLSSecretName {
 		t.Errorf("ingress.mtlsSecret = %v", got)
 	}
 	if got := valueAtPath(t, values, "ingress", "controller"); got != "nginx" {

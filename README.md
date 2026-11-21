@@ -14,14 +14,14 @@ webhooks are out of scope.
 Pod image-mutation admission, Harbor, and registry-proxy add-ons are out of scope. The operator embeds `pkg/machinebootstrap/assets/p2p-install.sh` and injects it, with the bootstrap env-file, into the Rancher machine-bootstrap Secret.
 
 - Parses and validates the operator configuration from flags/environment variables.
-- Ensures a single mTLS CA and leaf certificate Secret (`dragonfly-p2p-mtls` by
-  default) in the operator namespace. The leaf carries the manager DNS names
-  and the seed's public CAPI machine IP(s); private, internal, and ClusterIPs
-  are never added. The Secret is updated only when the SAN set
-  changes, and a changed SAN set regenerates the CA and leaf because the old
-  CA key is not persisted. The Secret is replicated into each Cluster namespace
-  and delivered downstream through Fleet `downstreamResources`; Traefik
-  forwards manager gRPC TLS without terminating it.
+- Maintains a stable CA Secret (`dragonfly-p2p-ca`, Opaque) and split leaf
+  identities: the shared client `dragonfly-p2p-mtls` (ClientAuth, no SANs), the
+  manager `dragonfly-p2p-manager` (manager DNS/IP SANs), and one
+  `<cluster>-p2p-scheduler` leaf per seed (scheduler host, Service, and current
+  public node IPs). The per-seed leaf is delivered as a raw Fleet Bundle with
+  an inline Secret named `dragonfly-p2p-scheduler`; the control HelmOp depends
+  on that Bundle and receives the target's `mtls-cert-revision` through Fleet
+  template values. The CA is never regenerated automatically.
 - Reconciles `provisioning.cattle.io/v1` Clusters selected by the
   `d7y-operator-cattle: "true"` label.
 - Deploys KeyDB and the Dragonfly manager through Fleet HelmOps, without
@@ -33,8 +33,8 @@ Pod image-mutation admission, Harbor, and registry-proxy add-ons are out of scop
   `p2p.dragonfly.io/seed: "true"` and a scheduler cluster ID is present. Nydus
   is host-only: `p2p-install.sh` installs and supervises it on the node; the
   operator creates no nydus DaemonSet or HelmOp.
-- Manages the manager Ingresses, the public scheduler TCP front, and optional
-  VPAs through the shared `d7y-extras` HelmOp and the `dragonfly-extras`
+- Manages the manager Ingresses and optional VPAs through the shared
+  `d7y-extras` HelmOp and the `dragonfly-extras`
   chart. The operator has no Ingress, IngressRouteTCP, or
   VPA RBAC and creates neither kind directly.
 - Uses a JWT-authenticated manager REST client (`pkg/managerapi`) and a
@@ -178,11 +178,9 @@ helm install d7y-cattle-operator gorizond/d7y-cattle-operator \
   --set scheduler.domain=example.com
 ```
 
-`scheduler.domain` has no default and is required. There is no public or
-internal scheduler IP value: the public scheduler IP(s) are resolved at
-reconcile time from `d7y-scheduler.<cluster-id>.<domain>`, and both bootstrap
-nodes and DaemonSets use that public host. DNS changes are SAN changes, so they
-rotate the CA and leaf and roll the Dragonfly workloads.
+`scheduler.domain` has no default and is required. It builds the per-seed
+scheduler DNS SAN `d7y-scheduler.<cluster-id>.<domain>`; scheduler clients dial
+the scheduler node IPs on `8002`. There is no public scheduler IP value.
 
 For local development use `charts/d7y-cattle-operator` instead of the repository
 chart. The release tag (`v<chart version>`) and the default image tag
@@ -222,10 +220,11 @@ Defaults: `mtlsSecretName=dragonfly-p2p-mtls`, `dragonfly.chart.name=dragonfly`,
 `dragonfly.chart.version=1.10.1-patch.2`, `extras.chart.name=dragonfly-extras`,
 `extras.chart.version=0.1.10`, `extras.ingress.controller=nginx`,
 `extras.ingress.grpcEnabled=true`, `extras.ingress.restEnabled=true`,
-`manager.grpcPort=443`, `leaderElect=false`. The public scheduler IP(s) are resolved from DNS at
-reconcile time; there is no scheduler IP value. `scheduler.domain` has no
-default and is required. `scheduler.clusterID` is only a fallback for an
-unpopulated `status.clusterName`.
+`manager.grpcPort=443`, `leaderElect=false`. Scheduler node IPs come from
+downstream scheduler pods/CAPI Machines; there is no scheduler IP value.
+`scheduler.domain` has no default and is required.
+`scheduler.clusterID` is only a fallback for an unpopulated
+`status.clusterName`.
 
 ## Roles and Fleet targeting
 
@@ -277,7 +276,7 @@ templates.
 | `d7y-manager` | manager + MySQL | `d7y-operator-cattle=true`, `d7y-operator-manager=true` |
 | `d7y-control` | scheduler | `d7y-operator-cattle=true`, `d7y-operator-seed=true` |
 | `d7y-data` | seedClient + client | same as control |
-| `d7y-extras` | extras (public scheduler front, VPA, Ingress) | same as control |
+| `d7y-extras` | extras (VPA, manager Ingress) | same as control |
 | `d7y-containerd-mirror` | node containerd mirror | same as control |
 
 The rendered values keep the per-cluster downstream names:
@@ -399,44 +398,80 @@ Pin the chart version in the operator release values; never hardcode it in Go
 code. The fork is an external dependency of this repository: the chart is
 pulled by Fleet at reconcile time and is not vendored here.
 
-### Public scheduler front and P2P certificate
+### P2P certificate and scheduler addressing
 
-Bootstrap nodes need the scheduler before RKE2 (and therefore before Fleet
-DaemonSets) exists. There is a single public front for both:
+Scheduler clients connect directly to the scheduler pod node IP on port
+`8002`; there is no public scheduler Traefik front. The per-seed
+`p2p.dragonfly.io/scheduler-ips` annotation is derived from downstream
+`component=scheduler` pods and their CAPI Machine public IPs. The host
+bootstrap and local dynconfig use `<scheduler-node-ip>:8002`.
 
-- A Traefik `IngressRouteTCP` named `<release>-scheduler` on the `websecure`
-  entry point with `tls.passthrough: true`. Traefik never terminates TLS and no
-  Let's Encrypt certificate or TLSOption is attached. The default
-  ``HostSNI(`*`)`` matcher also covers clients that dial the public LB IP and
-  send no SNI; set `scheduler.hostSNI` when the entry point is shared with
-  another passthrough route. The backend is the fork chart's headless
-  `<cluster>-control-scheduler` Service on port `8002`.
-- Both bootstrap clients and DaemonSets use
-  `d7y-scheduler.<cluster-id>.<domain>:443`. DaemonSets get that address from
-  their local `dynconfig.yaml`; bootstrap clients get the public `advertiseIP`
-  and `advertisePort=443` through the manager dynconfig and their local
-  dynconfig. There is no internal scheduler ClusterIP Service.
+The PKI layout is:
 
-The per-cluster DNS alias is
-`d7y-scheduler.<fleet-cluster-id>.<scheduler.domain>`, where the cluster ID
-comes from provisioning Cluster `status.clusterName` (with
-`scheduler.clusterID`/`P2P_CLUSTER_ID` as an explicit fallback). The operator
-derives the seed's public IPv4 addresses from its CAPI Machine status; those
-become the P2P leaf IP SANs and the first `scheduler-ips` entry is the
-`advertiseIP`. The extras chart still publishes the scheduler hostname DNS SAN
-through external-dns, but it does not use DNS lookup results as IP SANs.
-The P2P leaf carries both the seed machine IP SANs and the scheduler hostname
-DNS SAN. IP SANs are required because Dragonfly client 1.5.14 verifies the
-resolved IP; the DNS SAN keeps name-based callers working. It contains no
-ClusterIP and no wildcard-resolved address.
+- `dragonfly-p2p-ca` (Opaque, operator namespace): stable `ca.crt`, `ca.key`,
+  and `ca-bundle.crt`. The CA is create-only and invalid material is reported,
+  never regenerated. The Phase A/B deadline lives in the
+  `p2p.dragonfly.io/legacy-trust-deadline` annotation on this CA Secret, not on
+  a Cluster.
+- `dragonfly-p2p-mtls`: shared client identity, ClientAuth only, no SANs,
+  CN `d7y-cattle-operator-client`, used by the control/data clients and
+  machine bootstrap.
+- `dragonfly-p2p-manager`: manager server identity, ServerAuth+ClientAuth,
+  manager gRPC/API/dragonfly-system/localhost SANs.
+- `<cluster>-p2p-scheduler` source Secret in the operator namespace; its
+  contents are embedded as `dragonfly-p2p-scheduler` in the per-seed raw
+  Fleet Bundle in the Cluster namespace. It carries the scheduler hostname,
+  `<cluster>-control-scheduler.dragonfly-system.svc`, the current seed public
+  IPs, and loopbacks.
 
-Existing public IP SANs are accumulated for backward compatibility. If a seed
-has no public machine IP, the certificate keeps its existing IP SANs and the
-reconcile continues. When the machine SAN set changes, the existing CA/leaf is
-regenerated, so expect a one-time CA rotation and downstream Secret update.
-`scheduler.config.server.advertiseIP` and `advertisePort=443` use the first
-`scheduler-ips` entry; DaemonSets use the same public host from their local
-dynconfig.
+Leaf Secrets are `kubernetes.io/tls`; their `ca.crt` is the CA trust bundle.
+The scheduler certificate revision is per seed
+(`p2p.dragonfly.io/mtls-cert-revision`); rotating seed A does not roll seed B.
+The manager and client revisions remain global within their workloads.
+
+#### One-time upgrade migration
+
+The legacy shared Secret was signed by an ephemeral CA whose key no longer
+exists, so the first upgrade must rotate trust once:
+
+1. **Phase A (trust-first).** The operator creates the new stable CA and writes
+   `ca-bundle.crt = new CA + the CA that signed the legacy leaf` (the new CA
+   must be present in the bundle), sets
+   `p2p.dragonfly.io/legacy-trust-deadline` (24h) on the CA Secret, and
+   preserves the legacy server identity once in `dragonfly-p2p-legacy`. The
+   client identity stays legacy until Phase B; manager/scheduler identities use
+   the preserved server leaf only when it has ServerAuth and covers the role
+   SANs, otherwise they are signed by the new CA. The values switch to the new
+   Secret names. The machine-bootstrap CA bundle is updated.
+2. **Phase B (after the deadline).** Reconcile re-signs the client, manager, and
+   each per-seed scheduler leaf with the new CA. Global client/manager leaves
+   are not re-signed during Phase A; they move in Phase B after the deadline.
+   Each seed's scheduler rolls independently; the CA bundle remains until
+   manual legacy retirement.
+3. **Rollback.** Restore the previous values/Secret names and the legacy
+   `dragonfly-p2p-mtls` material; the bundle still trusts the legacy CA until
+   the deadline. Do not delete `dragonfly-p2p-ca` during rollback.
+
+Existing nodes must reboot (or otherwise re-run their Rancher machine
+bootstrap/cloud-init) after the bootstrap Secret revision changes. A running
+host dfdaemon keeps its old certificate/config until the embedded block is
+re-executed; the machine-bootstrap Secret now carries a client-certificate
+revision and replaces the injected block when that revision changes.
+
+#### Manual CA rotation
+
+1. Replace `ca.crt` and `ca.key` in `dragonfly-p2p-ca` in place and set
+   `ca-bundle.crt = new CA + the currently signing CA` (the new active CA must
+   be first and present in the bundle).
+2. Set `p2p.dragonfly.io/legacy-trust-deadline` on the CA Secret to a future
+   time and let all pods and machine-bootstrap blocks pick up the bundle. Keep
+   `dragonfly-p2p-legacy` until Phase B.
+3. After the deadline, reconcile re-signs the client/manager/per-seed leaves;
+   `dragonfly-p2p-legacy` is deleted automatically once all labeled leaves are
+   active. A past deadline forces Phase B immediately.
+4. Remove the old CA from the bundle only after every leaf and host bootstrap
+   has rolled. Never delete leaf Secrets; the stable CA Secret is the only
+   control point.
 
 ### Fail-open node bootstrap
 
@@ -452,7 +487,7 @@ yet:
   in-cluster agent is expected to configure the host later.
 - With scheduler IPs present, it preflights the manager gRPC endpoint and the
   scheduler addresses (DNS/TCP, short timeout), and writes
-  `scheduler.addrs` with `:443` per IP.
+  `scheduler.addrs` with `:8002` per IP.
 - If scheduler/DNS/manager preflight fails with a non-empty IP list, or
   dfdaemon/nydus download/startup fails, it removes the nydus containerd
   drop-in (containerd 2.x) or writes an overlayfs-only direct-registry template
@@ -474,13 +509,12 @@ yet:
   disables the host bootstrap while the pod is running. If the pod disappears,
   the timer re-enables the host bootstrap. The switch never touches nydus.
 
-Certificate rotation is controlled by a pod template annotation:
-`p2p.dragonfly.io/cert-revision` is the SHA-256 of `tls.crt`. It is added to
-the manager Deployment, the control scheduler StatefulSet, and the data
-seedClient/client workloads. A stable SAN set keeps the annotation stable, so
-normal reconciles do not roll pods; a real certificate change rolls each
-workload exactly once. `EnsureSecret` also removes the
-`kubectl.kubernetes.io/last-applied-configuration` annotation because it can
+Certificate rotation uses Secret revisions (SHA-256 over `ca.crt`, `tls.crt`,
+and `tls.key`). The manager and data/control client revisions are global; the
+control scheduler uses the per-target
+`p2p.dragonfly.io/mtls-cert-revision` annotation, so only the affected seed's
+scheduler rolls. A stable SAN set keeps the revision stable. Leaf Secret
+updates remove `kubectl.kubernetes.io/last-applied-configuration` because it can
 contain a copy of `tls.key`.
 
 ### Port security
@@ -491,7 +525,7 @@ security groups:
 
 | Ports | Purpose | Exposure |
 |---|---|---|
-| `8002` | Scheduler gRPC backend | mTLS required; reachable only from the Traefik pod network, never exposed publicly |
+| `8002` | Scheduler gRPC on scheduler node IPs | mTLS required; reachable from bootstrap nodes and cluster peers, not the public LB |
 | `4000` | dfdaemon upload | Plaintext by default; allow only cluster peers/scheduler. Set `p2p-data-tls` to require mTLS. |
 | `4001/4002/4003/4004` | client proxy/metrics/health/stats | bind to `127.0.0.1`; do not expose |
 | `4005/4006` | client storage TCP/QUIC | cluster network only |
@@ -499,7 +533,7 @@ security groups:
 | `4101/4102/4103/4104` | seedClient proxy/metrics/health/stats | bind to `127.0.0.1`; do not expose |
 | `4105/4106` | seedClient storage TCP/QUIC | cluster network only |
 | `65003` | manager gRPC backend | mTLS end-to-end; Traefik only forwards TCP; never plaintext |
-| `443` | manager gRPC edge / scheduler TCP front | manager gRPC: TCP TLS passthrough, client mTLS terminates at manager; scheduler: TCP TLS passthrough |
+| `443` | manager gRPC edge | TCP TLS passthrough; client mTLS terminates at manager. The public scheduler front is disabled. |
 | `8080` | manager REST | JWT required; public Ingress is allowed |
 
 Do not use `proxy.basicAuth` for peer authentication: chart 1.10.1-patch.2
@@ -510,13 +544,13 @@ DaemonSets may run on the same node, seedClient ports are shifted to
 
 All releases target `dragonfly-system` and depend on each other through
 `spec.dependsOn`: the shared control depends on shared KeyDB, shared data
-depends on shared control, KeyDB, and extras (which owns the public scheduler
-TCP front), the shared mirror depends on shared data, and the shared manager
-depends on shared KeyDB. Shared extras has no dependency because the manager
-name is templated. The mTLS Secret and the manager credentials Secret (names
-via `mtlsSecretName` and `managerApiCredentialsSecret`) are copied into the
+depends on shared control, KeyDB, and extras. The shared control additionally
+depends on the per-seed scheduler certificate Bundle by label selector. The
+shared mirror depends on shared data, and the shared manager depends on shared
+KeyDB. The client, manager, and manager credentials Secrets are copied into the
 HelmOp namespace and delivered downstream through Fleet
-`spec.downstreamResources`.
+`spec.downstreamResources`; the per-seed scheduler Secret is delivered by its
+raw Bundle.
 
 ### Extras chart
 
@@ -529,11 +563,11 @@ recommendation-only VPAs. The operator creates the shared `d7y-extras` HelmOp:
   are `ingress.grpc.enabled` and `ingress.rest.enabled`; both default to `true`.
 - `ingress.controller=nginx` (default) terminates client mTLS at the edge,
   serves the P2P certificate for the gRPC host, and reaches the manager with
-  `backend-protocol: GRPCS`, `proxy-ssl-secret` (the P2P Secret, which carries
-  `ca.crt` for backend verification and `tls.crt`/`tls.key` as the client
+  `backend-protocol: GRPCS`, `proxy-ssl-secret` (the manager identity Secret,
+  which carries `ca.crt` for backend verification and `tls.crt`/`tls.key` as the client
   certificate), `proxy-ssl-verify: "on"` and `proxy-ssl-name` set to
   `ingress.grpc.host`. Client certificates are verified at the edge from
-  `dragonfly-p2p-mtls`; REST keeps `backend-protocol: HTTPS` and the public
+  `dragonfly-p2p-manager`; REST keeps `backend-protocol: HTTPS` and the public
   certificate.
 - `ingress.controller=traefik` renders a `traefik.io/v1alpha1` `IngressRoute`
   named `<release>-manager-api` for the REST backend (Traefik v3 ignores
@@ -556,17 +590,15 @@ recommendation-only VPAs. The operator creates the shared `d7y-extras` HelmOp:
 - REST keeps its own `<release>-manager-rest` `ServersTransport` with
   `insecureSkipVerify: true`; the REST IngressRoute uses `scheme: https` and
   the public certificate.
-- When the seed role is active, the chart also renders `<release>-scheduler`
-  (`traefik.io/v1alpha1` `IngressRouteTCP`, `websecure`) with
-  `tls.passthrough: true`, `HostSNI` from `scheduler.hostSNI`
-  (default `*`), and the fork chart's headless scheduler Service as backend.
-  It adds external-dns hostname/target annotations built from
-  `scheduler.clusterID` and `scheduler.domain`. There is no certificate, TLSOption, or
-  ServersTransport on this path, and it is independent of the manager
-  `ingress.enabled` toggle.
+- The public scheduler route is disabled (`scheduler.enabled=false`); clients
+  use the per-seed scheduler cert at the node IPs. The scheduler Service and
+  port remain in the values only for the VPA target. The nginx gRPC ingress
+  uses the `dragonfly-p2p-manager` identity Secret; extras does not deliver it
+  (the manager release owns that delivery).
 - `ingress.tls.enabled` adds the public REST TLS block using
   `ingress.tls.secretName`. Manager gRPC uses TCP passthrough and does not
-  attach a certificate; `ingress.grpc.tlsSecret` is nginx-only.
+  attach a certificate; `ingress.grpc.tlsSecret` and `ingress.mtlsSecret`
+  reference the manager identity Secret.
 - Operator chart settings for the canary:
 
   ```yaml
@@ -576,7 +608,7 @@ recommendation-only VPAs. The operator creates the shared `d7y-extras` HelmOp:
       className: traefik
       grpcEnabled: false
       restEnabled: true
-      tlsSecret: dragonfly-p2p-mtls
+      tlsSecret: dragonfly-p2p-manager
   ```
 - The manager gRPC server serves TLS with client mTLS on `:65003` using the
   mounted `/etc/dragonfly/certs` material; the edge controller must therefore
@@ -740,8 +772,9 @@ names above. Verify them against the live release in the pilot, especially the
 when explicit names are empty, but the operator always sets them.
 
 The nginx gRPC Ingress reads `auth-tls-secret` and `proxy-ssl-secret` from
-`dragonfly-system`; the operator must be installed there (the default
-`namespace`) so the P2P Secret is present in the Ingress namespace.
+`dragonfly-system`. They reference `dragonfly-p2p-manager`; the shared manager
+release delivers that Secret to manager-labeled clusters, while extras does not
+deliver it.
 
 ## Known pilot risk: fork chart dependency
 
@@ -792,9 +825,15 @@ make helm-template  # render the operator, extras, p2p-static, and mirror charts
 ## Security notes
 
 - The operator runs as UID/GID 65532 with a read-only root filesystem.
-- mTLS private keys exist only in the `kubernetes.io/tls` Secret and are never logged.
-- The operator uses only Wrangler/lasso Kubernetes clients (no client-go clientset
-  or dynamic client) and requests no Ingress or VPA permissions.
+- Leaf private keys exist in `kubernetes.io/tls` Secrets, the per-seed source
+  Secret, `dragonfly-p2p-legacy`, and the inline Secret inside the scheduler
+  cert Bundle. The CA private key exists only in the Opaque
+  `dragonfly-p2p-ca` Secret. Neither is logged. Restrict Bundle read access:
+  anyone who can read the cert Bundle can read the scheduler leaf `tls.key`.
+- The operator uses Wrangler/lasso clients for its own resources and a client-go
+  clientset only to read downstream scheduler pods through the per-cluster
+  kubeconfig. Its ClusterRole includes create/update/patch on Fleet Bundles for
+  the per-seed scheduler cert Bundle; it requests no Ingress or VPA permissions.
 
 ## Release
 

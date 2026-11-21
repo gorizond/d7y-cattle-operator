@@ -26,7 +26,7 @@ func TestExtrasHelmOp(t *testing.T) {
 		t.Errorf("dependsOn = %+v", op.Spec.DependsOn)
 	}
 	if len(op.Spec.DownstreamResources) != 0 {
-		t.Errorf("downstreamResources = %+v, want none", op.Spec.DownstreamResources)
+		t.Errorf("downstreamResources = %+v, want none; SharedManager owns the manager Secret", op.Spec.DownstreamResources)
 	}
 	if op.Spec.Helm.Chart != "dragonfly-extras" || op.Spec.Helm.Version != "0.1.10" {
 		t.Errorf("chart = %s %s", op.Spec.Helm.Chart, op.Spec.Helm.Version)
@@ -54,7 +54,7 @@ func TestExtrasHelmOp(t *testing.T) {
 	if got := valueAt(t, values, "ingress", "rest", "port"); got != ManagerRESTPort {
 		t.Errorf("ingress.rest.port = %v", got)
 	}
-	if got := valueAt(t, values, "ingress", "mtlsSecret"); got != "dragonfly-p2p-mtls" {
+	if got := valueAt(t, values, "ingress", "mtlsSecret"); got != ManagerMTLSSecretName {
 		t.Errorf("ingress.mtlsSecret = %v", got)
 	}
 	if got := valueAt(t, values, "ingress", "controller"); got != "nginx" {
@@ -146,7 +146,7 @@ func TestExtrasSeedOnly(t *testing.T) {
 	}
 }
 
-func TestExtrasGRPCUsesP2PCert(t *testing.T) {
+func TestExtrasGRPCUsesManagerCert(t *testing.T) {
 	op := Extras(testCluster(), ExtrasOptions{
 		IngressEnabled:    true,
 		IngressController: "traefik",
@@ -157,8 +157,8 @@ func TestExtrasGRPCUsesP2PCert(t *testing.T) {
 	})
 
 	values := op.Spec.Helm.Values.Data
-	if got := valueAt(t, values, "ingress", "grpc", "tlsSecret"); got != "dragonfly-p2p-mtls" {
-		t.Errorf("ingress.grpc.tlsSecret = %v, want the P2P secret", got)
+	if got := valueAt(t, values, "ingress", "grpc", "tlsSecret"); got != ManagerMTLSSecretName {
+		t.Errorf("ingress.grpc.tlsSecret = %v, want the manager secret", got)
 	}
 	if got := valueAt(t, values, "ingress", "tls", "secretName"); got != "demo-manager-public-tls" {
 		t.Errorf("ingress.tls.secretName = %v, want the public REST secret", got)

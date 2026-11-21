@@ -10,9 +10,12 @@ import (
 	apierrors "k8s.io/apimachinery/pkg/api/errors"
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
 	"k8s.io/apimachinery/pkg/apis/meta/v1/unstructured"
+	"k8s.io/apimachinery/pkg/labels"
 	"k8s.io/apimachinery/pkg/runtime"
 	"k8s.io/apimachinery/pkg/runtime/schema"
 	capiv1beta2 "sigs.k8s.io/cluster-api/api/core/v1beta2"
+
+	fleetv1alpha1 "github.com/rancher/fleet/pkg/apis/fleet.cattle.io/v1alpha1"
 
 	"github.com/gorizond/d7y-cattle-operator/pkg/helmop"
 )
@@ -53,7 +56,11 @@ func TestReconcileSeedCreatesSharedHelmOps(t *testing.T) {
 		t.Errorf("control selector = %v, want gate+seed", got)
 	}
 	if got := dependsOn(control); len(got) != 1 || got[0] != helmop.SharedKeyDBName() {
-		t.Errorf("control dependsOn = %v, want shared keydb", got)
+		t.Errorf("control dependsOn names = %v, want shared keydb", got)
+	}
+	refs := dependsOnRefs(control)
+	if len(refs) != 2 || refs[1].Selector == nil || refs[1].Selector.MatchLabels["p2p-dragonfly-io"] != "p2p-mtls" {
+		t.Errorf("control dependsOn = %+v, want scheduler Bundle selector", refs)
 	}
 	data := store.object("fleet-default/" + helmop.SharedDataName())
 	if got := dependsOn(data); len(got) != 3 ||
@@ -217,26 +224,22 @@ func newTestController(t *testing.T) (*Controller, *fakeHelmOpStore, *fakeEventS
 		ObjectMeta: metav1.ObjectMeta{Name: "c1-kubeconfig", Namespace: "fleet-default"},
 		Data:       map[string][]byte{"value": []byte("fake-kubeconfig")},
 	})
-	secrets.put(&corev1.Secret{
-		ObjectMeta: metav1.ObjectMeta{Name: "dragonfly-p2p-mtls", Namespace: "dragonfly-system"},
-		Type:       corev1.SecretTypeTLS,
-		Data:       map[string][]byte{"ca.crt": []byte("ca"), "tls.crt": []byte("cert")},
-	})
 	store := newFakeHelmOpStore()
 	bundles := newFakeHelmOpStore()
 	events := &fakeEventStore{}
 	controller := &Controller{
-		ctx:        context.Background(),
-		secrets:    secrets,
-		events:     events,
-		helmops:    store,
-		bundles:    bundles,
-		clusters:   newFakeClusterStore(),
-		configmaps: newFakeConfigMapStore(),
-		machines:   &fakeMachineCache{machines: []*capiv1beta2.Machine{seedMachine("c1", "c1-0", "203.0.113.10")}},
-		downstream: &fakeSchedulerPodLister{pods: []schedulerPod{{NodeName: "c1-node", HostIP: "203.0.113.10"}}},
-		registrar:  newFakeRegistrar(),
-		allocator:  newFakeAllocator(),
+		ctx:         context.Background(),
+		secrets:     secrets,
+		secretCache: secrets,
+		events:      events,
+		helmops:     store,
+		bundles:     bundles,
+		clusters:    newFakeClusterStore(),
+		configmaps:  newFakeConfigMapStore(),
+		machines:    &fakeMachineCache{machines: []*capiv1beta2.Machine{seedMachine("c1", "c1-0", "203.0.113.10")}},
+		downstream:  &fakeSchedulerPodLister{pods: []schedulerPod{{NodeName: "c1-node", HostIP: "203.0.113.10"}}},
+		registrar:   newFakeRegistrar(),
+		allocator:   newFakeAllocator(),
 		opts: Options{
 			OperatorNamespace:           "dragonfly-system",
 			MTLSSecretName:              "dragonfly-p2p-mtls",
@@ -292,13 +295,34 @@ func selectorLabels(op *unstructured.Unstructured) map[string]string {
 }
 
 func dependsOn(op *unstructured.Unstructured) []string {
-	spec := op.Object["spec"].(map[string]any)
-	raw, _ := spec["dependsOn"].([]any)
-	names := make([]string, 0, len(raw))
-	for _, item := range raw {
-		names = append(names, item.(map[string]any)["name"].(string))
+	refs := dependsOnRefs(op)
+	names := make([]string, 0, len(refs))
+	for _, ref := range refs {
+		if ref.Name != "" {
+			names = append(names, ref.Name)
+		}
 	}
 	return names
+}
+
+func dependsOnRefs(op *unstructured.Unstructured) []fleetv1alpha1.BundleRef {
+	spec := op.Object["spec"].(map[string]any)
+	raw, _ := spec["dependsOn"].([]any)
+	refs := make([]fleetv1alpha1.BundleRef, 0, len(raw))
+	for _, item := range raw {
+		ref := fleetv1alpha1.BundleRef{}
+		rawRef, _ := item.(map[string]any)
+		ref.Name, _ = rawRef["name"].(string)
+		if selector, ok := rawRef["selector"].(map[string]any); ok {
+			labels, _ := selector["matchLabels"].(map[string]any)
+			ref.Selector = &metav1.LabelSelector{MatchLabels: map[string]string{}}
+			for key, value := range labels {
+				ref.Selector.MatchLabels[key], _ = value.(string)
+			}
+		}
+		refs = append(refs, ref)
+	}
+	return refs
 }
 
 func helmValues(t *testing.T, op *unstructured.Unstructured) map[string]any {
@@ -433,39 +457,57 @@ func (f *fakeSecretStore) Update(secret *corev1.Secret) (*corev1.Secret, error) 
 	return secret.DeepCopy(), nil
 }
 
+func (f *fakeSecretStore) List(namespace string, selector labels.Selector) ([]*corev1.Secret, error) {
+	result := make([]*corev1.Secret, 0, len(f.secrets))
+	for key, secret := range f.secrets {
+		if secret.Namespace != namespace {
+			continue
+		}
+		if selector != nil && !selector.Matches(labels.Set(secret.Labels)) {
+			continue
+		}
+		result = append(result, secret.DeepCopy())
+		_ = key
+	}
+	return result, nil
+}
+
+func (f *fakeSecretStore) Delete(namespace, name string, _ *metav1.DeleteOptions) error {
+	key := namespace + "/" + name
+	if _, ok := f.secrets[key]; !ok {
+		return apierrors.NewNotFound(corev1.Resource("secrets"), name)
+	}
+	delete(f.secrets, key)
+	return nil
+}
+
 func TestHelmopClusterCarriesSchedulerIdentityAndCertRevision(t *testing.T) {
 	controller, _, _ := newTestController(t)
 	cluster := testSeedCluster("42")
-
-	first := controller.helmopCluster(cluster)
-	if first.MTLSCertRevision == "" {
-		t.Fatal("MTLSCertRevision is empty")
+	cluster.Annotations[AnnotationManager] = "true"
+	controller.clusters.(*fakeClusterStore).set(cluster)
+	if _, err := controller.reconcile("", cluster); err != nil {
+		t.Fatalf("reconcile() error = %v", err)
 	}
 
-	controller.secrets.(*fakeSecretStore).put(&corev1.Secret{
-		ObjectMeta: metav1.ObjectMeta{Name: "dragonfly-p2p-mtls", Namespace: "dragonfly-system"},
-		Type:       corev1.SecretTypeTLS,
-		Data:       map[string][]byte{"ca.crt": []byte("ca"), "tls.crt": []byte("rotated-cert")},
-	})
+	first := controller.helmopCluster(cluster)
+	if first.MTLSCertRevision == "" || first.ManagerCertRevision == "" || first.SchedulerCertRevision == "" {
+		t.Fatalf("certificate revisions = client %q manager %q scheduler %q", first.MTLSCertRevision, first.ManagerCertRevision, first.SchedulerCertRevision)
+	}
+	client, _ := controller.secrets.Get("dragonfly-system", "dragonfly-p2p-mtls", metav1.GetOptions{})
+	client.Data[corev1.TLSCertKey] = []byte("rotated-cert")
+	controller.secrets.(*fakeSecretStore).put(client)
 	second := controller.helmopCluster(cluster)
 	if second.MTLSCertRevision == first.MTLSCertRevision {
-		t.Error("MTLSCertRevision did not change after certificate rotation")
+		t.Error("MTLSCertRevision did not change after client certificate rotation")
 	}
 }
 
-func TestEnsureMTLSSecretRequiresCA(t *testing.T) {
-	controller, _, events := newTestController(t)
-	controller.secrets.(*fakeSecretStore).put(&corev1.Secret{
-		ObjectMeta: metav1.ObjectMeta{Name: "dragonfly-p2p-mtls", Namespace: "dragonfly-system"},
-		Type:       corev1.SecretTypeTLS,
-		Data:       map[string][]byte{"tls.crt": []byte("cert")},
-	})
-	cluster := testSeedCluster("42")
-
-	if err := controller.ensureMTLSSecret(cluster); err == nil {
-		t.Fatal("ensureMTLSSecret() error = nil, want missing ca.crt error")
+func hasEventReason(events []*corev1.Event, reason string) bool {
+	for _, event := range events {
+		if event.Reason == reason {
+			return true
+		}
 	}
-	if len(events.events) == 0 || events.events[0].Reason != "MTLSSecretUnavailable" {
-		t.Errorf("events = %+v, want MTLSSecretUnavailable", events.events)
-	}
+	return false
 }

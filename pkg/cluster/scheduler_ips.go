@@ -215,6 +215,43 @@ func (c *Controller) enqueueGatedClusters() {
 	}
 }
 
+func (c *Controller) watchBundles(watcher helmOpWatcher) {
+	for {
+		if c.ctx.Err() != nil {
+			return
+		}
+		watch, err := watcher.Watch(c.ctx, metav1.NamespaceAll, metav1.ListOptions{
+			LabelSelector: "p2p-dragonfly-io=p2p-mtls",
+		})
+		if err != nil {
+			select {
+			case <-c.ctx.Done():
+				return
+			case <-time.After(5 * time.Second):
+			}
+			continue
+		}
+		for event := range watch.ResultChan() {
+			obj, ok := event.Object.(metav1.Object)
+			if !ok {
+				continue
+			}
+			labels := obj.GetLabels()
+			name := labels["p2p.dragonfly.io/cluster-name"]
+			namespace := labels["p2p.dragonfly.io/cluster-namespace"]
+			if name != "" && namespace != "" && c.clusters != nil {
+				c.clusters.Enqueue(namespace, name)
+			}
+		}
+		watch.Stop()
+		select {
+		case <-c.ctx.Done():
+			return
+		case <-time.After(time.Second):
+		}
+	}
+}
+
 func (c *Controller) watchHelmOps(watcher helmOpWatcher) {
 	for {
 		if c.ctx.Err() != nil {

@@ -258,7 +258,7 @@ func TestSharedManagerKeepsGlobalSecrets(t *testing.T) {
 	op := SharedManager(sharedTestCluster())
 	if len(op.Spec.DownstreamResources) != 2 ||
 		op.Spec.DownstreamResources[0].Kind != "Secret" ||
-		op.Spec.DownstreamResources[0].Name != "dragonfly-p2p-mtls" ||
+		op.Spec.DownstreamResources[0].Name != ManagerMTLSSecretName ||
 		op.Spec.DownstreamResources[1].Kind != "Secret" ||
 		op.Spec.DownstreamResources[1].Name != "dragonfly-manager-api" {
 		t.Errorf("downstreamResources = %+v, want the fleet-global mTLS and manager credentials Secrets", op.Spec.DownstreamResources)
@@ -361,5 +361,73 @@ func TestSharedSchedulerPublicIPTemplate(t *testing.T) {
 				t.Errorf("rendered public IP = %q, want %q", got, tc.want)
 			}
 		})
+	}
+}
+
+func TestSharedControlPerSeedSchedulerTemplateAndBundle(t *testing.T) {
+	op := SharedControl(sharedTestCluster())
+	if len(op.Spec.DependsOn) != 2 {
+		t.Fatalf("dependsOn = %+v, want keydb + scheduler Bundle selector", op.Spec.DependsOn)
+	}
+	ref := op.Spec.DependsOn[1]
+	if ref.Selector == nil || ref.Selector.MatchLabels["p2p-dragonfly-io"] != "p2p-mtls" {
+		t.Errorf("scheduler dependency = %+v, want label selector", ref)
+	}
+	if op.Labels["p2p-dragonfly-io"] != "control" {
+		t.Errorf("control component label = %q, want control (never p2p-mtls)", op.Labels["p2p-dragonfly-io"])
+	}
+	if op.Labels["p2p-dragonfly-io"] == "p2p-mtls" {
+		t.Error("control HelmOp carries the cert Bundle selector label and can self-match")
+	}
+	template := op.Spec.Helm.TemplateValues["scheduler"]
+	for _, want := range []string{AnnotationMTLSCertRevision, "index .ClusterAnnotations", "scheduler-mtls", "client-mtls", ClientCertDir} {
+		if !strings.Contains(template, want) {
+			t.Errorf("scheduler template missing %q: %q", want, template)
+		}
+	}
+	values := op.Spec.Helm.Values.Data
+	volumes := valueAt(t, values, "scheduler", "extraVolumes").([]any)
+	if len(volumes) != 3 {
+		t.Errorf("scheduler extraVolumes = %v, want scheduler + client + logs", volumes)
+	}
+	if got := valueAt(t, values, "scheduler", "config", "manager", "tls", "caCert"); got != ClientCertDir+"/ca.crt" {
+		t.Errorf("manager client TLS = %v", got)
+	}
+	if got := valueAt(t, values, "scheduler", "config", "server", "tls", "caCert"); got != CertDir+"/ca.crt" {
+		t.Errorf("scheduler server TLS = %v", got)
+	}
+	if len(op.Spec.DownstreamResources) != 1 || op.Spec.DownstreamResources[0].Name != "dragonfly-p2p-mtls" {
+		t.Errorf("control downstreamResources = %+v, want client Secret only", op.Spec.DownstreamResources)
+	}
+}
+
+func TestSharedDataUsesClientRevision(t *testing.T) {
+	op := SharedData(sharedTestCluster())
+	if got := valueAt(t, op.Spec.Helm.Values.Data, "client", "podAnnotations", certRevisionAnnotation); got != "rev1" {
+		t.Errorf("client revision = %v", got)
+	}
+	if got := valueAt(t, op.Spec.Helm.Values.Data, "seedClient", "podAnnotations", certRevisionAnnotation); got != "rev1" {
+		t.Errorf("seedClient revision = %v", got)
+	}
+	if len(op.Spec.DownstreamResources) != 1 || op.Spec.DownstreamResources[0].Name != "dragonfly-p2p-mtls" {
+		t.Errorf("data downstreamResources = %+v", op.Spec.DownstreamResources)
+	}
+}
+
+func TestSharedSchedulerCertTemplateRendersRevision(t *testing.T) {
+	template := SharedControl(sharedTestCluster()).Spec.Helm.TemplateValues["scheduler"]
+	rendered, err := renderFleetTemplate(t, template, map[string]string{AnnotationMTLSCertRevision: "sched-42"})
+	if err != nil {
+		t.Fatalf("render scheduler template: %v", err)
+	}
+	var scheduler map[string]any
+	if err := kyaml.Unmarshal(rendered, &scheduler); err != nil {
+		t.Fatalf("rendered scheduler values are not YAML: %v\n%s", err, rendered)
+	}
+	if got := valueAt(t, scheduler, "podAnnotations", AnnotationMTLSCertRevision); got != "sched-42" {
+		t.Errorf("rendered scheduler revision = %v, want sched-42", got)
+	}
+	if got := valueAt(t, scheduler, "podAnnotations", certRevisionAnnotation); got != "rev1" {
+		t.Errorf("rendered client revision = %v, want rev1", got)
 	}
 }

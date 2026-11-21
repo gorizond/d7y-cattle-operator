@@ -30,8 +30,19 @@ const (
 	// node and by the headless peer Service.
 	SchedulerPort = 8002
 
-	// CertDir is where the mTLS Secret is mounted in Dragonfly pods.
+	// CertDir is where server leaf Secrets are mounted in Dragonfly pods.
 	CertDir = "/etc/dragonfly/certs"
+	// ClientCertDir is where the shared client identity is mounted.
+	ClientCertDir = "/etc/dragonfly/client-certs"
+
+	// ManagerMTLSSecretName is the manager server identity.
+	ManagerMTLSSecretName = "dragonfly-p2p-manager"
+	// SchedulerMTLSSecretName is the downstream scheduler server identity.
+	SchedulerMTLSSecretName = "dragonfly-p2p-scheduler"
+	// AnnotationMTLSCertRevision carries the per-seed scheduler leaf hash.
+	AnnotationMTLSCertRevision = "p2p.dragonfly.io/mtls-cert-revision"
+	// SchedulerCertRevisionTemplate resolves the per-target scheduler revision.
+	SchedulerCertRevisionTemplate = `${ index .ClusterAnnotations "p2p.dragonfly.io/mtls-cert-revision" }`
 
 	// VerifiedDragonflyChartVersion is the Dragonfly chart version this
 	// operator is tested against. Other versions are allowed but warn.
@@ -207,9 +218,15 @@ type Cluster struct {
 	// P2PDomain is the operator-wide scheduler base domain used to build the
 	// shared scheduler host template.
 	P2PDomain string
-	// MTLSCertRevision changes only when the P2P leaf certificate changes; it
-	// is stamped on pod templates to trigger a controlled rollout.
+	// MTLSCertRevision is the shared client identity revision.
 	MTLSCertRevision string
+	// ManagerCertRevision is the manager server identity revision.
+	ManagerCertRevision string
+	// SchedulerCertRevisionTemplate is the per-target scheduler revision.
+	SchedulerCertRevisionTemplate string
+	// SchedulerCertRevision is the per-cluster scheduler revision for local
+	// control HelmOps.
+	SchedulerCertRevision string
 	// Monitoring enables Dragonfly metrics and ServiceMonitors for the
 	// manager, scheduler, seedClient, and client components.
 	Monitoring bool
@@ -227,6 +244,13 @@ func ManagerName(cluster string) string { return objectName(cluster, "manager") 
 
 // ControlName returns the control (scheduler) HelmOp and release name.
 func ControlName(cluster string) string { return objectName(cluster, "control") }
+
+// SchedulerBundleName returns the per-seed scheduler certificate Bundle name.
+func SchedulerBundleName(cluster string) string { return objectName(cluster, "p2p-scheduler") }
+
+// SchedulerSourceSecretName returns the operator-namespace Secret holding the
+// per-seed scheduler leaf before it is embedded in the Bundle.
+func SchedulerSourceSecretName(cluster string) string { return objectName(cluster, "p2p-scheduler") }
 
 // DataName returns the data (seedClient/client) HelmOp and release name.
 func DataName(cluster string) string { return objectName(cluster, "data") }
@@ -302,7 +326,7 @@ func newHelmOpInNamespace(name, targetNamespace string, c Cluster, chart Chart, 
 		ReleaseName: name,
 		Values:      &fleetv1alpha1.GenericMap{Data: values},
 	}
-	op.Spec.Targets = []fleetv1alpha1.BundleTarget{{ClusterName: c.Name}}
+	op.Spec.Targets = []fleetv1alpha1.BundleTarget{{Name: "default", ClusterName: c.Name}}
 	for _, dependency := range dependsOn {
 		op.Spec.DependsOn = append(op.Spec.DependsOn, fleetv1alpha1.BundleRef{Name: dependency})
 	}
@@ -317,6 +341,8 @@ func sharedCluster(c Cluster) Cluster {
 	c.Name = SharedClusterNameTemplate
 	c.Labels = nil
 	c.SchedulerClusterIDTemplate = SharedSchedulerClusterIDTemplate
+	c.SchedulerCertRevision = ""
+	c.SchedulerCertRevisionTemplate = SchedulerCertRevisionTemplate
 	c.Monitoring = false
 	c.P2PDataTLS = false
 	return c
@@ -355,6 +381,7 @@ func newSharedHelmOp(name, targetNamespace string, c Cluster, chart Chart, compo
 		Values:        &fleetv1alpha1.GenericMap{Data: values},
 	}
 	op.Spec.Targets = []fleetv1alpha1.BundleTarget{{
+		Name:            "default",
 		ClusterSelector: &metav1.LabelSelector{MatchLabels: selector},
 	}}
 	for _, dependency := range dependsOn {
@@ -373,6 +400,12 @@ func schedulerClusterIDValue(c Cluster) any {
 // withMTLS declares the downstream P2P Secret so Fleet copies it into the
 // release namespace before the chart starts.
 func withMTLS(op *fleetv1alpha1.HelmOp, secretName string) *fleetv1alpha1.HelmOp {
-	op.Spec.DownstreamResources = []fleetv1alpha1.DownstreamResource{{Kind: "Secret", Name: secretName}}
+	for _, resource := range op.Spec.DownstreamResources {
+		if resource.Kind == "Secret" && resource.Name == secretName {
+			return op
+		}
+	}
+	op.Spec.DownstreamResources = append(op.Spec.DownstreamResources,
+		fleetv1alpha1.DownstreamResource{Kind: "Secret", Name: secretName})
 	return op
 }

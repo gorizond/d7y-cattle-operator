@@ -112,6 +112,15 @@ func (f *fakeSecretStore) Update(secret *corev1.Secret) (*corev1.Secret, error) 
 	return secret.DeepCopy(), nil
 }
 
+func (f *fakeSecretStore) Delete(namespace, name string, _ *metav1.DeleteOptions) error {
+	key := namespace + "/" + name
+	if _, ok := f.secrets[key]; !ok {
+		return apierrors.NewNotFound(corev1.Resource("secrets"), name)
+	}
+	delete(f.secrets, key)
+	return nil
+}
+
 func TestReplicateSecretStripsLastAppliedAnnotation(t *testing.T) {
 	store := newFakeSecretStore()
 	source := &corev1.Secret{

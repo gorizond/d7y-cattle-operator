@@ -69,8 +69,8 @@ func dataValues(c Cluster, names Names) map[string]any {
 			"stats":   map[string]any{"ip": "127.0.0.1", "server": map[string]any{"port": 4104}},
 			"storage": map[string]any{"server": map[string]any{"tcpPort": 4105, "quicPort": 4106}},
 		},
-		"extraVolumes":      volumes(c.MTLSSecretName, logVolume()),
-		"extraVolumeMounts": volumeMounts(logVolumeMount("/var/log/dragonfly/dfdaemon/")),
+		"extraVolumes":      volumes(secretVolume("mtls", c.MTLSSecretName), logVolume()),
+		"extraVolumeMounts": volumeMounts(secretVolumeMount("mtls", CertDir), logVolumeMount("/var/log/dragonfly/dfdaemon/")),
 		"podAnnotations":    certPodAnnotations(c.MTLSCertRevision),
 	}
 	client := map[string]any{
@@ -102,7 +102,7 @@ func dataValues(c Cluster, names Names) map[string]any {
 			"stats":   map[string]any{"ip": "127.0.0.1", "server": map[string]any{"port": 4004}},
 			"storage": map[string]any{"server": map[string]any{"tcpPort": 4005, "quicPort": 4006}},
 		},
-		"extraVolumes": volumes(c.MTLSSecretName,
+		"extraVolumes": volumes(secretVolume("mtls", c.MTLSSecretName),
 			map[string]any{
 				"name": "storage",
 				"hostPath": map[string]any{
@@ -113,6 +113,7 @@ func dataValues(c Cluster, names Names) map[string]any {
 			logVolume(),
 		),
 		"extraVolumeMounts": volumeMounts(
+			secretVolumeMount("mtls", CertDir),
 			map[string]any{"name": "storage", "mountPath": "/var/lib/dragonfly/"},
 			logVolumeMount("/var/log/dragonfly/dfdaemon/"),
 		),
