@@ -663,3 +663,121 @@ func TestDeleteSchedulerPKICleanup(t *testing.T) {
 		t.Error("scheduler source Secret was not deleted with the seed role")
 	}
 }
+
+func putCAState(t *testing.T, controller *Controller, ca *pki.CA, bundle []byte, deadline string) {
+	t.Helper()
+	secret := &corev1.Secret{
+		ObjectMeta: metav1.ObjectMeta{
+			Name: pki.CASecretName, Namespace: "dragonfly-system",
+			Annotations: map[string]string{pki.CAAnnotationLegacyTrustDeadline: deadline},
+		},
+		Type: corev1.SecretTypeOpaque,
+		Data: map[string][]byte{
+			"ca.crt":        ca.CertPEM,
+			pki.CAKey:       ca.KeyPEM,
+			pki.CABundleKey: bundle,
+		},
+	}
+	controller.secrets.(*fakeSecretStore).put(secret)
+}
+
+func TestSecondRotationRejectsStaleLegacyServerLeaf(t *testing.T) {
+	controller, _, _ := newTestController(t)
+	oldCA, err := pki.NewCA(nil)
+	if err != nil {
+		t.Fatalf("NewCA(old) error = %v", err)
+	}
+	staleCA, err := pki.NewCA(nil)
+	if err != nil {
+		t.Fatalf("NewCA(stale) error = %v", err)
+	}
+	stale, err := staleCA.Sign(pki.IssueOptions{
+		CommonName:  "stale",
+		DNSNames:    []string{"d7y-scheduler.c-m-a.example.com", "c1-control-scheduler.dragonfly-system.svc", "grpc.example.com", "api.example.com", "dragonfly-manager.dragonfly-system.svc", "localhost"},
+		IPAddresses: []net.IP{net.ParseIP("203.0.113.10"), net.ParseIP("127.0.0.1"), net.ParseIP("::1")},
+		ServerAuth:  true,
+		ClientAuth:  true,
+	})
+	if err != nil {
+		t.Fatalf("Sign(stale) error = %v", err)
+	}
+	activeCA, err := pki.NewCA(nil)
+	if err != nil {
+		t.Fatalf("NewCA(active) error = %v", err)
+	}
+	bundle := append(append([]byte(nil), activeCA.CertPEM...), oldCA.CertPEM...)
+	putCAState(t, controller, activeCA, bundle, time.Now().Add(time.Hour).UTC().Format(time.RFC3339))
+	controller.secrets.(*fakeSecretStore).put(&corev1.Secret{
+		ObjectMeta: metav1.ObjectMeta{Name: legacyServerSecretName, Namespace: "dragonfly-system"},
+		Type:       corev1.SecretTypeTLS,
+		Data:       map[string][]byte{"ca.crt": bundle, "tls.crt": stale.CertPEM, "tls.key": stale.KeyPEM},
+	})
+	cluster := pkiSeed("c1", "c-m-a")
+	cluster.Annotations[AnnotationManager] = "true"
+	reconcileCluster(t, controller, cluster)
+
+	active := mustCerts(t, activeCA.CertPEM)
+	for _, name := range []string{helmop.ManagerMTLSSecretName, helmop.SchedulerSourceSecretName("c1")} {
+		secret := getSecret(t, controller, "dragonfly-system", name)
+		leafCert := leaf(t, secret)
+		if leafCert.CheckSignatureFrom(active[0]) != nil {
+			t.Errorf("%s is not signed by the active CA", name)
+		}
+		if !pki.CertTrustedByBundle(secret.Data[corev1.TLSCertKey], bundle) {
+			t.Errorf("%s is not trusted by the new bundle", name)
+		}
+	}
+}
+
+func mustCerts(t *testing.T, pemBytes []byte) []*x509.Certificate {
+	t.Helper()
+	certs, err := pki.ParseCertificates(pemBytes)
+	if err != nil {
+		t.Fatalf("parse certs: %v", err)
+	}
+	return certs
+}
+
+func TestLegacyServerCleanupOnlyAfterPhaseB(t *testing.T) {
+	controller, _, _ := newTestController(t)
+	installLegacyClient(t, controller, "c-m-a")
+	controller.machines = &fakeMachineCache{machines: []*capiv1beta2.Machine{seedMachine("c1", "c1-0", "203.0.113.10")}}
+	controller.downstream = &fakeSchedulerPodLister{pods: []schedulerPod{{NodeName: "c1-node", HostIP: "203.0.113.10"}}}
+	cluster := pkiSeed("c1", "c-m-a")
+	reconcileCluster(t, controller, cluster)
+	if _, err := controller.secrets.Get("dragonfly-system", legacyServerSecretName, metav1.GetOptions{}); err != nil {
+		t.Fatalf("legacy server Secret missing during Phase A: %v", err)
+	}
+	ca := getSecret(t, controller, "dragonfly-system", pki.CASecretName)
+	if ca.Annotations == nil {
+		ca.Annotations = map[string]string{}
+	}
+	ca.Annotations[pki.CAAnnotationLegacyTrustDeadline] = time.Now().Add(-time.Minute).UTC().Format(time.RFC3339)
+	controller.secrets.(*fakeSecretStore).put(ca)
+	reconcileCluster(t, controller, cluster)
+	if _, err := controller.secrets.Get("dragonfly-system", legacyServerSecretName, metav1.GetOptions{}); err == nil {
+		t.Error("legacy server Secret was not cleaned up after Phase B")
+	}
+}
+
+func TestServerLeafMustBeTrustedByBundle(t *testing.T) {
+	caA, err := pki.NewCA(nil)
+	if err != nil {
+		t.Fatalf("NewCA(A) error = %v", err)
+	}
+	caB, err := pki.NewCA(nil)
+	if err != nil {
+		t.Fatalf("NewCA(B) error = %v", err)
+	}
+	leafBundle, err := caA.Sign(pki.IssueOptions{CommonName: "legacy", ServerAuth: true, ClientAuth: true})
+	if err != nil {
+		t.Fatalf("Sign() error = %v", err)
+	}
+	secret := &corev1.Secret{Data: map[string][]byte{"tls.crt": leafBundle.CertPEM, "tls.key": leafBundle.KeyPEM}}
+	if serverLeafCovers(secret, &pki.CA{BundlePEM: caB.CertPEM}, pki.IssueOptions{}) {
+		t.Error("serverLeafCovers accepted a leaf not present in the bundle")
+	}
+	if !serverLeafCovers(secret, &pki.CA{BundlePEM: append(append([]byte(nil), caB.CertPEM...), caA.CertPEM...)}, pki.IssueOptions{}) {
+		t.Error("serverLeafCovers rejected a leaf trusted by the bundle")
+	}
+}

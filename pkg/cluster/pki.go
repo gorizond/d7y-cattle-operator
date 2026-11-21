@@ -52,7 +52,7 @@ func (c *Controller) ensurePKI(cluster *provv1.Cluster, roles Roles, seedIPs []s
 	if clientErr != nil && !apierrors.IsNotFound(clientErr) {
 		return cluster, false, fmt.Errorf("get client mTLS Secret %s/%s: %w", operatorNS, c.opts.MTLSSecretName, clientErr)
 	}
-	_, managerErr := c.secrets.Get(operatorNS, helmop.ManagerMTLSSecretName, metav1.GetOptions{})
+	manager, managerErr := c.secrets.Get(operatorNS, helmop.ManagerMTLSSecretName, metav1.GetOptions{})
 	if managerErr != nil && !apierrors.IsNotFound(managerErr) {
 		return cluster, false, fmt.Errorf("get manager mTLS Secret %s/%s: %w", operatorNS, helmop.ManagerMTLSSecretName, managerErr)
 	}
@@ -118,14 +118,14 @@ func (c *Controller) ensurePKI(cluster *provv1.Cluster, roles Roles, seedIPs []s
 	// Preserve the legacy server leaf before the client identity can be
 	// re-signed. Server identities never read tls.crt/tls.key from the mutable
 	// client Secret again after this point.
-	legacyServer, err := c.ensureLegacyServerSecret(operatorNS, client, clientLeafValid, ca, phaseA)
+	legacyServer, err := c.ensureLegacyServerSecret(operatorNS, client, clientLeafValid, manager, scheduler, ca, phaseA)
 	if err != nil {
 		return cluster, false, err
 	}
 
 	if roles.Seed {
 		clientOpts := pki.IssueOptions{CommonName: "d7y-cattle-operator-client", ClientAuth: true}
-		reuseClient := phaseA && clientLegacy && clientLeafValid
+		reuseClient := phaseA && clientLegacy && clientLeafValid && pki.CertTrustedByBundle(client.Data[corev1.TLSCertKey], ca.BundlePEM)
 		if _, err := pki.EnsureLeaf(c.secrets, operatorNS, c.opts.MTLSSecretName, ca, clientOpts, reuseClient); err != nil {
 			c.event(cluster, corev1.EventTypeWarning, "MTLSSecretUnavailable", err.Error())
 			return cluster, false, err
@@ -179,7 +179,41 @@ func (c *Controller) ensurePKI(cluster *provv1.Cluster, roles Roles, seedIPs []s
 		}
 	}
 
+	if !phaseA {
+		if err := c.cleanupRetiredLegacyServer(operatorNS, ca); err != nil {
+			return cluster, false, err
+		}
+	}
 	return cluster, true, nil
+}
+
+func (c *Controller) cleanupRetiredLegacyServer(namespace string, ca *pki.CA) error {
+	if c.secretCache == nil {
+		return nil
+	}
+	legacy, err := c.secrets.Get(namespace, legacyServerSecretName, metav1.GetOptions{})
+	if apierrors.IsNotFound(err) {
+		return nil
+	}
+	if err != nil {
+		return fmt.Errorf("get legacy server Secret: %w", err)
+	}
+	leaves, err := c.secretCache.List(namespace, labels.SelectorFromSet(map[string]string{pki.LeafGenerationLabel: pki.LeafGenerationV2}))
+	if err != nil {
+		return fmt.Errorf("list leaves for legacy cleanup: %w", err)
+	}
+	for _, leaf := range leaves {
+		if leaf == nil || leaf.Name == legacy.Name {
+			continue
+		}
+		if !pki.CertTrustedByBundle(leaf.Data[corev1.TLSCertKey], ca.BundlePEM) {
+			return nil
+		}
+	}
+	if err := c.secrets.Delete(namespace, legacyServerSecretName, &metav1.DeleteOptions{}); err != nil && !apierrors.IsNotFound(err) {
+		return fmt.Errorf("delete retired legacy server Secret: %w", err)
+	}
+	return nil
 }
 
 func (c *Controller) caDeadline(namespace string) (string, error) {
@@ -211,25 +245,49 @@ func (c *Controller) setCAAnnotation(namespace, key, value string) error {
 	}
 	secret.Annotations[key] = value
 	delete(secret.Annotations, "kubectl.kubernetes.io/last-applied-configuration")
-	secret.Labels = map[string]string{
+	secret.Labels = mergeStringMap(secret.Labels, map[string]string{
 		pki.ManagedByLabel: pki.ManagedByValue,
-	}
+	})
 	if _, err := c.secrets.Update(secret); err != nil {
 		return fmt.Errorf("update CA Secret annotations: %w", err)
 	}
 	return nil
 }
 
-func (c *Controller) ensureLegacyServerSecret(namespace string, client *corev1.Secret, clientValid bool, ca *pki.CA, phaseA bool) (*corev1.Secret, error) {
-	if !phaseA || !clientValid || client == nil || client.Data == nil || signedByCA(client.Data[corev1.TLSCertKey], ca) {
-		return getOptionalSecret(c.secrets, namespace, legacyServerSecretName)
-	}
+func (c *Controller) ensureLegacyServerSecret(namespace string, client *corev1.Secret, clientValid bool, manager, scheduler *corev1.Secret, ca *pki.CA, phaseA bool) (*corev1.Secret, error) {
 	current, err := c.secrets.Get(namespace, legacyServerSecretName, metav1.GetOptions{})
 	if err == nil {
-		return current, nil
+		activeFingerprint := pki.Fingerprint(ca.CertPEM)
+		if current.Labels[pki.CAFingerprintLabel] == activeFingerprint && isBundleTrustedServer(current, ca) {
+			return current, nil
+		}
+		if isBundleTrustedServer(current, ca) {
+			// The leaf is still trusted; just refresh its active-CA marker.
+			current.Labels = mergeStringMap(current.Labels, map[string]string{
+				pki.CAFingerprintLabel:  activeFingerprint,
+				pki.LeafGenerationLabel: pki.LeafGenerationV2,
+				pki.ManagedByLabel:      pki.ManagedByValue,
+			})
+			return c.secrets.Update(current)
+		}
+		// A stale legacy leaf must never be minted into a new identity.
+		source := firstTrustedServer(ca, manager, scheduler)
+		if source == nil && phaseA && clientValid && isBundleTrustedServer(client, ca) {
+			source = client
+		}
+		if source == nil {
+			if err := c.secrets.Delete(namespace, legacyServerSecretName, &metav1.DeleteOptions{}); err != nil && !apierrors.IsNotFound(err) {
+				return nil, fmt.Errorf("delete stale legacy server Secret: %w", err)
+			}
+			return nil, nil
+		}
+		return c.refreshLegacyServer(current, source, ca, activeFingerprint)
 	}
 	if !apierrors.IsNotFound(err) {
 		return nil, fmt.Errorf("get legacy server Secret: %w", err)
+	}
+	if !phaseA || !clientValid || client == nil || client.Data == nil || signedByCA(client.Data[corev1.TLSCertKey], ca) || !isBundleTrustedServer(client, ca) {
+		return nil, nil
 	}
 	return c.secrets.Create(&corev1.Secret{
 		ObjectMeta: metav1.ObjectMeta{
@@ -238,6 +296,7 @@ func (c *Controller) ensureLegacyServerSecret(namespace string, client *corev1.S
 			Labels: map[string]string{
 				pki.LeafGenerationLabel: pki.LeafGenerationV2,
 				pki.ManagedByLabel:      pki.ManagedByValue,
+				pki.CAFingerprintLabel:  pki.Fingerprint(ca.CertPEM),
 			},
 		},
 		Type: corev1.SecretTypeTLS,
@@ -249,6 +308,45 @@ func (c *Controller) ensureLegacyServerSecret(namespace string, client *corev1.S
 	})
 }
 
+func (c *Controller) refreshLegacyServer(current, source *corev1.Secret, ca *pki.CA, fingerprint string) (*corev1.Secret, error) {
+	current.Type = corev1.SecretTypeTLS
+	current.Data = map[string][]byte{
+		"ca.crt":                append([]byte(nil), ca.BundlePEM...),
+		corev1.TLSCertKey:       append([]byte(nil), source.Data[corev1.TLSCertKey]...),
+		corev1.TLSPrivateKeyKey: append([]byte(nil), source.Data[corev1.TLSPrivateKeyKey]...),
+	}
+	current.Labels = mergeStringMap(current.Labels, map[string]string{
+		pki.CAFingerprintLabel:  fingerprint,
+		pki.LeafGenerationLabel: pki.LeafGenerationV2,
+		pki.ManagedByLabel:      pki.ManagedByValue,
+	})
+	delete(current.Annotations, "kubectl.kubernetes.io/last-applied-configuration")
+	return c.secrets.Update(current)
+}
+
+func firstTrustedServer(ca *pki.CA, secrets ...*corev1.Secret) *corev1.Secret {
+	for _, secret := range secrets {
+		if isBundleTrustedServer(secret, ca) {
+			return secret
+		}
+	}
+	return nil
+}
+
+func isBundleTrustedServer(secret *corev1.Secret, ca *pki.CA) bool {
+	if secret == nil || !pki.KeyMatches(secret.Data[corev1.TLSCertKey], secret.Data[corev1.TLSPrivateKeyKey]) {
+		return false
+	}
+	certs, err := pki.ParseCertificates(secret.Data[corev1.TLSCertKey])
+	if err != nil || len(certs) == 0 || !pki.HasServerAuth(certs[0]) || !pki.HasClientAuth(certs[0]) {
+		return false
+	}
+	if ca != nil {
+		return pki.CertTrustedByBundle(secret.Data[corev1.TLSCertKey], ca.BundlePEM)
+	}
+	return true
+}
+
 func getOptionalSecret(store apply.SecretStore, namespace, name string) (*corev1.Secret, error) {
 	secret, err := store.Get(namespace, name, metav1.GetOptions{})
 	if apierrors.IsNotFound(err) {
@@ -258,7 +356,7 @@ func getOptionalSecret(store apply.SecretStore, namespace, name string) (*corev1
 }
 
 func (c *Controller) ensureServerLeaf(namespace, name string, legacy *corev1.Secret, ca *pki.CA, opts pki.IssueOptions, phaseA bool) (*corev1.Secret, error) {
-	legacyValid := phaseA && serverLeafCovers(legacy, opts)
+	legacyValid := phaseA && serverLeafCovers(legacy, ca, opts)
 	current, err := c.secrets.Get(namespace, name, metav1.GetOptions{})
 	if apierrors.IsNotFound(err) {
 		if legacyValid {
@@ -272,7 +370,7 @@ func (c *Controller) ensureServerLeaf(namespace, name string, legacy *corev1.Sec
 	if err != nil {
 		return nil, err
 	}
-	if legacyValid && !serverLeafCovers(current, opts) {
+	if legacyValid && !serverLeafCovers(current, ca, opts) {
 		return c.repairLeafFrom(current, legacy, ca)
 	}
 	if legacyValid {
@@ -284,12 +382,14 @@ func (c *Controller) ensureServerLeaf(namespace, name string, legacy *corev1.Sec
 	return c.secrets.Get(namespace, name, metav1.GetOptions{})
 }
 
-func serverLeafCovers(secret *corev1.Secret, opts pki.IssueOptions) bool {
+func serverLeafCovers(secret *corev1.Secret, ca *pki.CA, opts pki.IssueOptions) bool {
 	if secret == nil || !pki.KeyMatches(secret.Data[corev1.TLSCertKey], secret.Data[corev1.TLSPrivateKeyKey]) {
 		return false
 	}
 	certs, err := pki.ParseCertificates(secret.Data[corev1.TLSCertKey])
-	return err == nil && len(certs) > 0 && pki.HasServerAuth(certs[0]) && pki.HasClientAuth(certs[0]) && pki.SANsCover(certs[0], opts.DNSNames, opts.IPAddresses)
+	return err == nil && len(certs) > 0 && pki.HasServerAuth(certs[0]) && pki.HasClientAuth(certs[0]) &&
+		pki.SANsCover(certs[0], opts.DNSNames, opts.IPAddresses) &&
+		pki.CertTrustedByBundle(secret.Data[corev1.TLSCertKey], ca.BundlePEM)
 }
 
 func (c *Controller) createLeafFrom(namespace, name string, source *corev1.Secret, ca *pki.CA) (*corev1.Secret, error) {

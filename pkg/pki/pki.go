@@ -39,6 +39,9 @@ const (
 	// CAAnnotationLegacyTrustDeadline stores the global Phase A deadline on the
 	// CA Secret.
 	CAAnnotationLegacyTrustDeadline = "p2p.dragonfly.io/legacy-trust-deadline"
+	// CAFingerprintLabel stores the active CA fingerprint on the preserved
+	// legacy server Secret.
+	CAFingerprintLabel = "p2p.dragonfly.io/ca-fingerprint"
 
 	// validity is the lifetime of the CA and leaf certificates.
 	validity = 100 * 365 * 24 * time.Hour
@@ -442,6 +445,31 @@ func IsPublicIP(ip net.IP) bool {
 	}
 	return !ip.IsLoopback() && !ip.IsUnspecified() && !ip.IsPrivate() &&
 		!ip.IsLinkLocalUnicast() && !ip.IsLinkLocalMulticast() && !ip.IsMulticast()
+}
+
+// Fingerprint returns a stable SHA-256 fingerprint of a PEM certificate.
+func Fingerprint(certPEM []byte) string {
+	sum := sha256.Sum256(certPEM)
+	return hex.EncodeToString(sum[:])
+}
+
+// CertTrustedByBundle reports whether the leaf chains to any CA certificate
+// present in the supplied trust bundle.
+func CertTrustedByBundle(certPEM, bundlePEM []byte) bool {
+	certs, err := ParseCertificates(certPEM)
+	if err != nil || len(certs) == 0 {
+		return false
+	}
+	bundle, err := ParseCertificates(bundlePEM)
+	if err != nil {
+		return false
+	}
+	for _, ca := range bundle {
+		if certs[0].CheckSignatureFrom(ca) == nil {
+			return true
+		}
+	}
+	return false
 }
 
 // SecretRevision returns a stable hash of ca.crt, tls.crt, and tls.key.

@@ -435,7 +435,8 @@ The legacy shared Secret was signed by an ephemeral CA whose key no longer
 exists, so the first upgrade must rotate trust once:
 
 1. **Phase A (trust-first).** The operator creates the new stable CA and writes
-   `ca-bundle.crt = new CA + legacy CA`, sets
+   `ca-bundle.crt = new CA + the CA that signed the legacy leaf` (the new CA
+   must be present in the bundle), sets
    `p2p.dragonfly.io/legacy-trust-deadline` (24h) on the CA Secret, and
    preserves the legacy server identity once in `dragonfly-p2p-legacy`. The
    client identity stays legacy until Phase B; manager/scheduler identities use
@@ -460,10 +461,14 @@ revision and replaces the injected block when that revision changes.
 #### Manual CA rotation
 
 1. Replace `ca.crt` and `ca.key` in `dragonfly-p2p-ca` in place and set
-   `ca-bundle.crt` to the new CA followed by the old CA.
+   `ca-bundle.crt = new CA + the currently signing CA` (the new active CA must
+   be first and present in the bundle).
 2. Set `p2p.dragonfly.io/legacy-trust-deadline` on the CA Secret to a future
-   time and let all pods and machine-bootstrap blocks pick up the bundle.
-3. After the deadline, reconcile re-signs the client/manager/per-seed leaves.
+   time and let all pods and machine-bootstrap blocks pick up the bundle. Keep
+   `dragonfly-p2p-legacy` until Phase B.
+3. After the deadline, reconcile re-signs the client/manager/per-seed leaves;
+   `dragonfly-p2p-legacy` is deleted automatically once all labeled leaves are
+   active. A past deadline forces Phase B immediately.
 4. Remove the old CA from the bundle only after every leaf and host bootstrap
    has rolled. Never delete leaf Secrets; the stable CA Secret is the only
    control point.
@@ -821,10 +826,10 @@ make helm-template  # render the operator, extras, p2p-static, and mirror charts
 
 - The operator runs as UID/GID 65532 with a read-only root filesystem.
 - Leaf private keys exist in `kubernetes.io/tls` Secrets, the per-seed source
-  Secret, and the inline Secret inside the scheduler cert Bundle. The CA private
-  key exists only in the Opaque `dragonfly-p2p-ca` Secret. Neither is logged.
-  Restrict Bundle read access: anyone who can read the cert Bundle can read the
-  scheduler leaf `tls.key`.
+  Secret, `dragonfly-p2p-legacy`, and the inline Secret inside the scheduler
+  cert Bundle. The CA private key exists only in the Opaque
+  `dragonfly-p2p-ca` Secret. Neither is logged. Restrict Bundle read access:
+  anyone who can read the cert Bundle can read the scheduler leaf `tls.key`.
 - The operator uses Wrangler/lasso clients for its own resources and a client-go
   clientset only to read downstream scheduler pods through the per-cluster
   kubeconfig. Its ClusterRole includes create/update/patch on Fleet Bundles for
