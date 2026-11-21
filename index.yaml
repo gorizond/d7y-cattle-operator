@@ -76,6 +76,20 @@ entries:
     version: 0.1.0
   d7y-cattle-operator:
   - apiVersion: v2
+    appVersion: v0.3.18
+    created: "2026-11-21T23:09:22.263903887Z"
+    description: Dragonfly P2P operator for Rancher-managed RKE2 clusters
+    digest: 1480f1028a30da99737f45d0869c4711f7a77a58725219b663fd782cc635bdca
+    home: https://github.com/gorizond/d7y-cattle-operator
+    kubeVersion: '>=1.28.0-0'
+    name: d7y-cattle-operator
+    sources:
+    - https://github.com/gorizond/d7y-cattle-operator
+    type: application
+    urls:
+    - https://github.com/gorizond/d7y-cattle-operator/releases/download/d7y-cattle-operator-0.3.18/d7y-cattle-operator-0.3.18.tgz
+    version: 0.3.18
+  - apiVersion: v2
     appVersion: v0.3.17
     created: "2026-11-21T22:34:24.647729148Z"
     description: Dragonfly P2P operator for Rancher-managed RKE2 clusters
@@ -1395,6 +1409,17 @@ entries:
   p2p-host-sync:
   - apiVersion: v2
     appVersion: 1.0.0
+    created: "2026-11-21T23:09:22.76027785Z"
+    description: Keeps the pre-RKE2 host Dragonfly config and scheduler marker current
+      from a per-cluster ConfigMap.
+    digest: d8aebc54b87c40f34284196d53f335ef4490afda088b9171941ac63e5a5e1ddf
+    name: p2p-host-sync
+    type: application
+    urls:
+    - https://github.com/gorizond/d7y-cattle-operator/releases/download/p2p-host-sync-0.1.4/p2p-host-sync-0.1.4.tgz
+    version: 0.1.4
+  - apiVersion: v2
+    appVersion: 1.0.0
     created: "2026-11-21T22:34:25.103149291Z"
     description: Keeps the pre-RKE2 host Dragonfly config and scheduler marker current
       from a per-cluster ConfigMap.
@@ -1873,4 +1898,4 @@ entries:
     urls:
     - https://github.com/gorizond/d7y-cattle-operator/releases/download/registry-proxy-0.1.0/registry-proxy-0.1.0.tgz
     version: 0.1.0
-generated: "2026-11-21T22:34:25.341276592Z"
+generated: "2026-11-21T23:09:22.945950916Z"
