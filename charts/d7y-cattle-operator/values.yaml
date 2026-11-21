@@ -88,7 +88,7 @@ hostSync:
   chart:
     repo: https://gorizond.github.io/d7y-cattle-operator
     name: p2p-host-sync
-    version: 0.1.0
+    version: 0.1.1
 
 # Strict node-local containerd registry mirror for seed/data clusters.
 containerdMirror:

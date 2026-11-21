@@ -30,7 +30,7 @@ const (
 	DefaultMirrorChartVersion            = "0.1.0"
 	DefaultHostSyncChartRepo             = "https://gorizond.github.io/d7y-cattle-operator"
 	DefaultHostSyncChartName             = "p2p-host-sync"
-	DefaultHostSyncChartVersion          = "0.1.0"
+	DefaultHostSyncChartVersion          = "0.1.1"
 	DefaultExtrasIngressController       = "nginx"
 	DefaultExtrasIngressClassName        = ""
 	DefaultExtrasIngressGRPCEnabled      = true
