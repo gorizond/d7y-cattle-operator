@@ -62,12 +62,28 @@ func TestReconcileSeedCreatesSharedHelmOps(t *testing.T) {
 	if len(refs) != 2 || refs[1].Selector == nil || refs[1].Selector.MatchLabels["p2p-dragonfly-io"] != "p2p-mtls" {
 		t.Errorf("control dependsOn = %+v, want scheduler Bundle selector", refs)
 	}
+	if got := downstreamSecretNames(control); len(got) != 1 || got[0] != "dragonfly-p2p-mtls" {
+		t.Errorf("control downstreamSecretNames = %v, want the client Secret", got)
+	}
 	data := store.object("fleet-default/" + helmop.SharedDataName())
 	if got := dependsOn(data); len(got) != 3 ||
 		got[0] != helmop.SharedControlName() ||
 		got[1] != helmop.SharedKeyDBName() ||
 		got[2] != helmop.SharedExtrasName() {
 		t.Errorf("data dependsOn = %v", got)
+	}
+	if got := downstreamSecretNames(data); len(got) != 0 {
+		t.Errorf("data downstreamSecretNames = %v, want none: control owns the client Secret", got)
+	}
+	hostSync := store.object("fleet-default/" + helmop.HostSyncName("c1"))
+	if hostSync == nil {
+		t.Fatal("host-sync HelmOp was not created")
+	}
+	if got := dependsOn(hostSync); len(got) != 1 || got[0] != helmop.SharedControlName() {
+		t.Errorf("host-sync dependsOn = %v, want shared control", got)
+	}
+	if got := downstreamSecretNames(hostSync); len(got) != 0 {
+		t.Errorf("host-sync downstreamSecretNames = %v, want none: control owns the client Secret", got)
 	}
 	mirror := store.object("fleet-default/" + helmop.SharedMirrorName())
 	if got := dependsOn(mirror); len(got) != 1 || got[0] != helmop.SharedDataName() {
@@ -293,6 +309,20 @@ func selectorLabels(op *unstructured.Unstructured) map[string]string {
 		labels[key], _ = value.(string)
 	}
 	return labels
+}
+
+func downstreamSecretNames(op *unstructured.Unstructured) []string {
+	raw, _, _ := unstructured.NestedSlice(op.Object, "spec", "downstreamResources")
+	names := make([]string, 0, len(raw))
+	for _, item := range raw {
+		resource, _ := item.(map[string]any)
+		kind, _ := resource["kind"].(string)
+		name, _ := resource["name"].(string)
+		if kind == "Secret" {
+			names = append(names, name)
+		}
+	}
+	return names
 }
 
 func dependsOn(op *unstructured.Unstructured) []string {
@@ -532,6 +562,12 @@ func TestSeedHostSyncFollowsSchedulerIPs(t *testing.T) {
 		t.Fatal("host-sync HelmOp was not created")
 	}
 	op := store.object("fleet-default/" + helmop.HostSyncName("c1"))
+	if got := dependsOn(op); len(got) != 1 || got[0] != helmop.SharedControlName() {
+		t.Errorf("host-sync dependsOn = %v, want shared control", got)
+	}
+	if got := downstreamSecretNames(op); len(got) != 0 {
+		t.Errorf("host-sync downstreamSecretNames = %v, want none: control owns the client Secret", got)
+	}
 	ips, _ := helmValues(t, op)["schedulerIPs"].([]any)
 	if len(ips) != 2 || ips[0] != "203.0.113.10:8002" || ips[1] != "203.0.113.11:8002" {
 		t.Errorf("host-sync schedulerIPs = %v", ips)

@@ -9,8 +9,9 @@ image:
 # operator before it is placed here.
 schedulerIPs: []
 
-# Client identity Secret mounted into the pod. The operator delivers it through
-# the HostSync HelmOp's downstreamResources.
+# Client identity Secret mounted into the pod. The shared control HelmOp is the
+# only downstreamResources owner; host-sync depends on control and only mounts
+# the copy it delivers.
 mtlsSecret: dragonfly-p2p-mtls
 
 # ConfigMap/Secret source directory and host config directory.

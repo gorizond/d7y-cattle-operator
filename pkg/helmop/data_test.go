@@ -22,8 +22,8 @@ func TestDataHelmOp(t *testing.T) {
 		op.Spec.DependsOn[2].Name != "c1-extras" {
 		t.Errorf("dependsOn = %+v", op.Spec.DependsOn)
 	}
-	if len(op.Spec.DownstreamResources) != 1 || op.Spec.DownstreamResources[0].Name != "dragonfly-p2p-mtls" {
-		t.Errorf("downstreamResources = %+v", op.Spec.DownstreamResources)
+	if len(op.Spec.DownstreamResources) != 0 {
+		t.Errorf("downstreamResources = %+v, want none: control is the sole client Secret owner", op.Spec.DownstreamResources)
 	}
 
 	values := op.Spec.Helm.Values.Data
@@ -233,6 +233,9 @@ func TestControlHelmOp(t *testing.T) {
 	}
 	if len(op.Spec.DependsOn) != 2 || op.Spec.DependsOn[0].Name != "c1-keydb" || op.Spec.DependsOn[1].Name != SchedulerBundleName("c1") {
 		t.Errorf("dependsOn = %+v, want keydb and scheduler Bundle", op.Spec.DependsOn)
+	}
+	if len(op.Spec.DownstreamResources) != 1 || op.Spec.DownstreamResources[0].Name != "dragonfly-p2p-mtls" {
+		t.Errorf("control downstreamResources = %+v, want the client Secret", op.Spec.DownstreamResources)
 	}
 
 	values := op.Spec.Helm.Values.Data

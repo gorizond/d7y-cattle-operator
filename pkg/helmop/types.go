@@ -402,8 +402,14 @@ func schedulerClusterIDValue(c Cluster) any {
 	return c.SchedulerClusterID
 }
 
-// withMTLS declares the downstream P2P Secret so Fleet copies it into the
-// release namespace before the chart starts.
+// withMTLS declares a downstream Secret so Fleet copies it into the release
+// namespace before the chart starts.
+//
+// Each copied Secret must have exactly one owning HelmOp per target cluster.
+// Fleet stamps fleet.cattle.io/bundledeployment on the destination Secret; a
+// second declaration overwrites the stamp and makes Fleet force a Helm upgrade
+// of that release. The shared control owns the client identity; the manager
+// owns its own server identity and API credentials.
 func withMTLS(op *fleetv1alpha1.HelmOp, secretName string) *fleetv1alpha1.HelmOp {
 	for _, resource := range op.Spec.DownstreamResources {
 		if resource.Kind == "Secret" && resource.Name == secretName {

@@ -17,8 +17,11 @@ func TestHostSyncHelmOp(t *testing.T) {
 	if got := valueAt(t, values, "mtlsSecret"); got != "dragonfly-p2p-mtls" {
 		t.Errorf("mtlsSecret = %v", got)
 	}
-	if len(op.Spec.DownstreamResources) != 1 || op.Spec.DownstreamResources[0].Name != "dragonfly-p2p-mtls" {
-		t.Errorf("downstreamResources = %+v", op.Spec.DownstreamResources)
+	if len(op.Spec.DependsOn) != 1 || op.Spec.DependsOn[0].Name != SharedControlName() {
+		t.Errorf("dependsOn = %+v, want the shared control Bundle", op.Spec.DependsOn)
+	}
+	if len(op.Spec.DownstreamResources) != 0 {
+		t.Errorf("downstreamResources = %+v, want none: control is the sole client Secret owner", op.Spec.DownstreamResources)
 	}
 	if op.Spec.Helm.Chart != "p2p-host-sync" || op.Spec.Helm.Version != "0.1.0" {
 		t.Errorf("chart = %s/%s", op.Spec.Helm.Chart, op.Spec.Helm.Version)
