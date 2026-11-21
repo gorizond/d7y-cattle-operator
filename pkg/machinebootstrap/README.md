@@ -37,6 +37,45 @@ scheduler IPs are still empty, so the host dfdaemon does not start; later
 reconciles keep the marker and are idempotent. Workers normally have the
 annotation by the time their bootstrap Secret is rendered.
 
+## P2P bootstrap asset delivery
+
+The first delivery is deliberately direct. `p2p-install.sh` installs both
+`dfdaemon` and `dfget` from the static store (`/bin/dfdaemon`, `/bin/dfget`) or
+the pinned `dragonflyoss/client` `v1.5.14` tarball, verifying its SHA-256. Using
+dfget for dfdaemon itself would be the chicken-and-egg case and is never done.
+
+After that, if `SCHEDULER_IPS` is non-empty, `/usr/local/bin/dfget` exists,
+`P2P_ASSETS` is `auto` (default) or `1`, and the normal preflight passed, the
+installer starts `dfdaemon-bootstrap.service` before downloading nydus. It
+waits up to `P2P_ASSETS_READY_TIMEOUT` seconds (default 60) for
+`/var/run/dragonfly/dfdaemon.sock`; a timeout or start failure stops the
+service and switches the remaining downloads to direct.
+`dfget --scheduling-policy always --endpoint /var/run/dragonfly/dfdaemon.sock
+--timeout 10m [--digest sha256:<sum>] <url> -O <tmp>` fetches the pinned nydus
+tarball (`nydus-static-v2.4.5-linux-amd64.tgz`) and the patched snapshotter.
+The nydus order is P2P, static-store tarball
+(`/nydus/<version>/nydus-static.tgz`), GitHub release. The snapshotter order is
+checksum fetch, P2P with digest, static store, GitHub release. Every nydus
+tarball and snapshotter is SHA-256 verified; a mismatch is discarded and never
+installed. A final direct checksum mismatch is fatal.
+
+`P2P_ASSETS=0` disables the early dfdaemon/P2P path entirely; the variable is a
+plain env entry, so it can be added to the bootstrap payload for rollback.
+Concurrent boots are safe: each node downloads to its own temp directory and
+installs atomically, while the scheduler/dfdaemon deduplicate P2P blobs; there
+is no shared host lock. The host dfdaemon bootstrap switch still disables the
+host daemon once the in-cluster client is running. The first seed normally has
+no scheduler IPs and no peers and therefore stays direct.
+
+The P2P data path is plaintext (dfdaemon upload), so SHA-256 is the integrity
+guard. The installer's manager gRPC preflight remains a known avoidable
+dependency for asset fetching: assets only need the scheduler, but the preflight
+is intentionally unchanged. `nydus-snapshotter-bootstrap.service` gains
+`After=dfdaemon-bootstrap.service` without `Wants`, so an early P2P dfdaemon is
+ordered first without pulling it in on non-P2P paths. `nydus-updater` does not
+use P2P yet: it runs after the cluster exists, where the host dfdaemon socket is
+normally disabled by the switch. P2P updater support is deferred.
+
 ## Kernel prerequisites
 
 - `CONFIG_EROFS_FS_ONDEMAND=y`

@@ -378,6 +378,8 @@ fi
 assert_contains "${ROOT_ONE}/etc/systemd/system/dfdaemon-bootstrap.service" 'Before=rke2-server.service rke2-agent.service'
 assert_contains "${ROOT_ONE}/etc/systemd/system/nydus-snapshotter-bootstrap.service" 'Before=rke2-server.service rke2-agent.service'
 assert_contains "${ROOT_ONE}/etc/systemd/system/nydus-snapshotter-bootstrap.service" 'ExecStartPre=/usr/local/bin/nydus-fs-select'
+assert_contains "${ROOT_ONE}/etc/systemd/system/nydus-snapshotter-bootstrap.service" 'After=dfdaemon-bootstrap.service'
+assert_not_contains "${ROOT_ONE}/etc/systemd/system/nydus-snapshotter-bootstrap.service" 'Wants=dfdaemon-bootstrap.service'
 assert_contains "${ROOT_ONE}/etc/systemd/system/nydus-snapshotter-bootstrap.service" 'ExecStart=/usr/local/bin/containerd-nydus-grpc --config /etc/nydus/config.toml --nydusd /usr/local/bin/nydusd'
 assert_not_contains "${ROOT_ONE}/etc/systemd/system/nydus-snapshotter-bootstrap.service" '--nydusd-config'
 assert_contains "${ROOT_ONE}/etc/systemd/system/nydus-snapshotter-bootstrap.service" 'ExecStartPost=/bin/sh -c'
@@ -594,6 +596,17 @@ asset="${url##*/}"
 if [ -n "${FAKE_CURL_FAIL_ASSET:-}" ] && [ "$asset" = "$FAKE_CURL_FAIL_ASSET" ]; then
   exit 22
 fi
+if [ "${FAKE_CURL_FAIL_STATIC:-0}" = "1" ] && [[ "$url" == http://static.example.test/* ]]; then
+  exit 22
+fi
+if [ -n "${FAKE_CURL_FAIL_STATIC_ASSETS:-}" ] && [[ "$url" == http://static.example.test/* ]]; then
+  case " ${FAKE_CURL_FAIL_STATIC_ASSETS} " in
+    *" ${asset} "*) exit 22 ;;
+  esac
+fi
+if [ "${FAKE_CURL_FAIL_GITHUB:-0}" = "1" ] && [[ "$url" == https://github.com/* ]]; then
+  exit 22
+fi
 case "$asset" in
   *.sha256)
     target="${asset%.sha256}"
@@ -602,35 +615,59 @@ case "$asset" in
       echo "fake curl: missing asset ${target}" >&2
       exit 22
     fi
-    hash="$(sha256sum "$source")"
-    hash="${hash%% *}"
+    if [ "${FAKE_CURL_BAD_SHA256:-0}" = "1" ]; then
+      hash="deadbeef"
+    else
+      hash="$(sha256sum "$source")"
+      hash="${hash%% *}"
+    fi
     printf '%s  %s\n' "$hash" "$target" > "$out"
     ;;
   *)
-    printf '#!/bin/sh\nexit 0\n' > "$out"
-    cp "$out" "${CURL_ASSET_DIR:?}/${asset}"
+    if [ -f "${CURL_ASSET_DIR:?}/${asset}" ]; then
+      cp "${CURL_ASSET_DIR}/${asset}" "$out"
+    else
+      printf '#!/bin/sh\nexit 0\n' > "$out"
+      cp "$out" "${CURL_ASSET_DIR}/${asset}"
+    fi
     ;;
 esac
 FAKECURL
 chmod 0755 "${FAKE_BIN}/curl"
 
+RELEASE_NYDUS_SRC="${WORK}/release-nydus/nydus-static"
+RELEASE_NYDUS_TGZ="${WORK}/release-nydus.tgz"
+mkdir -p "$RELEASE_NYDUS_SRC"
+for binary in nydusd nydus-image nydus-overlayfs; do
+  printf '#!/bin/sh\nexit 0\n' > "$RELEASE_NYDUS_SRC/$binary"
+done
+tar -czf "$RELEASE_NYDUS_TGZ" -C "${WORK}/release-nydus" nydus-static
+RELEASE_NYDUS_SHA="$(sha256sum "$RELEASE_NYDUS_TGZ" | cut -d' ' -f1)"
+cp "$RELEASE_NYDUS_TGZ" "${CURL_ASSET_DIR}/nydus-static.tgz"
+cp "$RELEASE_NYDUS_TGZ" "${CURL_ASSET_DIR}/nydus-static-v2.4.5-linux-amd64.tgz"
+printf '#!/bin/sh\nexit 0\n' > "${CURL_ASSET_DIR}/nydus-snapshotter-linux-amd64"
+
 ROOT_RELEASE="${WORK}/root-release"
 P2P_ROOT="$ROOT_RELEASE" SKIP_MODULES=1 SKIP_SYSTEMD=1 SKIP_PREFLIGHT=1 CONTAINERD_MAJOR=1 \
   NYDUS_SNAPSHOTTER_VERSION=v9.9.9 NYDUS_SNAPSHOTTER_REPO=example-org/example-repo \
+  NYDUS_GITHUB_SHA256="$RELEASE_NYDUS_SHA" P2P_ASSETS=0 \
   PATH="${FAKE_BIN}:${PATH}" CURL_LOG="$CURL_LOG" CURL_ASSET_DIR="$CURL_ASSET_DIR" \
   "$RUNNER" "$INSTALL" "$CFG" > "${WORK}/release.log" 2>&1
 
+assert_file "${ROOT_RELEASE}/usr/local/bin/dfdaemon"
+assert_file "${ROOT_RELEASE}/usr/local/bin/dfget"
 assert_file "${ROOT_RELEASE}/usr/local/bin/containerd-nydus-grpc"
 if [ "$(stat -c '%a' "${ROOT_RELEASE}/usr/local/bin/containerd-nydus-grpc")" != "755" ]; then
   echo "p2p-static self-test: snapshotter is not mode 0755" >&2
   exit 1
 fi
-assert_contains "$CURL_LOG" 'https://github.com/example-org/example-repo/releases/download/v9.9.9/nydus-snapshotter-linux-amd64'
 assert_contains "$CURL_LOG" 'https://github.com/example-org/example-repo/releases/download/v9.9.9/nydus-snapshotter-linux-amd64.sha256'
+assert_contains "${WORK}/release.log" 'nydus tarball: using static store'
 
 ROOT_NO_ASSET="${WORK}/root-no-asset"
 P2P_ROOT="$ROOT_NO_ASSET" SKIP_MODULES=1 SKIP_SYSTEMD=1 SKIP_PREFLIGHT=1 CONTAINERD_MAJOR=1 \
   NYDUS_SNAPSHOTTER_VERSION=v9.9.9 NYDUS_SNAPSHOTTER_REPO=example-org/example-repo \
+  NYDUS_GITHUB_SHA256="$RELEASE_NYDUS_SHA" P2P_ASSETS=0 \
   FAKE_CURL_FAIL_ASSET=nydus-snapshotter-linux-amd64 \
   PATH="${FAKE_BIN}:${PATH}" CURL_LOG="${WORK}/curl-fail.log" CURL_ASSET_DIR="$CURL_ASSET_DIR" \
   "$RUNNER" "$INSTALL" "$CFG" > "${WORK}/no-asset.log" 2>&1
@@ -642,6 +679,123 @@ if [ -f "${ROOT_NO_ASSET}/usr/local/bin/containerd-nydus-grpc" ]; then
 fi
 assert_file "${ROOT_NO_ASSET}/var/lib/rancher/rke2/agent/etc/containerd/config.toml.tmpl"
 assert_contains "${ROOT_NO_ASSET}/var/lib/rancher/rke2/agent/etc/containerd/config.toml.tmpl" 'snapshotter = "overlayfs"'
+
+# --- P2P bootstrap asset delivery ------------------------------------------
+for binary in dfdaemon dfget; do
+  if [ ! -f "${CURL_ASSET_DIR}/${binary}" ]; then
+    printf '#!/bin/sh\nexit 0\n' > "${CURL_ASSET_DIR}/${binary}"
+  fi
+done
+cat > "${FAKE_BIN}/dfget" <<'FAKEDFGET'
+#!/usr/bin/env bash
+set -Eeuo pipefail
+out=""
+url=""
+digest=""
+policy=""
+endpoint=""
+while [ "$#" -gt 0 ]; do
+  case "$1" in
+    --scheduling-policy) policy="$2"; shift 2 ;;
+    --endpoint) endpoint="$2"; shift 2 ;;
+    --timeout) shift 2 ;;
+    --digest) digest="$2"; shift 2 ;;
+    -O) out="$2"; shift 2 ;;
+    -*) shift ;;
+    *) url="$1"; shift ;;
+  esac
+done
+printf 'policy=%s endpoint=%s digest=%s url=%s out=%s\n' "$policy" "$endpoint" "$digest" "$url" "$out" >> "${DFGET_LOG:?}"
+[ "$policy" = "always" ] || { echo "fake dfget: policy=${policy}" >&2; exit 2; }
+[ "$endpoint" = "/var/run/dragonfly/dfdaemon.sock" ] || { echo "fake dfget: endpoint=${endpoint}" >&2; exit 2; }
+case "${FAKE_DFGET_MODE:-ok}" in
+  fail) exit 22 ;;
+  corrupt) printf 'corrupt\n' > "$out"; exit 0 ;;
+esac
+case "$url" in
+  *nydus-static-v2.4.5-linux-amd64.tgz) cp "${FAKE_NYDUS_TARBALL:?}" "$out" ;;
+  *nydus-snapshotter-linux-amd64) cp "${FAKE_SNAPSHOTTER:?}" "$out" ;;
+  *) exit 22 ;;
+esac
+FAKEDFGET
+chmod 0755 "${FAKE_BIN}/dfget"
+
+DFGET_LOG="${WORK}/dfget.log"
+p2p_run() {
+  local root="$1" cfg="$2" p2p="$3" mode="$4"
+  shift 4
+  : > "$DFGET_LOG"
+  env P2P_ROOT="$root" SKIP_MODULES=1 SKIP_SYSTEMD=1 SKIP_PREFLIGHT=1 CONTAINERD_MAJOR=1 \
+    NYDUS_SNAPSHOTTER_VERSION=v9.9.9 NYDUS_SNAPSHOTTER_REPO=example-org/example-repo \
+    NYDUS_GITHUB_SHA256="$RELEASE_NYDUS_SHA" P2P_ASSETS="$p2p" FAKE_DFGET_MODE="$mode" \
+    DFGET_BIN="${FAKE_BIN}/dfget" DFGET_LOG="$DFGET_LOG" \
+    FAKE_NYDUS_TARBALL="$RELEASE_NYDUS_TGZ" FAKE_SNAPSHOTTER="${CURL_ASSET_DIR}/nydus-snapshotter-linux-amd64" \
+    PATH="${FAKE_BIN}:${PATH}" CURL_LOG="$CURL_LOG" CURL_ASSET_DIR="$CURL_ASSET_DIR" \
+    "$@" "$RUNNER" "$INSTALL" "$cfg"
+}
+
+ROOT_P2P="${WORK}/root-p2p"
+p2p_run "$ROOT_P2P" "$CFG" 1 ok > "${WORK}/p2p.log" 2>&1
+assert_file "${ROOT_P2P}/usr/local/bin/dfget"
+assert_file "${ROOT_P2P}/usr/local/bin/nydusd"
+assert_file "${ROOT_P2P}/usr/local/bin/containerd-nydus-grpc"
+assert_contains "$DFGET_LOG" 'policy=always endpoint=/var/run/dragonfly/dfdaemon.sock'
+assert_contains "$DFGET_LOG" 'digest=sha256:'
+assert_contains "${WORK}/p2p.log" 'nydus tarball: using P2P'
+assert_contains "${WORK}/p2p.log" 'nydus-snapshotter: using P2P'
+
+ROOT_P2P_STATIC="${WORK}/root-p2p-static"
+p2p_run "$ROOT_P2P_STATIC" "$CFG" 1 fail > "${WORK}/p2p-static.log" 2>&1
+assert_file "${ROOT_P2P_STATIC}/usr/local/bin/nydusd"
+assert_file "${ROOT_P2P_STATIC}/usr/local/bin/containerd-nydus-grpc"
+assert_contains "${WORK}/p2p-static.log" 'nydus tarball: using static store'
+assert_contains "${WORK}/p2p-static.log" 'nydus-snapshotter: using'
+assert_contains "$DFGET_LOG" 'policy=always endpoint=/var/run/dragonfly/dfdaemon.sock'
+
+ROOT_P2P_GITHUB="${WORK}/root-p2p-github"
+p2p_run "$ROOT_P2P_GITHUB" "$CFG" 1 fail \
+  FAKE_CURL_FAIL_STATIC_ASSETS="nydus-static.tgz nydus-snapshotter-linux-amd64" \
+  > "${WORK}/p2p-github.log" 2>&1
+assert_file "${ROOT_P2P_GITHUB}/usr/local/bin/nydusd"
+assert_file "${ROOT_P2P_GITHUB}/usr/local/bin/containerd-nydus-grpc"
+assert_contains "${WORK}/p2p-github.log" 'nydus tarball: using GitHub release'
+assert_contains "${WORK}/p2p-github.log" 'nydus-snapshotter: using'
+
+CFG_NO_IPS="$(payload "" "" "" "")"
+ROOT_NO_SCHED="${WORK}/root-no-sched"
+p2p_run "$ROOT_NO_SCHED" "$CFG_NO_IPS" 1 ok > "${WORK}/p2p-no-sched.log" 2>&1
+assert_file "${ROOT_NO_SCHED}/usr/local/bin/nydusd"
+if [ -s "$DFGET_LOG" ]; then
+  echo "p2p-static self-test: dfget was called without scheduler IPs" >&2
+  exit 1
+fi
+
+ROOT_P2P_OFF="${WORK}/root-p2p-off"
+p2p_run "$ROOT_P2P_OFF" "$CFG" 0 ok > "${WORK}/p2p-off.log" 2>&1
+assert_file "${ROOT_P2P_OFF}/usr/local/bin/nydusd"
+if [ -s "$DFGET_LOG" ]; then
+  echo "p2p-static self-test: dfget was called with P2P_ASSETS=0" >&2
+  exit 1
+fi
+
+ROOT_NO_DFGET="${WORK}/root-no-dfget"
+p2p_run "$ROOT_NO_DFGET" "$CFG" 1 ok DFGET_BIN="${WORK}/missing-dfget" > "${WORK}/p2p-no-dfget.log" 2>&1
+assert_file "${ROOT_NO_DFGET}/usr/local/bin/nydusd"
+if [ -s "$DFGET_LOG" ]; then
+  echo "p2p-static self-test: dfget was called although DFGET_BIN is missing" >&2
+  exit 1
+fi
+
+ROOT_BAD_DIGEST="${WORK}/root-bad-digest"
+if p2p_run "$ROOT_BAD_DIGEST" "$CFG" 0 ok FAKE_CURL_BAD_SHA256=1 > "${WORK}/bad-digest.log" 2>&1; then
+  echo "p2p-static self-test: checksum mismatch did not fail the installer" >&2
+  exit 1
+fi
+assert_contains "${WORK}/bad-digest.log" 'checksum verification failed'
+if [ -f "${ROOT_BAD_DIGEST}/usr/local/bin/containerd-nydus-grpc" ]; then
+  echo "p2p-static self-test: snapshotter was installed after a checksum mismatch" >&2
+  exit 1
+fi
 
 MODPROBE_OK="${WORK}/modprobe-ok"
 SYSTEMCTL_FAKE="${WORK}/systemctl"

@@ -64,6 +64,8 @@ spec:
               value: {{ .Values.static.populate.dfdaemon.tarballRoot | quote }}
             - name: DFDAEMON_BINARY
               value: {{ .Values.static.populate.dfdaemon.binary | quote }}
+            - name: DFGET_BINARY
+              value: {{ .Values.static.populate.dfdaemon.dfget | quote }}
           volumeMounts:
             - name: static
               mountPath: /usr/share/nginx/static

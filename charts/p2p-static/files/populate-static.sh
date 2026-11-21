@@ -37,13 +37,18 @@ verify() {
     || die "checksum mismatch for ${label}: got ${actual} want ${expected}"
 }
 
-install_file() {
+install_file_mode() {
   src="$1"
   dst="$2"
+  mode="$3"
   mkdir -p "$(dirname "$dst")"
   cp "$src" "$dst.tmp.$$"
-  chmod 0755 "$dst.tmp.$$"
+  chmod "$mode" "$dst.tmp.$$"
   mv -f "$dst.tmp.$$" "$dst"
+}
+
+install_file() {
+  install_file_mode "$1" "$2" 0755
 }
 
 need_nydus=0
@@ -52,6 +57,9 @@ for binary in $NYDUS_BINARIES; do
     need_nydus=1
   fi
 done
+if [ ! -s "$static_dir/nydus/$NYDUS_VERSION/nydus-static.tgz" ]; then
+  need_nydus=1
+fi
 
 if [ "$need_nydus" = 1 ]; then
   fetch "$NYDUS_TARBALL_URL" "$tmp/nydus.tgz"
@@ -65,6 +73,9 @@ if [ "$need_nydus" = 1 ]; then
     install_file "$src" "$static_dir/nydus/$NYDUS_VERSION/$binary"
     install_file "$src" "$static_dir/bin/$binary"
   done
+  # Mirror the pinned tarball so the host installer can fetch it through the
+  # static store when P2P is unavailable.
+  install_file_mode "$tmp/nydus.tgz" "$static_dir/nydus/$NYDUS_VERSION/nydus-static.tgz" 0644
 else
   log "nydus $NYDUS_VERSION assets already present"
 fi
@@ -76,17 +87,29 @@ if [ "${SELECTOR_ENABLED:-1}" = "1" ]; then
 fi
 
 if [ "${DFDAEMON_ENABLED:-1}" = "1" ]; then
-  if [ -s "$static_dir/bin/dfdaemon" ]; then
-    log "preserving existing ${static_dir}/bin/dfdaemon"
+  need_client=0
+  for binary in "$DFDAEMON_BINARY" "${DFGET_BINARY:-dfget}"; do
+    if [ ! -s "$static_dir/bin/$binary" ]; then
+      need_client=1
+    fi
+  done
+  if [ "$need_client" = 0 ]; then
+    log "preserving existing ${static_dir}/bin/dfdaemon and ${static_dir}/bin/${DFGET_BINARY:-dfget}"
   else
-    fetch "$DFDAEMON_TARBALL_URL" "$tmp/dfdaemon.tgz"
-    verify "$tmp/dfdaemon.tgz" "$DFDAEMON_TARBALL_SHA256" "dfdaemon $DFDAEMON_VERSION"
-    mkdir -p "$tmp/dfdaemon"
-    tar -xzf "$tmp/dfdaemon.tgz" -C "$tmp/dfdaemon" \
-      || die "invalid dfdaemon tarball: ${DFDAEMON_TARBALL_URL}"
-    src="$tmp/dfdaemon/$DFDAEMON_TARBALL_ROOT/$DFDAEMON_BINARY"
-    [ -s "$src" ] || die "dfdaemon tarball is missing ${DFDAEMON_BINARY}"
-    install_file "$src" "$static_dir/bin/dfdaemon"
+    fetch "$DFDAEMON_TARBALL_URL" "$tmp/client.tgz"
+    verify "$tmp/client.tgz" "$DFDAEMON_TARBALL_SHA256" "dragonfly-client $DFDAEMON_VERSION"
+    mkdir -p "$tmp/client"
+    tar -xzf "$tmp/client.tgz" -C "$tmp/client" \
+      || die "invalid Dragonfly client tarball: ${DFDAEMON_TARBALL_URL}"
+    for binary in "$DFDAEMON_BINARY" "${DFGET_BINARY:-dfget}"; do
+      if [ -s "$static_dir/bin/$binary" ]; then
+        log "preserving existing ${static_dir}/bin/$binary"
+        continue
+      fi
+      src="$tmp/client/$DFDAEMON_TARBALL_ROOT/$binary"
+      [ -s "$src" ] || die "Dragonfly client tarball is missing ${binary}"
+      install_file "$src" "$static_dir/bin/$binary"
+    done
   fi
 fi
 

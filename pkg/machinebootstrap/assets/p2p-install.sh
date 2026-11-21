@@ -53,6 +53,18 @@ NYDUS_GITHUB_REPO="${NYDUS_GITHUB_REPO:-dragonflyoss/nydus}"
 # SHA256 of the pinned nydus-static tarball. Required for the GitHub fallback;
 # change it together with NYDUS_VERSION when moving to another release.
 NYDUS_GITHUB_SHA256="${NYDUS_GITHUB_SHA256:-1ad7b793a1996577e462b0bf5c1a22e4450b9c04f7e9e99d4b274ccc92f19072}"
+# Direct Dragonfly client tarball for dfdaemon/dfget. The first delivery must
+# stay direct: dfget cannot use dfdaemon before dfdaemon exists.
+DRAGONFLY_CLIENT_REPO="${DRAGONFLY_CLIENT_REPO:-dragonflyoss/client}"
+DRAGONFLY_CLIENT_VERSION="${DRAGONFLY_CLIENT_VERSION:-v1.5.14}"
+DRAGONFLY_CLIENT_ARCH="${DRAGONFLY_CLIENT_ARCH:-x86_64}"
+DRAGONFLY_CLIENT_LIBC="${DRAGONFLY_CLIENT_LIBC:-musl}"
+DRAGONFLY_CLIENT_ROOT="${DRAGONFLY_CLIENT_ROOT:-dragonfly-client-${DRAGONFLY_CLIENT_VERSION}-${DRAGONFLY_CLIENT_ARCH}-unknown-linux-${DRAGONFLY_CLIENT_LIBC}}"
+DRAGONFLY_CLIENT_ASSET="${DRAGONFLY_CLIENT_ASSET:-${DRAGONFLY_CLIENT_ROOT}.tar.gz}"
+DRAGONFLY_CLIENT_URL="${DRAGONFLY_CLIENT_URL:-https://github.com/${DRAGONFLY_CLIENT_REPO}/releases/download/${DRAGONFLY_CLIENT_VERSION}/${DRAGONFLY_CLIENT_ASSET}}"
+DRAGONFLY_CLIENT_SHA256="${DRAGONFLY_CLIENT_SHA256:-d514da77d57dd77e02ac903a0072e921aa19350bbef273f5be36ae41b235653a}"
+DRAGONFLY_CLIENT_BINARIES="dfdaemon
+dfget"
 # Optional HTTPS mirror path for nydus blobs, for example
 # https://proxy.example.test/docker.io. Empty keeps the dfdaemon proxy block in
 # the generated nydusd backend; setting it makes nydusd fetch blobs directly
@@ -66,6 +78,13 @@ NYDUS_MIRROR_URL="${NYDUS_MIRROR_URL:-}"
 SCHEDULER_PORT=8002
 PREFLIGHT_TIMEOUT="${P2P_PREFLIGHT_TIMEOUT:-3}"
 BIN_DIR="${ROOT}/usr/local/bin"
+# P2P_ASSETS: auto (default) enables P2P asset fetch only with scheduler IPs
+# and dfget; 1 forces it when prerequisites exist; 0 disables it.
+P2P_ASSETS="${P2P_ASSETS:-auto}"
+P2P_ASSETS_READY_TIMEOUT="${P2P_ASSETS_READY_TIMEOUT:-60}"
+P2P_DFDAEMON_SOCKET="${P2P_DFDAEMON_SOCKET:-/var/run/dragonfly/dfdaemon.sock}"
+P2P_DFGET_TIMEOUT="${P2P_DFGET_TIMEOUT:-10m}"
+DFGET_BIN="${DFGET_BIN:-${BIN_DIR}/dfget}"
 SERVICE_DIR="${ROOT}/etc/systemd/system"
 RKE2_CONTAINERD_DIR="${ROOT}/var/lib/rancher/${DISTRO}/agent/etc/containerd"
 NYDUS_DROPIN_DIR="${RKE2_CONTAINERD_DIR}/config-v3.toml.d"
@@ -119,10 +138,28 @@ detect_containerd_major() {
   printf '2'
 }
 
-# Prefer the versioned nydus asset layout, then the legacy unversioned /bin
-# layout. The static store is populated externally; both layouts are served by
-# the p2p-static chart.
-NYDUS_GITHUB_DIR=""
+# Direct asset helpers. The first dfdaemon/dfget delivery is always direct;
+# P2P is only used for the nydus/snapshotter payloads after that.
+sha256_of() {
+  local sum
+  sum="$(sha256sum "$1")"
+  printf '%s' "${sum%% *}"
+}
+
+verify_sha256() {
+  local file expected label actual
+  file="$1"
+  expected="$2"
+  label="$3"
+  command -v sha256sum >/dev/null 2>&1 || die "sha256sum is required to verify ${label}"
+  [ -n "$expected" ] || die "missing SHA256 for ${label}"
+  actual="$(sha256_of "$file")"
+  if [ "$actual" != "$expected" ]; then
+    log "checksum mismatch for ${label}: got ${actual} want ${expected}"
+    return 1
+  fi
+  return 0
+}
 
 nydus_github_tarball_url() {
   local base="https://github.com/${NYDUS_GITHUB_REPO}/releases"
@@ -133,63 +170,232 @@ nydus_github_tarball_url() {
   fi
 }
 
-ensure_nydus_github_assets() {
-  local dir url tarball
-  if [ -n "$NYDUS_GITHUB_DIR" ]; then
+DRAGONFLY_CLIENT_DIR=""
+
+ensure_dragonfly_client_assets() {
+  local dir tarball
+  if [ -n "$DRAGONFLY_CLIENT_DIR" ]; then
     return 0
   fi
+  dir="${TMP}/dragonfly-client"
+  tarball="${dir}/${DRAGONFLY_CLIENT_ASSET}"
+  mkdir -p "$dir"
+  log "downloading direct Dragonfly client ${DRAGONFLY_CLIENT_VERSION}: ${DRAGONFLY_CLIENT_URL}"
+  if ! curl -fL --retry 3 --connect-timeout 10 --max-time 300 -o "$tarball" "$DRAGONFLY_CLIENT_URL"; then
+    log "Dragonfly client tarball unavailable: ${DRAGONFLY_CLIENT_URL}"
+    return 1
+  fi
+  verify_sha256 "$tarball" "$DRAGONFLY_CLIENT_SHA256" "dragonfly-client ${DRAGONFLY_CLIENT_VERSION}" \
+    || die "direct client tarball checksum verification failed: ${DRAGONFLY_CLIENT_URL}"
+  if ! tar -xzf "$tarball" -C "$dir"; then
+    log "invalid Dragonfly client tarball: ${DRAGONFLY_CLIENT_URL}"
+    return 1
+  fi
+  if [ ! -d "${dir}/${DRAGONFLY_CLIENT_ROOT}" ]; then
+    log "Dragonfly client tarball has no ${DRAGONFLY_CLIENT_ROOT} directory"
+    return 1
+  fi
+  DRAGONFLY_CLIENT_DIR="${dir}/${DRAGONFLY_CLIENT_ROOT}"
+}
+
+# dfdaemon/dfget come from the static store or the pinned client tarball. Both
+# are direct; using dfget here would be the chicken-and-egg case.
+install_direct_client_binary() {
+  local name out url
+  name="$1"
+  out="$2"
+  for url in "${STATIC_URL%/}/bin/${name}" "${STATIC_URL%/}/nydus/${NYDUS_VERSION}/${name}"; do
+    if curl -fsSL --retry 3 --connect-timeout 10 --max-time 300 -o "$out" "$url" && [ -s "$out" ]; then
+      chmod 0755 "$out"
+      log "direct client ${name}: using static store"
+      return 0
+    fi
+  done
+  rm -f "$out"
+  if ensure_dragonfly_client_assets && [ -s "${DRAGONFLY_CLIENT_DIR}/${name}" ]; then
+    cp "${DRAGONFLY_CLIENT_DIR}/${name}" "$out"
+    chmod 0755 "$out"
+    log "direct client ${name}: using client tarball ${DRAGONFLY_CLIENT_VERSION}"
+    return 0
+  fi
+  return 1
+}
+
+install_direct_client_binaries() {
+  local binary tmp
+  for binary in $DRAGONFLY_CLIENT_BINARIES; do
+    tmp="${BIN_DIR}/.${binary}.tmp.$$"
+    if install_direct_client_binary "$binary" "$tmp"; then
+      mv -f "$tmp" "${BIN_DIR}/${binary}"
+      continue
+    fi
+    rm -f "$tmp"
+    if [ "$binary" = "dfdaemon" ]; then
+      fallback_direct "failed to install dfdaemon ${DRAGONFLY_CLIENT_VERSION}"
+    fi
+    log "warning: dfget ${DRAGONFLY_CLIENT_VERSION} is unavailable; P2P asset fetch will be disabled"
+  done
+}
+
+p2p_assets_requested() {
+  case "${P2P_ASSETS:-auto}" in
+    0|false|no|off)
+      return 1
+      ;;
+    1|true|yes|on|auto|"")
+      return 0
+      ;;
+    *)
+      log "warning: invalid P2P_ASSETS=${P2P_ASSETS}; treating as auto"
+      P2P_ASSETS="auto"
+      return 0
+      ;;
+  esac
+}
+
+p2p_assets_available() {
+  p2p_assets_requested || return 1
+  if [ -z "${SCHEDULER_IPS:-}" ]; then
+    [ "${P2P_ASSETS}" = "1" ] && log "P2P_ASSETS=1 but SCHEDULER_IPS is empty; using direct asset downloads"
+    return 1
+  fi
+  if [ ! -x "$DFGET_BIN" ]; then
+    [ "${P2P_ASSETS}" = "1" ] && log "P2P_ASSETS=1 but dfget is missing at ${DFGET_BIN}; using direct asset downloads"
+    return 1
+  fi
+  return 0
+}
+
+p2p_fetch() {
+  local url out digest
+  local -a args
+  url="$1"
+  out="$2"
+  digest="${3:-}"
+  [ -x "$DFGET_BIN" ] || return 1
+  args=(--scheduling-policy always --endpoint "$P2P_DFDAEMON_SOCKET" --timeout "$P2P_DFGET_TIMEOUT")
+  if [ -n "$digest" ]; then
+    case "$digest" in
+      sha256:*) ;;
+      *) digest="sha256:${digest}" ;;
+    esac
+    args+=(--digest "$digest")
+  fi
+  log "P2P fetch: ${url}"
+  if "$DFGET_BIN" "${args[@]}" "$url" -O "$out" && [ -s "$out" ]; then
+    log "P2P fetch ok: ${url}"
+    return 0
+  fi
+  log "P2P fetch failed; using direct fallback: ${url}"
+  rm -f "$out"
+  return 1
+}
+
+wait_for_dfdaemon_socket() {
+  local waited=0
+  while [ "$waited" -lt "$P2P_ASSETS_READY_TIMEOUT" ]; do
+    if [ -S "$P2P_DFDAEMON_SOCKET" ]; then
+      return 0
+    fi
+    sleep 1
+    waited=$((waited + 1))
+  done
+  return 1
+}
+
+# Start the already-installed first dfdaemon so dfget can fetch the remaining
+# assets through P2P. A missing/timed-out socket is not fatal: the caller
+# switches to direct downloads.
+start_dfdaemon_for_assets() {
+  if [ "$REAL_ROOT" != "1" ] || [ "${SKIP_SYSTEMD:-0}" = "1" ]; then
+    log "systemd is disabled; assuming the pre-existing dfdaemon socket is usable for P2P asset fetch"
+    return 0
+  fi
+  command -v systemctl >/dev/null 2>&1 || {
+    log "systemctl is unavailable; using direct asset downloads"
+    return 1
+  }
+  systemctl daemon-reload || {
+    log "systemctl daemon-reload failed; using direct asset downloads"
+    return 1
+  }
+  if ! systemctl start dfdaemon-bootstrap.service; then
+    log "dfdaemon-bootstrap.service did not start; using direct asset downloads"
+    return 1
+  fi
+  if wait_for_dfdaemon_socket; then
+    log "dfdaemon socket ready for P2P asset fetch: ${P2P_DFDAEMON_SOCKET}"
+    return 0
+  fi
+  log "dfdaemon socket ${P2P_DFDAEMON_SOCKET} was not ready after ${P2P_ASSETS_READY_TIMEOUT}s; falling back to direct asset downloads"
+  systemctl stop dfdaemon-bootstrap.service >/dev/null 2>&1 || true
+  return 1
+}
+
+# Prefer the pinned tarball over P2P, then the static-store mirror, then the
+# GitHub release. Every source is checked against NYDUS_GITHUB_SHA256.
+download_nydus_tarball() {
+  local p2p_ready="$1" out="$2" github_url candidate
+  github_url="$(nydus_github_tarball_url)"
+  rm -f "$out"
+  if [ "$p2p_ready" = "1" ] && p2p_fetch "$github_url" "$out" "$NYDUS_GITHUB_SHA256"; then
+    if verify_sha256 "$out" "$NYDUS_GITHUB_SHA256" "nydus ${NYDUS_VERSION} (P2P)"; then
+      log "nydus tarball: using P2P"
+      return 0
+    fi
+    log "nydus P2P tarball failed checksum verification; discarding"
+    rm -f "$out"
+  fi
+  for candidate in "${STATIC_URL%/}/nydus/${NYDUS_VERSION}/nydus-static.tgz" "${STATIC_URL%/}/bin/nydus-static.tgz"; do
+    if curl -fsSL --retry 3 --connect-timeout 10 --max-time 300 -o "$out" "$candidate" && [ -s "$out" ]; then
+      if verify_sha256 "$out" "$NYDUS_GITHUB_SHA256" "nydus ${NYDUS_VERSION} (static store)"; then
+        log "nydus tarball: using static store ${candidate}"
+        return 0
+      fi
+      die "checksum verification failed for ${candidate}"
+    fi
+  done
   if [ "${NYDUS_ALLOW_GITHUB:-1}" != "1" ]; then
     log "nydus static store unavailable and NYDUS_ALLOW_GITHUB=0; not trying GitHub"
     return 1
   fi
-  dir="${TMP}/nydus-github"
-  tarball="${dir}/nydus-static.tgz"
-  mkdir -p "$dir"
-  url="$(nydus_github_tarball_url)"
-  if ! curl -fL --retry 3 --connect-timeout 10 --max-time 300 -o "$tarball" "$url"; then
-    log "nydus GitHub release unavailable: ${url}"
+  log "nydus static store unavailable; trying GitHub release ${github_url}"
+  if ! curl -fL --retry 3 --connect-timeout 10 --max-time 300 -o "$out" "$github_url"; then
+    log "nydus GitHub release unavailable: ${github_url}"
     return 1
   fi
-  [ -n "$NYDUS_GITHUB_SHA256" ] || { log "NYDUS_GITHUB_SHA256 is required for the nydus GitHub fallback"; return 1; }
-  command -v sha256sum >/dev/null 2>&1 || { log "sha256sum is required to verify ${url}"; return 1; }
-  actual="$(sha256sum "$tarball")"
-  actual="${actual%% *}"
-  if [ "$actual" != "$NYDUS_GITHUB_SHA256" ]; then
-    log "checksum verification failed for ${url}: got ${actual} want ${NYDUS_GITHUB_SHA256}"
-    return 1
-  fi
-  if ! tar -xzf "$tarball" -C "$dir"; then
-    log "nydus GitHub release tarball is invalid: ${url}"
-    return 1
-  fi
-  if [ ! -d "${dir}/nydus-static" ]; then
-    log "nydus GitHub release tarball has no nydus-static directory: ${url}"
-    return 1
-  fi
-  NYDUS_GITHUB_DIR="${dir}/nydus-static"
-  log "nydus binaries using GitHub release ${NYDUS_VERSION}"
+  verify_sha256 "$out" "$NYDUS_GITHUB_SHA256" "nydus ${NYDUS_VERSION} (GitHub)" \
+    || die "checksum verification failed for ${github_url}"
+  log "nydus tarball: using GitHub release"
   return 0
 }
 
-download_nydus_asset() {
-  local name out url
-  name="$1"
-  out="$2"
-  for url in "${STATIC_URL%/}/nydus/${NYDUS_VERSION}/${name}" "${STATIC_URL%/}/bin/${name}"; do
-    if curl -fsSL --retry 3 --connect-timeout 10 --max-time 300 -o "$out" "$url"; then
-      if [ ! -s "$out" ]; then
-        die "downloaded ${name} is empty"
-      fi
-      log "nydus ${name}: using static store"
-      return 0
-    fi
-  done
-  if ensure_nydus_github_assets && [ -s "${NYDUS_GITHUB_DIR}/${name}" ]; then
-    cp "${NYDUS_GITHUB_DIR}/${name}" "$out"
-    log "nydus ${name}: using GitHub release ${NYDUS_VERSION}"
-    return 0
+install_nydus_assets() {
+  local p2p_ready="$1" binary tmp src
+  if ! download_nydus_tarball "$p2p_ready" "${TMP}/nydus-static.tgz"; then
+    return 1
   fi
-  return 1
+  rm -rf "${TMP}/nydus-extract"
+  mkdir -p "${TMP}/nydus-extract"
+  if ! tar -xzf "${TMP}/nydus-static.tgz" -C "${TMP}/nydus-extract"; then
+    log "nydus tarball is invalid"
+    return 1
+  fi
+  if [ ! -d "${TMP}/nydus-extract/nydus-static" ]; then
+    log "nydus tarball has no nydus-static directory"
+    return 1
+  fi
+  for binary in $NYDUS_BINARIES; do
+    src="${TMP}/nydus-extract/nydus-static/${binary}"
+    if [ ! -s "$src" ]; then
+      log "nydus tarball is missing ${binary}"
+      return 1
+    fi
+    tmp="${BIN_DIR}/.${binary}.tmp.$$"
+    cp "$src" "$tmp"
+    chmod 0755 "$tmp"
+    mv -f "$tmp" "${BIN_DIR}/${binary}"
+  done
 }
 
 nydus_snapshotter_release_url() {
@@ -201,33 +407,59 @@ nydus_snapshotter_release_url() {
   fi
 }
 
-# Download the patched nydus-snapshotter release and verify its sibling
-# .sha256 asset. Returns nonzero when the release asset is unavailable; a
-# checksum mismatch is fatal.
-download_nydus_snapshotter_asset() {
-  local out url checksum expected actual
-  out="$1"
+fetch_nydus_snapshotter_checksum() {
+  local out="$1" url candidate
   url="$(nydus_snapshotter_release_url)"
-  if ! curl -fL --retry 3 --connect-timeout 10 --max-time 300 -o "$out" "$url"; then
-    return 1
-  fi
-  if [ ! -s "$out" ]; then
-    return 1
-  fi
+  for candidate in "${url}.sha256" "${STATIC_URL%/}/bin/${NYDUS_SNAPSHOTTER_ASSET}.sha256"; do
+    if curl -fsSL --retry 3 --connect-timeout 10 --max-time 300 -o "$out" "$candidate" && [ -s "$out" ]; then
+      log "nydus-snapshotter checksum: using ${candidate}"
+      return 0
+    fi
+  done
+  rm -f "$out"
+  return 1
+}
+
+# Fetch the checksum first, then the binary through P2P with that digest, then
+# the static store, then GitHub. A checksum mismatch from the final direct
+# source is fatal; a P2P mismatch is discarded and retried directly.
+install_nydus_snapshotter_asset() {
+  local p2p_ready="$1" out="$2" url checksum expected candidate
+  url="$(nydus_snapshotter_release_url)"
   checksum="${out}.sha256"
-  if ! curl -fL --retry 3 --connect-timeout 10 --max-time 300 -o "$checksum" "${url}.sha256" || [ ! -s "$checksum" ]; then
-    rm -f "$checksum"
+  rm -f "$out" "$checksum"
+  if ! fetch_nydus_snapshotter_checksum "$checksum"; then
+    log "nydus-snapshotter checksum is unavailable: ${url}.sha256"
     return 1
   fi
-  command -v sha256sum >/dev/null 2>&1 || die "sha256sum is required to verify ${NYDUS_SNAPSHOTTER_ASSET}"
   IFS=' ' read -r expected _ < "$checksum"
-  actual="$(sha256sum "$out")"
-  actual="${actual%% *}"
-  if [ -z "$expected" ] || [ "$actual" != "$expected" ]; then
-    die "checksum verification failed for ${url}"
+  if [ -z "$expected" ]; then
+    rm -f "$checksum"
+    log "nydus-snapshotter checksum is empty"
+    return 1
   fi
+  if [ "$p2p_ready" = "1" ] && p2p_fetch "$url" "$out" "$expected"; then
+    if verify_sha256 "$out" "$expected" "nydus-snapshotter (P2P)"; then
+      log "nydus-snapshotter: using P2P"
+      rm -f "$checksum"
+      return 0
+    fi
+    log "nydus P2P snapshotter failed checksum verification; discarding"
+    rm -f "$out"
+  fi
+  for candidate in "${STATIC_URL%/}/bin/${NYDUS_SNAPSHOTTER_ASSET}" "$url"; do
+    if curl -fsSL --retry 3 --connect-timeout 10 --max-time 300 -o "$out" "$candidate" && [ -s "$out" ]; then
+      if verify_sha256 "$out" "$expected" "nydus-snapshotter"; then
+        log "nydus-snapshotter: using ${candidate}"
+        rm -f "$checksum"
+        return 0
+      fi
+      rm -f "$checksum"
+      die "checksum verification failed for ${candidate}"
+    fi
+  done
   rm -f "$checksum"
-  return 0
+  return 1
 }
 
 for key in MANAGER_GRPC STATIC_URL SCHEDULER_HOST SCHEDULER_CLUSTER_ID CA_CRT_B64 CLIENT_CRT_B64 CLIENT_KEY_B64; do
@@ -1137,6 +1369,7 @@ Description=Dragonfly host nydus snapshotter
 Documentation=https://d7y.io
 After=network-online.target
 Wants=network-online.target
+After=dfdaemon-bootstrap.service
 Before=${DISTRO_SERVICE_TARGETS}
 ConditionPathExists=/etc/nydus/config.toml
 
@@ -1353,14 +1586,26 @@ if [ "${SKIP_DOWNLOAD:-0}" = "1" ]; then
   log "SKIP_DOWNLOAD=1: skipping binary downloads (nydus ${NYDUS_VERSION}, snapshotter ${NYDUS_SNAPSHOTTER_VERSION})"
 else
   command -v curl >/dev/null 2>&1 || fallback_direct "curl is required to download binaries"
-  for binary in $NYDUS_BINARIES dfdaemon; do
-    tmp="${BIN_DIR}/.${binary}.tmp.$$"
-    download_nydus_asset "$binary" "$tmp" || fallback_direct "failed to download ${binary} ${NYDUS_VERSION}"
-    chmod 0755 "$tmp"
-    mv -f "$tmp" "${BIN_DIR}/${binary}"
-  done
+  # First delivery stays direct: dfdaemon and dfget come from the static store
+  # or the pinned client tarball. Only after dfdaemon is installed and its
+  # socket exists may the remaining payloads use dfget/P2P.
+  install_direct_client_binaries
+
+  p2p_ready=0
+  if p2p_assets_available; then
+    if start_dfdaemon_for_assets; then
+      p2p_ready=1
+    fi
+  else
+    log "P2P asset fetch disabled; downloading nydus/snapshotter directly"
+  fi
+
+  if ! install_nydus_assets "$p2p_ready"; then
+    fallback_direct "failed to download nydus ${NYDUS_VERSION} (P2P/static/GitHub)"
+  fi
+
   snapshotter_tmp="${BIN_DIR}/.${NYDUS_SNAPSHOTTER_BINARY}.tmp.$$"
-  if ! download_nydus_snapshotter_asset "$snapshotter_tmp"; then
+  if ! install_nydus_snapshotter_asset "$p2p_ready" "$snapshotter_tmp"; then
     rm -f "$snapshotter_tmp" "${snapshotter_tmp}.sha256"
     fallback_direct "nydus-snapshotter release asset ${NYDUS_SNAPSHOTTER_ASSET} (${NYDUS_SNAPSHOTTER_VERSION}) is unavailable from ${NYDUS_SNAPSHOTTER_REPO}"
   fi

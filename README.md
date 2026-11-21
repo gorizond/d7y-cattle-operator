@@ -505,16 +505,55 @@ yet:
   `nydus-image`, and `nydus-overlayfs` assets. It is the global CRI
   snapshotter. `enable_oci_tar` is not set (it is not a nydus field). A daily
   host timer runs `nydus-updater` to refresh the static assets and restart the
-  host unit only when something changed. The updater tries the static store
+  host unit only when something changed. The updater never uses P2P (a
+  post-cluster node has no host dfdaemon socket); it tries the static store
   first and falls back to the pinned `dragonflyoss/nydus` GitHub release
-  tarball, verifying its SHA-256 before installing anything; a missing store
-  object no longer leaves the updater stuck on 404. The patched snapshotter is
-  updated by rerunning `p2p-install.sh`.
+  tarball, verifying its SHA-256 before installing anything. The patched
+  snapshotter is updated by rerunning `p2p-install.sh`.
 - Host `dfdaemon-bootstrap` is the cold-start P2P client. A boot helper starts
   it before RKE2 even if the switch disabled it at the previous shutdown; a
   30s host timer detects the node's in-cluster `client` pod via `crictl` and
   disables the host bootstrap while the pod is running. If the pod disappears,
   the timer re-enables the host bootstrap. The switch never touches nydus.
+
+#### P2P bootstrap asset delivery
+
+The first delivery stays direct: `dfdaemon` and `dfget` are installed from the
+static store (`/bin/dfdaemon`, `/bin/dfget`) or the pinned
+`dragonflyoss/client` `v1.5.14` tarball. Only after that first dfdaemon exists
+can the rest use P2P. If `SCHEDULER_IPS` is non-empty, `dfget` exists,
+`P2P_ASSETS` is `auto` (default) or `1`, and the normal preflight has passed,
+the installer starts `dfdaemon-bootstrap.service`, waits up to
+`P2P_ASSETS_READY_TIMEOUT` seconds for `/var/run/dragonfly/dfdaemon.sock`, and
+fetches the nydus tarball and snapshotter through
+`dfget --scheduling-policy always --endpoint /var/run/dragonfly/dfdaemon.sock`.
+On timeout or dfget failure it falls back to direct downloads; the
+`fallback_direct` fail-open path is unchanged.
+
+Source order is P2P first, then the static-store mirror
+(`/nydus/<version>/nydus-static.tgz` and `/bin/`), then the pinned GitHub
+releases. The nydus tarball and snapshotter are SHA-256 verified; a checksum
+mismatch is discarded and never installed. The P2P data path is plaintext
+(dfdaemon upload), so the SHA-256 check is the end-to-end integrity guard.
+
+`P2P_ASSETS=0` disables the early dfdaemon/P2P path completely; `auto` uses it
+only when the scheduler IPs and `dfget` are present. The variable is a plain
+bootstrap env entry (for rollback, append `P2P_ASSETS=0` to the payload).
+Concurrent boots are safe: each node downloads to its own temp directory and
+installs atomically, while dfdaemon/scheduler deduplicate the P2P blobs. No
+cross-node lock is held, and the existing `dfdaemon-bootstrap-switch` still
+disables the host bootstrap once the in-cluster client is running. The first
+seed node normally has no scheduler IPs and therefore no peers; it stays on the
+direct path. The installer's manager gRPC preflight remains a known avoidable
+dependency for asset P2P, because asset fetching only needs the scheduler; it
+is intentionally unchanged here.
+
+`nydus-snapshotter-bootstrap.service` has
+`After=dfdaemon-bootstrap.service` (without `Wants`), so a P2P-started
+dfdaemon is ordered before the snapshotter without creating a dependency that
+starts dfdaemon on non-P2P paths. `nydus-updater` deliberately does not use P2P
+yet: it runs after the cluster exists, where the host dfdaemon socket is
+normally disabled by the switch. P2P updater support is deferred.
 
 Certificate rotation uses Secret revisions (SHA-256 over `ca.crt`, `tls.crt`,
 and `tls.key`). The manager and data/control client revisions are global; the
@@ -825,11 +864,14 @@ real ID. See `pkg/machinebootstrap/README.md` for the embedded script and
 `charts/p2p-static/README.md` for the static chart values and risks.
 
 A `populate-static` init container makes the volume self-populating from pinned
-releases: the nydus `v2.4.5` static tarball is SHA-256 verified and its
+releases: the nydus `v2.4.5` static tarball is SHA-256 verified, its
 `nydusd`, `nydus-image`, `nydus-overlayfs`, and `nydus-fs-select` assets are
-written to both `/nydus/v2.4.5/` and `/bin/`. An existing `/bin/dfdaemon` is
-preserved; the pinned dragonfly-client `v1.5.14` tarball is used only when the
-volume has no dfdaemon. URLs, versions, checksums, retries, and the init image
+written to both `/nydus/v2.4.5/` and `/bin/`, and the tarball itself is mirrored
+at `/nydus/v2.4.5/nydus-static.tgz`. An existing `/bin/dfdaemon` is preserved;
+the pinned dragonfly-client `v1.5.14` tarball fills `/bin/dfdaemon` and
+`/bin/dfget` only when they are missing. The mirrored tarball and `/bin/dfget`
+are what let the host installer use P2P or the static store without relying on
+GitHub. URLs, versions, checksums, retries, and the init image
 are values. If an asset download fails after retries, the init container fails
 instead of starting nginx with a directory that answers 404. The chart's
 `nydus-fs-select.sh` is a copy of the embedded operator asset and

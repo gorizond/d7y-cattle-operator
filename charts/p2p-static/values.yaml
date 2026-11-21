@@ -63,6 +63,7 @@ static:
       tarballSHA256: d514da77d57dd77e02ac903a0072e921aa19350bbef273f5be36ae41b235653a
       tarballRoot: dragonfly-client-v1.5.14-x86_64-unknown-linux-musl
       binary: dfdaemon
+      dfget: dfget
     selector:
       enabled: true
 
