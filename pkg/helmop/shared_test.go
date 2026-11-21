@@ -209,7 +209,7 @@ func TestSharedDynconfigUsesSchedulerHost(t *testing.T) {
 		if !strings.Contains(addr, `d7y-scheduler.${ index .ClusterLabels`) {
 			t.Errorf("%v = %q, want the scheduler host template", path, addr)
 		}
-		if strings.Contains(addr, "scheduler-public-ip") {
+		if strings.Contains(addr, "scheduler-ips") {
 			t.Errorf("%v = %q, must not use the public-IP template for dynconfig", path, addr)
 		}
 	}
@@ -344,5 +344,43 @@ func fleetTemplateFuncs() template.FuncMap {
 			}
 			return def
 		},
+	}
+}
+
+func TestSharedSchedulerPublicIPTemplate(t *testing.T) {
+	templateSource := "{{ " + strings.TrimSuffix(strings.TrimPrefix(SharedSchedulerPublicIPTemplate, "${ "), " }") + " }}"
+	tmpl := template.Must(template.New("public-ip").Funcs(template.FuncMap{
+		"splitList": func(sep, value string) []string { return strings.Split(value, sep) },
+		"first": func(values []string) string {
+			if len(values) == 0 {
+				return ""
+			}
+			return values[0]
+		},
+		"default": func(fallback, value string) string {
+			if value == "" {
+				return fallback
+			}
+			return value
+		},
+	}).Parse(templateSource))
+	for _, tc := range []struct {
+		name        string
+		annotations map[string]string
+		want        string
+	}{
+		{"missing", map[string]string{}, ""},
+		{"empty", map[string]string{"p2p.dragonfly.io/scheduler-ips": ""}, ""},
+		{"multiple", map[string]string{"p2p.dragonfly.io/scheduler-ips": "203.0.113.10,203.0.113.11"}, "203.0.113.10"},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			var out bytes.Buffer
+			if err := tmpl.Execute(&out, map[string]any{"ClusterAnnotations": tc.annotations}); err != nil {
+				t.Fatalf("execute: %v", err)
+			}
+			if got := out.String(); got != tc.want {
+				t.Errorf("rendered public IP = %q, want %q", got, tc.want)
+			}
+		})
 	}
 }

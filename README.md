@@ -242,12 +242,13 @@ matching role label must also be present for Fleet to render the shared release.
 
 Role labels are user-managed: the operator stamps
 `p2p.dragonfly.io/cluster-id` (from `status.clusterName`, read by the scheduler
-host template), `p2p.dragonfly.io/scheduler-public-ip` (the resolved public
-advertiseIP), and `p2p.dragonfly.io/scheduler-ips` (the scheduler-public-ip annotations of the
-other gated seed clusters, used by the pre-install bootstrap). An empty scheduler-IP
-list is removed so the bootstrap installs the host pieces without starting
-dfdaemon. Removing a role annotation is not enough to uninstall a shared
-release; remove the role label too.
+host template) and `p2p.dragonfly.io/scheduler-ips`. A seed Cluster publishes
+its own currently resolved public scheduler IPs; a non-seed Cluster aggregates
+the scheduler-ips of other gated seed clusters. The same annotation feeds the
+pre-install bootstrap and the shared scheduler advertiseIP. An empty list is
+removed so the bootstrap installs the host pieces without starting dfdaemon.
+Removing a role annotation is not enough to uninstall a shared release; remove
+the role label too.
 
 A Cluster labeled `d7y-operator-cattle: "true"` gets the shared KeyDB release.
 The role annotations and matching labels add:
@@ -290,7 +291,7 @@ The rendered values keep the per-cluster downstream names:
   `d7y-scheduler.${ index .ClusterLabels "p2p.dragonfly.io/cluster-id" }.<domain>`
 - Scheduler cluster ID and advertiseIP:
   `${ index .ClusterAnnotations "p2p.dragonfly.io/scheduler-cluster-id" }` and
-  `${ index .ClusterAnnotations "p2p.dragonfly.io/scheduler-public-ip" }`
+  the first element of `p2p.dragonfly.io/scheduler-ips`
 
 When a Cluster stops matching a selector, Fleet deletes its BundleDeployment
 and uninstalls the release.
@@ -446,9 +447,10 @@ The embedded p2p bootstrap is fail-open so the first
 node of a new cluster can join RKE2 even when the scheduler is not reachable
 yet:
 
-- The operator writes `p2p.dragonfly.io/scheduler-ips` on each managed
-  Cluster from the scheduler-public-ip annotations of other gated seed clusters. An empty list
-  still installs nydus/dfdaemon binaries and configs, but does not start
+- The operator writes `p2p.dragonfly.io/scheduler-ips` from the seed Cluster's
+  own resolved public scheduler IPs, or from other gated seed clusters'
+  scheduler-ips for a non-seed Cluster. An empty list still installs
+  nydus/dfdaemon binaries and configs, but does not start
   `dfdaemon-bootstrap` and does not use the direct-registry fallback; the
   in-cluster agent is expected to configure the host later.
 - With scheduler IPs present, it preflights the manager gRPC endpoint and the

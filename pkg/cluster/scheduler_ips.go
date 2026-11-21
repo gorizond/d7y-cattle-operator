@@ -14,12 +14,13 @@ import (
 	"k8s.io/apimachinery/pkg/labels"
 	"k8s.io/apimachinery/pkg/watch"
 
-	"github.com/gorizond/d7y-cattle-operator/pkg/helmop"
 	"github.com/gorizond/d7y-cattle-operator/pkg/pki"
 )
 
 const (
 	AnnotationSchedulerIPs = "p2p.dragonfly.io/scheduler-ips"
+	// legacySchedulerPublicIP is removed from gated Clusters during reconcile.
+	legacySchedulerPublicIP = "p2p.dragonfly.io/scheduler-public-ip"
 )
 
 type clusterCache interface {
@@ -30,45 +31,50 @@ type helmOpWatcher interface {
 	Watch(ctx context.Context, namespace string, opts metav1.ListOptions) (watch.Interface, error)
 }
 
-// ensureSchedulerIPs computes the scheduler IPs for a managed cluster from the
-// scheduler-public-ip annotations of other gated seed clusters.
-func (c *Controller) ensureSchedulerIPs(cluster *provv1.Cluster) (*provv1.Cluster, error) {
-	if cluster == nil || c.clusterCache == nil || c.clusters == nil {
+// ensureSchedulerIPs computes scheduler-ips for a managed cluster. A seed
+// cluster publishes its own currently resolved scheduler IPs; other gated
+// clusters aggregate the scheduler-ips of other seed clusters. The legacy
+// scheduler-public-ip annotation is removed during the same reconcile.
+func (c *Controller) ensureSchedulerIPs(cluster *provv1.Cluster, roles Roles, resolvedIPs []string) (*provv1.Cluster, error) {
+	if cluster == nil || c.clusters == nil {
 		return nil, nil
-	}
-	clusters, err := c.clusterCache.List(cluster.Namespace, labels.Everything())
-	if err != nil {
-		return nil, fmt.Errorf("list managed clusters: %w", err)
 	}
 	seen := map[string]bool{}
 	var ips []string
-	for _, candidate := range clusters {
-		if candidate == nil || candidate.Name == cluster.Name {
-			continue
+	if roles.Seed {
+		for _, raw := range resolvedIPs {
+			addPublicIPv4(&ips, seen, raw)
 		}
-		if candidate.Labels[LabelEnabled] != "true" || candidate.Annotations[AnnotationSeed] != "true" {
-			continue
+	} else {
+		if c.clusterCache == nil {
+			return nil, nil
 		}
-		raw := strings.TrimSpace(candidate.Annotations[helmop.AnnotationSchedulerPublicIP])
-		ip := net.ParseIP(raw)
-		if ip == nil || !pki.IsPublicIP(ip) {
-			continue
+		clusters, err := c.clusterCache.List(cluster.Namespace, labels.Everything())
+		if err != nil {
+			return nil, fmt.Errorf("list managed clusters: %w", err)
 		}
-		value := ip.String()
-		if seen[value] {
-			continue
+		for _, candidate := range clusters {
+			if candidate == nil || candidate.Name == cluster.Name {
+				continue
+			}
+			if candidate.Labels[LabelEnabled] != "true" || candidate.Annotations[AnnotationSeed] != "true" {
+				continue
+			}
+			for _, raw := range strings.Split(candidate.Annotations[AnnotationSchedulerIPs], ",") {
+				addPublicIPv4(&ips, seen, raw)
+			}
 		}
-		seen[value] = true
-		ips = append(ips, value)
 	}
 	sort.Strings(ips)
 	desired := strings.Join(ips, ",")
 	current := strings.TrimSpace(cluster.Annotations[AnnotationSchedulerIPs])
-	if desired == current {
+	_, hasLegacy := cluster.Annotations[legacySchedulerPublicIP]
+	if desired == current && !hasLegacy {
 		return nil, nil
 	}
 
 	updated := cluster.DeepCopy()
+	delete(updated.Annotations, legacySchedulerPublicIP)
 	if desired == "" {
 		delete(updated.Annotations, AnnotationSchedulerIPs)
 	} else {
@@ -87,6 +93,19 @@ func (c *Controller) ensureSchedulerIPs(cluster *provv1.Cluster) (*provv1.Cluste
 	}
 	c.event(cluster, corev1.EventTypeNormal, "SchedulerIPsUpdated", message)
 	return result, nil
+}
+
+func addPublicIPv4(ips *[]string, seen map[string]bool, raw string) {
+	ip := net.ParseIP(strings.TrimSpace(raw))
+	if ip == nil || ip.To4() == nil || !pki.IsPublicIP(ip) {
+		return
+	}
+	value := ip.String()
+	if seen[value] {
+		return
+	}
+	seen[value] = true
+	*ips = append(*ips, value)
 }
 
 func (c *Controller) enqueueGatedClusters() {

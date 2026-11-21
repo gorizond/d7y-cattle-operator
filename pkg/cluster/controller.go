@@ -129,7 +129,28 @@ func (c *Controller) reconcile(key string, cluster *provv1.Cluster) (result *pro
 	}
 	status.rolesResolved(true, roles.Manager, roles.Seed)
 
-	if updated, err := c.ensureSchedulerIPs(cluster); err != nil {
+	var errs []error
+
+	// The certificate and current DNS-resolved scheduler IPs must be ready
+	// before the seed publishes its own scheduler-ips annotation.
+	var resolvedIPs []string
+	mtlsReady := true
+	if roles.Manager || roles.Seed {
+		var err error
+		resolvedIPs, err = c.ensureMTLSCertificate(cluster, roles)
+		if err != nil {
+			errs = append(errs, err)
+			mtlsReady = false
+		}
+		if mtlsReady {
+			if err := c.ensureMTLSSecret(cluster); err != nil {
+				errs = append(errs, err)
+				mtlsReady = false
+			}
+		}
+	}
+
+	if updated, err := c.ensureSchedulerIPs(cluster, roles, resolvedIPs); err != nil {
 		c.event(cluster, corev1.EventTypeWarning, "SchedulerIPsFailed", err.Error())
 	} else if updated != nil {
 		cluster = updated
@@ -148,40 +169,13 @@ func (c *Controller) reconcile(key string, cluster *provv1.Cluster) (result *pro
 	}
 
 	hc := c.helmopCluster(cluster)
+	hc.SchedulerHost = schedulerHost(c.opts.P2PDomain, c.clusterID(cluster))
 	c.warnUnsupportedChartVersion(cluster, hc.Chart.Version)
-
-	var errs []error
-
-	// The P2P certificate and public address are resolved before the shared
-	// HelmOps are applied so the per-cluster inputs stamped for Fleet templates
-	// are current.
-	mtlsReady := true
-	if roles.Manager || roles.Seed {
-		publicIP, err := c.ensureMTLSCertificate(cluster, roles)
-		if err != nil {
-			errs = append(errs, err)
-			mtlsReady = false
-		} else {
-			// Refresh the HelmOp inputs from the updated Secret and use the
-			// currently resolved public address for advertiseIP/dynconfig.
-			hc = c.helmopCluster(cluster)
-			hc.SchedulerPublicIP = publicIP
-			hc.SchedulerHost = schedulerHost(c.opts.P2PDomain, c.clusterID(cluster))
-		}
-	}
-	if roles.Manager || roles.Seed {
-		if mtlsReady {
-			if err := c.ensureMTLSSecret(cluster); err != nil {
-				errs = append(errs, err)
-				mtlsReady = false
-			}
-		}
-	}
 
 	// Fleet targets shared HelmOps by Cluster label and renders the scheduler
 	// host from the cluster-id label, so the labels must be in place before the
 	// objects are applied.
-	if updated, err := c.ensureClusterMetadata(cluster, hc); err != nil {
+	if updated, err := c.ensureClusterMetadata(cluster); err != nil {
 		errs = append(errs, err)
 	} else if updated != nil {
 		// Continue with the updated object so later writes carry the same
@@ -380,35 +374,35 @@ func schedulerHost(domain, clusterID string) string {
 // external-dns record) can be applied. A later reconcile adds the resolved IP
 // and rotates once. Manager-only clusters only bootstrap a missing Secret and
 // never rewrite an existing one (a seed reconcile owns the SAN set).
-func (c *Controller) ensureMTLSCertificate(cluster *provv1.Cluster, roles Roles) (string, error) {
+func (c *Controller) ensureMTLSCertificate(cluster *provv1.Cluster, roles Roles) ([]string, error) {
 	if !roles.Manager && !roles.Seed {
-		return "", nil
+		return nil, nil
 	}
 	clusterID := c.clusterID(cluster)
 	if clusterID == "" {
 		err := fmt.Errorf("cluster %s/%s has empty status.clusterName and no --p2p-cluster-id fallback", cluster.Namespace, cluster.Name)
 		c.event(cluster, corev1.EventTypeWarning, "SchedulerHostUnavailable", err.Error())
-		return "", err
+		return nil, err
 	}
 	host := schedulerHost(c.opts.P2PDomain, clusterID)
 	if host == "" {
 		err := fmt.Errorf("scheduler host is empty: --p2p-domain is required")
 		c.event(cluster, corev1.EventTypeWarning, "SchedulerHostUnavailable", err.Error())
-		return "", err
+		return nil, err
 	}
 
 	existing, getErr := c.secrets.Get(c.opts.OperatorNamespace, c.opts.MTLSSecretName, metav1.GetOptions{})
 	if getErr != nil && !apierrors.IsNotFound(getErr) {
 		err := fmt.Errorf("get mTLS Secret %s/%s: %w", c.opts.OperatorNamespace, c.opts.MTLSSecretName, getErr)
 		c.event(cluster, corev1.EventTypeWarning, "MTLSSecretUnavailable", err.Error())
-		return "", err
+		return nil, err
 	}
 
 	if !roles.Seed {
 		if getErr == nil {
-			return "", nil
+			return nil, nil
 		}
-		return "", c.bootstrapMTLSSecret(cluster)
+		return nil, c.bootstrapMTLSSecret(cluster)
 	}
 
 	ctx, cancel := context.WithTimeout(c.ctx, 10*time.Second)
@@ -439,12 +433,12 @@ func (c *Controller) ensureMTLSCertificate(cluster *provv1.Cluster, roles Roles)
 	})
 	if err != nil {
 		c.event(cluster, corev1.EventTypeWarning, "MTLSSecretUnavailable", err.Error())
-		return "", err
+		return nil, err
 	}
 	result, err := pki.EnsureSecret(c.secrets, c.opts.OperatorNamespace, c.opts.MTLSSecretName, bundle)
 	if err != nil {
 		c.event(cluster, corev1.EventTypeWarning, "MTLSSecretUnavailable", err.Error())
-		return "", err
+		return nil, err
 	}
 	if result.Created || result.Updated {
 		slog.Info("P2P certificate ensured",
@@ -455,7 +449,7 @@ func (c *Controller) ensureMTLSCertificate(cluster *provv1.Cluster, roles Roles)
 			"revision", result.Revision,
 		)
 	}
-	return primaryPublicIP(resolvedIPs), nil
+	return resolvedIPs, nil
 }
 
 // bootstrapMTLSSecret creates a manager-identity-only Secret when no seed
@@ -552,20 +546,6 @@ func dedupeStrings(values []string) []string {
 	return result
 }
 
-// primaryPublicIP prefers an IPv4 address for scheduler advertiseIP and the
-// external-dns target; the certificate still contains every resolved IP.
-func primaryPublicIP(ips []string) string {
-	for _, raw := range ips {
-		if ip := net.ParseIP(raw); ip != nil && ip.To4() != nil {
-			return ip.String()
-		}
-	}
-	if len(ips) > 0 {
-		return ips[0]
-	}
-	return ""
-}
-
 // schedulerClusterID returns the annotation value as the integer the Dragonfly
 // chart expects. Missing, non-numeric, and non-positive values are reported as 0
 // so ensureSeed emits SchedulerClusterIDMissing instead of deploying with a
@@ -587,34 +567,19 @@ type sharedHelmOps struct {
 	cleanup                                       error
 }
 
-// ensureClusterMetadata stamps the Fleet inputs onto the provisioning Cluster:
-// the cluster-id label used by the scheduler-host template and the resolved
-// public scheduler IP used by the shared advertiseIP/extras values. Role labels
-// are user-managed and are never modified here.
-func (c *Controller) ensureClusterMetadata(cluster *provv1.Cluster, hc helmop.Cluster) (*provv1.Cluster, error) {
+// ensureClusterMetadata stamps the cluster-id label used by shared Fleet
+// templates. Role labels are user-managed and are never modified here.
+func (c *Controller) ensureClusterMetadata(cluster *provv1.Cluster) (*provv1.Cluster, error) {
 	labels := map[string]string{}
 	if id := strings.TrimSpace(cluster.Status.ClusterName); id != "" {
 		labels[helmop.LabelClusterID] = id
 	}
-	annotations := map[string]string{}
-	// A value already set on the Cluster wins: the resolver can be wrong (a
-	// wildcard DNS record can point at the management cluster), so operators
-	// must be able to pin the address without the controller overwriting it.
-	if ip := strings.TrimSpace(hc.SchedulerPublicIP); ip != "" &&
-		strings.TrimSpace(cluster.Annotations[helmop.AnnotationSchedulerPublicIP]) == "" {
-		annotations[helmop.AnnotationSchedulerPublicIP] = ip
-	}
-	if len(labels) == 0 && len(annotations) == 0 {
+	if len(labels) == 0 {
 		return nil, nil
 	}
 	changed := false
 	for key, value := range labels {
 		if cluster.Labels[key] != value {
-			changed = true
-		}
-	}
-	for key, value := range annotations {
-		if cluster.Annotations[key] != value {
 			changed = true
 		}
 	}
@@ -627,12 +592,6 @@ func (c *Controller) ensureClusterMetadata(cluster *provv1.Cluster, hc helmop.Cl
 	}
 	for key, value := range labels {
 		updated.Labels[key] = value
-	}
-	if updated.Annotations == nil {
-		updated.Annotations = map[string]string{}
-	}
-	for key, value := range annotations {
-		updated.Annotations[key] = value
 	}
 	result, err := c.clusters.Update(updated)
 	if err != nil {

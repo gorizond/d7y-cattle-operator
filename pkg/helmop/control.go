@@ -50,7 +50,7 @@ func controlValues(c Cluster, names Names) map[string]any {
 					// Bootstrap nodes receive the public Traefik address from
 					// the manager dynconfig; DaemonSets use their local
 					// dynconfig and the same public host.
-					"advertiseIP":   c.SchedulerPublicIP,
+					"advertiseIP":   SharedSchedulerPublicIPTemplate,
 					"advertisePort": SchedulerPort,
 				},
 				"seedPeer": seedPeerConfig(c.P2PDataTLS),

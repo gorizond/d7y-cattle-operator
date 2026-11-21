@@ -56,12 +56,12 @@ func (c *Controller) ensureContainerdHosts(cluster *provv1.Cluster) (*provv1.Clu
 	if updated.Spec.RKEConfig == nil {
 		updated.Spec.RKEConfig = &provv1.RKEConfig{}
 	}
-	includeDefault := strings.TrimSpace(cluster.Annotations[AnnotationSchedulerIPs]) != ""
+	includeHosts := strings.TrimSpace(cluster.Annotations[AnnotationSchedulerIPs]) != ""
 	files, changed := withContainerdHostsSelector(
 		updated.Spec.RKEConfig.MachineSelectorFiles,
 		name,
 		containerdCertsDir(updated.Spec.KubernetesVersion),
-		includeDefault,
+		includeHosts,
 	)
 	if !changed {
 		return nil, nil
@@ -163,13 +163,8 @@ func containerdHostsData(port int) map[string]string {
 	}
 }
 
-func withContainerdHostsSelector(files []rkev1.RKEProvisioningFiles, name, dir string, includeDefault bool) ([]rkev1.RKEProvisioningFiles, bool) {
-	if containerdHostsHasDefault(files, name) {
-		includeDefault = true
-	}
-	desired := containerdHostsFileSource(name, dir, includeDefault)
+func withContainerdHostsSelector(files []rkev1.RKEProvisioningFiles, name, dir string, include bool) ([]rkev1.RKEProvisioningFiles, bool) {
 	out := make([]rkev1.RKEProvisioningFiles, 0, len(files)+1)
-	reused := false
 	for i := range files {
 		entry := *files[i].DeepCopy()
 		filtered := make([]rkev1.ProvisioningFileSource, 0, len(entry.FileSources))
@@ -186,19 +181,15 @@ func withContainerdHostsSelector(files []rkev1.RKEProvisioningFiles, name, dir s
 			continue
 		}
 		if len(filtered) == 0 {
-			if reused {
-				continue
-			}
-			entry.MachineLabelSelector = &metav1.LabelSelector{}
-			entry.FileSources = []rkev1.ProvisioningFileSource{desired}
-			out = append(out, entry)
-			reused = true
+			// Drop an entry that only referenced this ConfigMap. If it also
+			// carries user sources, keep the user entry without ours.
 			continue
 		}
 		entry.FileSources = filtered
 		out = append(out, entry)
 	}
-	if !reused {
+	if include {
+		desired := containerdHostsFileSource(name, dir)
 		out = append(out, rkev1.RKEProvisioningFiles{
 			MachineLabelSelector: &metav1.LabelSelector{},
 			FileSources:          []rkev1.ProvisioningFileSource{desired},
@@ -207,36 +198,16 @@ func withContainerdHostsSelector(files []rkev1.RKEProvisioningFiles, name, dir s
 	return out, !equality.Semantic.DeepEqual(files, out)
 }
 
-func containerdHostsFileSource(name, dir string, includeDefault bool) rkev1.ProvisioningFileSource {
-	items := make([]rkev1.KeyToPath, 0, 3)
-	if includeDefault {
-		items = append(items, rkev1.KeyToPath{Key: "_default", Path: dir + "/_default/hosts.toml"})
-	}
-	items = append(items,
-		rkev1.KeyToPath{Key: "docker.io", Path: dir + "/docker.io/hosts.toml"},
-		rkev1.KeyToPath{Key: "index.docker.io", Path: dir + "/index.docker.io/hosts.toml"},
-	)
+func containerdHostsFileSource(name, dir string) rkev1.ProvisioningFileSource {
 	return rkev1.ProvisioningFileSource{ConfigMap: rkev1.K8sObjectFileSource{
 		Name:               name,
 		DefaultPermissions: containerdHostsPermissions,
-		Items:              items,
+		Items: []rkev1.KeyToPath{
+			{Key: "_default", Path: dir + "/_default/hosts.toml"},
+			{Key: "docker.io", Path: dir + "/docker.io/hosts.toml"},
+			{Key: "index.docker.io", Path: dir + "/index.docker.io/hosts.toml"},
+		},
 	}}
-}
-
-func containerdHostsHasDefault(files []rkev1.RKEProvisioningFiles, name string) bool {
-	for i := range files {
-		for _, source := range files[i].FileSources {
-			if source.ConfigMap.Name != name {
-				continue
-			}
-			for _, item := range source.ConfigMap.Items {
-				if item.Key == "_default" {
-					return true
-				}
-			}
-		}
-	}
-	return false
 }
 
 func mergeStringMap(current, desired map[string]string) map[string]string {

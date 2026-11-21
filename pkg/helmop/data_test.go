@@ -262,8 +262,8 @@ func TestControlHelmOp(t *testing.T) {
 	if _, ok := seedPeer["tls"]; ok {
 		t.Errorf("seedPeer TLS is present by default: %v", seedPeer)
 	}
-	if got := valueAt(t, values, "scheduler", "config", "server", "advertiseIP"); got != "203.0.113.10" {
-		t.Errorf("scheduler advertiseIP = %v, want public LB IP", got)
+	if got := valueAt(t, values, "scheduler", "config", "server", "advertiseIP"); got != SharedSchedulerPublicIPTemplate {
+		t.Errorf("scheduler advertiseIP = %v, want the scheduler-ips template", got)
 	}
 	if got := valueAt(t, values, "scheduler", "config", "server", "advertisePort"); got != SchedulerPort {
 		t.Errorf("scheduler advertisePort = %v, want scheduler gRPC port %d", got, SchedulerPort)
