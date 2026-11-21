@@ -367,6 +367,7 @@ func (c *Controller) helmopCluster(cluster *provv1.Cluster) helmop.Cluster {
 		StaticManagerHost:            c.opts.ManagerAPIHost,
 		StaticTLSSecret:              c.opts.ExtrasIngressTLSSecret,
 		StaticIngressClassName:       c.opts.ExtrasIngressClassName,
+		StaticURL:                    c.opts.StaticURL,
 		MirrorPort:                   c.opts.ContainerdMirrorPort,
 		ManagerGRPCDomain:            c.opts.ManagerGRPCDomain,
 		P2PDomain:                    c.opts.P2PDomain,
