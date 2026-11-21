@@ -63,6 +63,8 @@ func BuildInstallEnv(cluster *provv1.Cluster, secret *corev1.Secret, schedulerID
 	if cfg.ManagerGRPCPort < 1 || cfg.ManagerGRPCPort > 65535 {
 		return "", fmt.Errorf("manager gRPC port %d is outside 1-65535", cfg.ManagerGRPCPort)
 	}
+	// Leaf Secrets carry the trust bundle in ca.crt; ca-bundle.crt is kept
+	// as a compatibility lookup for older/manual material.
 	caBundle := secret.Data["ca-bundle.crt"]
 	if len(caBundle) == 0 {
 		caBundle = secret.Data["ca.crt"]

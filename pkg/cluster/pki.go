@@ -12,7 +12,9 @@ import (
 	corev1 "k8s.io/api/core/v1"
 	apierrors "k8s.io/apimachinery/pkg/api/errors"
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
+	"k8s.io/apimachinery/pkg/apis/meta/v1/unstructured"
 	"k8s.io/apimachinery/pkg/labels"
+	"k8s.io/apimachinery/pkg/runtime/schema"
 	"sigs.k8s.io/yaml"
 
 	"github.com/gorizond/d7y-cattle-operator/pkg/apply"
@@ -20,14 +22,22 @@ import (
 	"github.com/gorizond/d7y-cattle-operator/pkg/pki"
 )
 
+const legacyServerSecretName = "dragonfly-p2p-legacy"
+
+type secretCache interface {
+	List(namespace string, selector labels.Selector) ([]*corev1.Secret, error)
+}
+
 const (
-	// AnnotationLegacyTrustDeadline marks the end of the one-time trust
-	// overlap after the legacy CA key was lost.
-	AnnotationLegacyTrustDeadline = "p2p.dragonfly.io/legacy-trust-deadline"
 	// legacyTrustWindow keeps both CAs trusted long enough for every pod to
 	// roll onto the new CA bundle.
 	legacyTrustWindow = 24 * time.Hour
 )
+
+func signedByCA(certPEM []byte, ca *pki.CA) bool {
+	certs, err := pki.ParseCertificates(certPEM)
+	return err == nil && len(certs) > 0 && ca != nil && certs[0].CheckSignatureFrom(ca.Cert) == nil
+}
 
 // ensurePKI creates/loads the stable CA and ensures the shared client identity,
 // the manager identity, and (for seeds) the per-seed scheduler identity and
@@ -42,7 +52,7 @@ func (c *Controller) ensurePKI(cluster *provv1.Cluster, roles Roles, seedIPs []s
 	if clientErr != nil && !apierrors.IsNotFound(clientErr) {
 		return cluster, false, fmt.Errorf("get client mTLS Secret %s/%s: %w", operatorNS, c.opts.MTLSSecretName, clientErr)
 	}
-	manager, managerErr := c.secrets.Get(operatorNS, helmop.ManagerMTLSSecretName, metav1.GetOptions{})
+	_, managerErr := c.secrets.Get(operatorNS, helmop.ManagerMTLSSecretName, metav1.GetOptions{})
 	if managerErr != nil && !apierrors.IsNotFound(managerErr) {
 		return cluster, false, fmt.Errorf("get manager mTLS Secret %s/%s: %w", operatorNS, helmop.ManagerMTLSSecretName, managerErr)
 	}
@@ -51,10 +61,16 @@ func (c *Controller) ensurePKI(cluster *provv1.Cluster, roles Roles, seedIPs []s
 		return cluster, false, fmt.Errorf("get scheduler mTLS Secret %s/%s: %w", operatorNS, helmop.SchedulerSourceSecretName(cluster.Name), schedulerErr)
 	}
 
-	// A missing CA may only be created from scratch, or during the one-time
-	// upgrade from the legacy shared leaf. Existing split leaves without a CA
-	// must never be silently re-rooted.
 	allowCreate := managerErr != nil && schedulerErr != nil
+	if allowCreate && c.secretCache != nil {
+		labeled, err := c.hasLabeledLeaves()
+		if err != nil {
+			return cluster, false, err
+		}
+		if labeled {
+			allowCreate = false
+		}
+	}
 	if allowCreate && c.clusterCache != nil {
 		otherLeaf, lookupErr := c.otherSchedulerLeafExists(cluster.Name)
 		if lookupErr != nil {
@@ -65,7 +81,8 @@ func (c *Controller) ensurePKI(cluster *provv1.Cluster, roles Roles, seedIPs []s
 		}
 	}
 	var legacyCA []byte
-	if clientErr == nil && len(client.Data[corev1.TLSCertKey]) > 0 && len(client.Data[corev1.TLSPrivateKeyKey]) > 0 {
+	clientLeafValid := clientErr == nil && pki.KeyMatches(client.Data[corev1.TLSCertKey], client.Data[corev1.TLSPrivateKeyKey])
+	if clientLeafValid {
 		legacyCA = client.Data["ca.crt"]
 	}
 	ca, created, err := pki.EnsureCA(c.secrets, operatorNS, pki.CASecretName, allowCreate, legacyCA)
@@ -74,62 +91,68 @@ func (c *Controller) ensurePKI(cluster *provv1.Cluster, roles Roles, seedIPs []s
 		return cluster, false, err
 	}
 
-	clientLegacy := false
-	if clientErr == nil && len(client.Data[corev1.TLSCertKey]) > 0 {
-		clientLegacy = !signedByCA(client.Data[corev1.TLSCertKey], ca)
-	}
+	clientLegacy := clientLeafValid && !signedByCA(client.Data[corev1.TLSCertKey], ca)
 
-	deadlineRaw := strings.TrimSpace(cluster.Annotations[AnnotationLegacyTrustDeadline])
-	if deadlineRaw == "" && (created && len(legacyCA) > 0 || clientLegacy) {
-		deadlineRaw = time.Now().Add(legacyTrustWindow).UTC().Format(time.RFC3339)
-		var err error
-		cluster, err = c.setClusterAnnotation(cluster, AnnotationLegacyTrustDeadline, deadlineRaw)
-		if err != nil {
+	deadline, err := c.caDeadline(operatorNS)
+	if err != nil {
+		return cluster, false, err
+	}
+	if deadline == "" && (created && len(legacyCA) > 0 || clientLegacy || bundleHasLegacy(ca)) {
+		deadline = time.Now().Add(legacyTrustWindow).UTC().Format(time.RFC3339)
+		if err := c.setCAAnnotation(operatorNS, pki.CAAnnotationLegacyTrustDeadline, deadline); err != nil {
 			return cluster, false, err
 		}
 	}
 	phaseA := false
-	if deadlineRaw != "" {
-		if deadline, err := time.Parse(time.RFC3339, deadlineRaw); err == nil && time.Now().Before(deadline) {
+	if deadline != "" {
+		parsed, parseErr := time.Parse(time.RFC3339, deadline)
+		if parseErr != nil {
 			phaseA = true
+			c.event(cluster, corev1.EventTypeWarning, "LegacyTrustDeadlineInvalid",
+				fmt.Sprintf("invalid %s on CA Secret: %v; keeping Phase A trust overlap", pki.CAAnnotationLegacyTrustDeadline, parseErr))
+		} else {
+			phaseA = time.Now().Before(parsed)
 		}
 	}
 
-	clientOpts := pki.IssueOptions{CommonName: "d7y-cattle-operator-client", ClientAuth: true}
-	if _, err := pki.EnsureLeaf(c.secrets, operatorNS, c.opts.MTLSSecretName, ca, clientOpts, phaseA && clientLegacy); err != nil {
-		c.event(cluster, corev1.EventTypeWarning, "MTLSSecretUnavailable", err.Error())
-		return cluster, false, err
-	}
-	clientSecret, err := c.secrets.Get(operatorNS, c.opts.MTLSSecretName, metav1.GetOptions{})
+	// Preserve the legacy server leaf before the client identity can be
+	// re-signed. Server identities never read tls.crt/tls.key from the mutable
+	// client Secret again after this point.
+	legacyServer, err := c.ensureLegacyServerSecret(operatorNS, client, clientLeafValid, ca, phaseA)
 	if err != nil {
-		return cluster, false, fmt.Errorf("get ensured client Secret: %w", err)
+		return cluster, false, err
 	}
 
-	managerOpts, err := c.managerIssueOptions()
-	if err != nil {
-		c.event(cluster, corev1.EventTypeWarning, "ManagerCertificateFailed", err.Error())
-		return cluster, false, err
-	}
-	if phaseA && (hasLeafData(client) || hasLeafData(manager)) {
-		if _, err := c.ensureLegacyLeaf(operatorNS, helmop.ManagerMTLSSecretName, client.Data, ca); err != nil {
+	if roles.Seed {
+		clientOpts := pki.IssueOptions{CommonName: "d7y-cattle-operator-client", ClientAuth: true}
+		reuseClient := phaseA && clientLegacy && clientLeafValid
+		if _, err := pki.EnsureLeaf(c.secrets, operatorNS, c.opts.MTLSSecretName, ca, clientOpts, reuseClient); err != nil {
 			c.event(cluster, corev1.EventTypeWarning, "MTLSSecretUnavailable", err.Error())
 			return cluster, false, err
 		}
-	} else {
-		if _, err := pki.EnsureLeaf(c.secrets, operatorNS, helmop.ManagerMTLSSecretName, ca, managerOpts, false); err != nil {
-			c.event(cluster, corev1.EventTypeWarning, "MTLSSecretUnavailable", err.Error())
+		clientSecret, err := c.secrets.Get(operatorNS, c.opts.MTLSSecretName, metav1.GetOptions{})
+		if err != nil {
+			return cluster, false, fmt.Errorf("get ensured client Secret: %w", err)
+		}
+		if err := c.replicateSecret(clientSecret, cluster.Namespace); err != nil {
 			return cluster, false, err
 		}
 	}
-	managerSecret, err := c.secrets.Get(operatorNS, helmop.ManagerMTLSSecretName, metav1.GetOptions{})
-	if err != nil {
-		return cluster, false, fmt.Errorf("get ensured manager Secret: %w", err)
-	}
-	if err := c.replicateSecret(clientSecret, cluster.Namespace); err != nil {
-		return cluster, false, err
-	}
-	if err := c.replicateSecret(managerSecret, cluster.Namespace); err != nil {
-		return cluster, false, err
+
+	if roles.Manager {
+		managerOpts, err := c.managerIssueOptions()
+		if err != nil {
+			c.event(cluster, corev1.EventTypeWarning, "ManagerCertificateFailed", err.Error())
+			return cluster, false, err
+		}
+		managerSecret, err := c.ensureServerLeaf(operatorNS, helmop.ManagerMTLSSecretName, legacyServer, ca, managerOpts, phaseA)
+		if err != nil {
+			c.event(cluster, corev1.EventTypeWarning, "MTLSSecretUnavailable", err.Error())
+			return cluster, false, err
+		}
+		if err := c.replicateSecret(managerSecret, cluster.Namespace); err != nil {
+			return cluster, false, err
+		}
 	}
 
 	if roles.Seed {
@@ -138,35 +161,225 @@ func (c *Controller) ensurePKI(cluster *provv1.Cluster, roles Roles, seedIPs []s
 			c.event(cluster, corev1.EventTypeWarning, "SchedulerHostUnavailable", err.Error())
 			return cluster, false, err
 		}
-		if phaseA && (hasLeafData(client) || hasLeafData(scheduler)) {
-			scheduler, err = c.ensureLegacyLeaf(operatorNS, helmop.SchedulerSourceSecretName(cluster.Name), client.Data, ca)
-			if err != nil {
-				c.event(cluster, corev1.EventTypeWarning, "MTLSSecretUnavailable", err.Error())
-				return cluster, false, err
-			}
-		} else {
-			if _, err := pki.EnsureLeaf(c.secrets, operatorNS, helmop.SchedulerSourceSecretName(cluster.Name), ca, schedulerOpts, false); err != nil {
-				c.event(cluster, corev1.EventTypeWarning, "MTLSSecretUnavailable", err.Error())
-				return cluster, false, err
-			}
-			scheduler, err = c.secrets.Get(operatorNS, helmop.SchedulerSourceSecretName(cluster.Name), metav1.GetOptions{})
-			if err != nil {
-				return cluster, false, fmt.Errorf("get ensured scheduler Secret: %w", err)
-			}
+		scheduler, err = c.ensureServerLeaf(operatorNS, helmop.SchedulerSourceSecretName(cluster.Name), legacyServer, ca, schedulerOpts, phaseA)
+		if err != nil {
+			c.event(cluster, corev1.EventTypeWarning, "MTLSSecretUnavailable", err.Error())
+			return cluster, false, err
 		}
-		if err := c.ensureSchedulerBundle(cluster, scheduler); err != nil {
+		bundleReady, err := c.ensureSchedulerBundle(cluster, scheduler)
+		if err != nil {
 			c.event(cluster, corev1.EventTypeWarning, "SchedulerBundleFailed", err.Error())
 			return cluster, false, err
 		}
-		cluster, err = c.setClusterAnnotation(cluster, helmop.AnnotationMTLSCertRevision, pki.SecretRevision(scheduler.Data))
-		if err != nil {
-			return cluster, false, err
+		if bundleReady {
+			cluster, err = c.setClusterAnnotation(cluster, helmop.AnnotationMTLSCertRevision, pki.SecretRevision(scheduler.Data))
+			if err != nil {
+				return cluster, false, err
+			}
 		}
-	} else if err := c.deleteSchedulerPKI(cluster); err != nil {
-		return cluster, false, err
 	}
 
 	return cluster, true, nil
+}
+
+func (c *Controller) caDeadline(namespace string) (string, error) {
+	secret, err := c.secrets.Get(namespace, pki.CASecretName, metav1.GetOptions{})
+	if err != nil {
+		return "", fmt.Errorf("get CA Secret for deadline: %w", err)
+	}
+	if secret.Annotations != nil {
+		if _, ok := secret.Annotations["kubectl.kubernetes.io/last-applied-configuration"]; ok {
+			delete(secret.Annotations, "kubectl.kubernetes.io/last-applied-configuration")
+			if _, err := c.secrets.Update(secret); err != nil {
+				return "", fmt.Errorf("scrub CA Secret annotation: %w", err)
+			}
+		}
+	}
+	return strings.TrimSpace(secret.Annotations[pki.CAAnnotationLegacyTrustDeadline]), nil
+}
+
+func (c *Controller) setCAAnnotation(namespace, key, value string) error {
+	secret, err := c.secrets.Get(namespace, pki.CASecretName, metav1.GetOptions{})
+	if err != nil {
+		return fmt.Errorf("get CA Secret: %w", err)
+	}
+	if secret.Annotations == nil {
+		secret.Annotations = map[string]string{}
+	}
+	if secret.Annotations[key] == value {
+		return nil
+	}
+	secret.Annotations[key] = value
+	delete(secret.Annotations, "kubectl.kubernetes.io/last-applied-configuration")
+	secret.Labels = map[string]string{
+		pki.ManagedByLabel: pki.ManagedByValue,
+	}
+	if _, err := c.secrets.Update(secret); err != nil {
+		return fmt.Errorf("update CA Secret annotations: %w", err)
+	}
+	return nil
+}
+
+func (c *Controller) ensureLegacyServerSecret(namespace string, client *corev1.Secret, clientValid bool, ca *pki.CA, phaseA bool) (*corev1.Secret, error) {
+	if !phaseA || !clientValid || client == nil || client.Data == nil || signedByCA(client.Data[corev1.TLSCertKey], ca) {
+		return getOptionalSecret(c.secrets, namespace, legacyServerSecretName)
+	}
+	current, err := c.secrets.Get(namespace, legacyServerSecretName, metav1.GetOptions{})
+	if err == nil {
+		return current, nil
+	}
+	if !apierrors.IsNotFound(err) {
+		return nil, fmt.Errorf("get legacy server Secret: %w", err)
+	}
+	return c.secrets.Create(&corev1.Secret{
+		ObjectMeta: metav1.ObjectMeta{
+			Name:      legacyServerSecretName,
+			Namespace: namespace,
+			Labels: map[string]string{
+				pki.LeafGenerationLabel: pki.LeafGenerationV2,
+				pki.ManagedByLabel:      pki.ManagedByValue,
+			},
+		},
+		Type: corev1.SecretTypeTLS,
+		Data: map[string][]byte{
+			"ca.crt":                append([]byte(nil), ca.BundlePEM...),
+			corev1.TLSCertKey:       append([]byte(nil), client.Data[corev1.TLSCertKey]...),
+			corev1.TLSPrivateKeyKey: append([]byte(nil), client.Data[corev1.TLSPrivateKeyKey]...),
+		},
+	})
+}
+
+func getOptionalSecret(store apply.SecretStore, namespace, name string) (*corev1.Secret, error) {
+	secret, err := store.Get(namespace, name, metav1.GetOptions{})
+	if apierrors.IsNotFound(err) {
+		return nil, nil
+	}
+	return secret, err
+}
+
+func (c *Controller) ensureServerLeaf(namespace, name string, legacy *corev1.Secret, ca *pki.CA, opts pki.IssueOptions, phaseA bool) (*corev1.Secret, error) {
+	legacyValid := phaseA && serverLeafCovers(legacy, opts)
+	current, err := c.secrets.Get(namespace, name, metav1.GetOptions{})
+	if apierrors.IsNotFound(err) {
+		if legacyValid {
+			return c.createLeafFrom(namespace, name, legacy, ca)
+		}
+		if _, err := pki.EnsureLeaf(c.secrets, namespace, name, ca, opts, false); err != nil {
+			return nil, err
+		}
+		return c.secrets.Get(namespace, name, metav1.GetOptions{})
+	}
+	if err != nil {
+		return nil, err
+	}
+	if legacyValid && !serverLeafCovers(current, opts) {
+		return c.repairLeafFrom(current, legacy, ca)
+	}
+	if legacyValid {
+		return ensureLeafCABundle(c.secrets, current, ca)
+	}
+	if _, err := pki.EnsureLeaf(c.secrets, namespace, name, ca, opts, false); err != nil {
+		return nil, err
+	}
+	return c.secrets.Get(namespace, name, metav1.GetOptions{})
+}
+
+func serverLeafCovers(secret *corev1.Secret, opts pki.IssueOptions) bool {
+	if secret == nil || !pki.KeyMatches(secret.Data[corev1.TLSCertKey], secret.Data[corev1.TLSPrivateKeyKey]) {
+		return false
+	}
+	certs, err := pki.ParseCertificates(secret.Data[corev1.TLSCertKey])
+	return err == nil && len(certs) > 0 && pki.HasServerAuth(certs[0]) && pki.HasClientAuth(certs[0]) && pki.SANsCover(certs[0], opts.DNSNames, opts.IPAddresses)
+}
+
+func (c *Controller) createLeafFrom(namespace, name string, source *corev1.Secret, ca *pki.CA) (*corev1.Secret, error) {
+	return c.secrets.Create(&corev1.Secret{
+		ObjectMeta: metav1.ObjectMeta{
+			Name:      name,
+			Namespace: namespace,
+			Labels: map[string]string{
+				pki.LeafGenerationLabel: pki.LeafGenerationV2,
+				pki.ManagedByLabel:      pki.ManagedByValue,
+			},
+		},
+		Type: corev1.SecretTypeTLS,
+		Data: map[string][]byte{
+			"ca.crt":                append([]byte(nil), ca.BundlePEM...),
+			corev1.TLSCertKey:       append([]byte(nil), source.Data[corev1.TLSCertKey]...),
+			corev1.TLSPrivateKeyKey: append([]byte(nil), source.Data[corev1.TLSPrivateKeyKey]...),
+		},
+	})
+}
+
+func (c *Controller) repairLeafFrom(current, source *corev1.Secret, ca *pki.CA) (*corev1.Secret, error) {
+	current.Type = corev1.SecretTypeTLS
+	current.Data = map[string][]byte{
+		"ca.crt":                append([]byte(nil), ca.BundlePEM...),
+		corev1.TLSCertKey:       append([]byte(nil), source.Data[corev1.TLSCertKey]...),
+		corev1.TLSPrivateKeyKey: append([]byte(nil), source.Data[corev1.TLSPrivateKeyKey]...),
+	}
+	ensureLeafLabels(current)
+	delete(current.Annotations, "kubectl.kubernetes.io/last-applied-configuration")
+	return c.secrets.Update(current)
+}
+
+func ensureLeafCABundle(store apply.SecretStore, secret *corev1.Secret, ca *pki.CA) (*corev1.Secret, error) {
+	if secret.Data == nil {
+		secret.Data = map[string][]byte{}
+	}
+	changed := false
+	if string(secret.Data["ca.crt"]) != string(ca.BundlePEM) {
+		secret.Data["ca.crt"] = append([]byte(nil), ca.BundlePEM...)
+		changed = true
+	}
+	if ensureLeafLabels(secret) {
+		changed = true
+	}
+	if _, ok := secret.Annotations["kubectl.kubernetes.io/last-applied-configuration"]; ok {
+		delete(secret.Annotations, "kubectl.kubernetes.io/last-applied-configuration")
+		changed = true
+	}
+	if !changed {
+		return secret, nil
+	}
+	return store.Update(secret)
+}
+
+func ensureLeafLabels(secret *corev1.Secret) bool {
+	if secret.Labels == nil {
+		secret.Labels = map[string]string{}
+	}
+	changed := false
+	for key, value := range map[string]string{
+		pki.LeafGenerationLabel: pki.LeafGenerationV2,
+		pki.ManagedByLabel:      pki.ManagedByValue,
+	} {
+		if secret.Labels[key] != value {
+			secret.Labels[key] = value
+			changed = true
+		}
+	}
+	return changed
+}
+
+func bundleHasLegacy(ca *pki.CA) bool {
+	if ca == nil || len(ca.BundlePEM) == 0 {
+		return false
+	}
+	certs, err := pki.ParseCertificates(ca.BundlePEM)
+	return err == nil && len(certs) > 1
+}
+
+func (c *Controller) hasLabeledLeaves() (bool, error) {
+	if c.secretCache == nil {
+		return false, nil
+	}
+	selector := labels.SelectorFromSet(map[string]string{pki.LeafGenerationLabel: pki.LeafGenerationV2})
+	secrets, err := c.secretCache.List(c.opts.OperatorNamespace, selector)
+	if err != nil {
+		return false, fmt.Errorf("list labeled PKI leaves: %w", err)
+	}
+	return len(secrets) > 0, nil
 }
 
 // otherSchedulerLeafExists is the conservative CA guard: a missing CA may not
@@ -214,8 +427,8 @@ func (c *Controller) schedulerIssueOptions(cluster *provv1.Cluster, seedIPs []st
 		return pki.IssueOptions{}, fmt.Errorf("scheduler host is empty: --p2p-domain is required")
 	}
 	ips := publicIPs(seedIPs)
-	if discoveryFailed && len(ips) == 0 {
-		ips = existingPublicIPs(existing)
+	if discoveryFailed {
+		ips = append(ips, existingPublicIPs(existing)...)
 	}
 	ips = append(ips, net.IPv4(127, 0, 0, 1), net.IPv6loopback)
 	return pki.IssueOptions{
@@ -236,49 +449,6 @@ func publicIPs(values []string) []net.IP {
 		}
 	}
 	return pki.NormalizeIPs(result)
-}
-
-func hasLeafData(secret *corev1.Secret) bool {
-	return secret != nil && len(secret.Data[corev1.TLSCertKey]) > 0 && len(secret.Data[corev1.TLSPrivateKeyKey]) > 0
-}
-
-func signedByCA(certPEM []byte, ca *pki.CA) bool {
-	certs, err := pki.ParseCertificates(certPEM)
-	return err == nil && len(certs) > 0 && ca != nil && certs[0].CheckSignatureFrom(ca.Cert) == nil
-}
-
-func (c *Controller) ensureLegacyLeaf(namespace, name string, source map[string][]byte, ca *pki.CA) (*corev1.Secret, error) {
-	if current, err := c.secrets.Get(namespace, name, metav1.GetOptions{}); err == nil {
-		if current.Data == nil {
-			current.Data = map[string][]byte{}
-		}
-		changed := false
-		if current.Annotations != nil {
-			if _, ok := current.Annotations["kubectl.kubernetes.io/last-applied-configuration"]; ok {
-				delete(current.Annotations, "kubectl.kubernetes.io/last-applied-configuration")
-				changed = true
-			}
-		}
-		if string(current.Data["ca.crt"]) != string(ca.BundlePEM) {
-			current.Data["ca.crt"] = append([]byte(nil), ca.BundlePEM...)
-			changed = true
-		}
-		if !changed {
-			return current, nil
-		}
-		return c.secrets.Update(current)
-	} else if !apierrors.IsNotFound(err) {
-		return nil, err
-	}
-	return c.secrets.Create(&corev1.Secret{
-		ObjectMeta: metav1.ObjectMeta{Name: name, Namespace: namespace},
-		Type:       corev1.SecretTypeTLS,
-		Data: map[string][]byte{
-			"ca.crt":                append([]byte(nil), ca.BundlePEM...),
-			corev1.TLSCertKey:       append([]byte(nil), source[corev1.TLSCertKey]...),
-			corev1.TLSPrivateKeyKey: append([]byte(nil), source[corev1.TLSPrivateKeyKey]...),
-		},
-	})
 }
 
 func (c *Controller) replicateSecret(source *corev1.Secret, namespace string) error {
@@ -303,9 +473,9 @@ func (c *Controller) setClusterAnnotation(cluster *provv1.Cluster, key, value st
 	return c.clusters.Update(updated)
 }
 
-func (c *Controller) ensureSchedulerBundle(cluster *provv1.Cluster, secret *corev1.Secret) error {
+func (c *Controller) ensureSchedulerBundle(cluster *provv1.Cluster, secret *corev1.Secret) (bool, error) {
 	if c.bundles == nil || secret == nil {
-		return fmt.Errorf("scheduler Bundle store is not configured")
+		return false, fmt.Errorf("scheduler Bundle store is not configured")
 	}
 	payloadSecret := &corev1.Secret{
 		TypeMeta: metav1.TypeMeta{APIVersion: "v1", Kind: "Secret"},
@@ -318,28 +488,49 @@ func (c *Controller) ensureSchedulerBundle(cluster *provv1.Cluster, secret *core
 	}
 	raw, err := yaml.Marshal(payloadSecret)
 	if err != nil {
-		return fmt.Errorf("marshal scheduler Secret: %w", err)
+		return false, fmt.Errorf("marshal scheduler Secret: %w", err)
 	}
 	labels := apply.Labels(cluster.Namespace, cluster.Name)
 	labels["p2p-dragonfly-io"] = "p2p-mtls"
 	bundle := &fleetv1alpha1.Bundle{
 		TypeMeta: metav1.TypeMeta{APIVersion: "fleet.cattle.io/v1alpha1", Kind: "Bundle"},
 		ObjectMeta: metav1.ObjectMeta{
-			Name:      helmop.SchedulerBundleName(cluster.Name),
-			Namespace: cluster.Namespace,
-			Labels:    labels,
+			Name:            helmop.SchedulerBundleName(cluster.Name),
+			Namespace:       cluster.Namespace,
+			Labels:          labels,
+			OwnerReferences: []metav1.OwnerReference{*metav1.NewControllerRef(cluster, schema.GroupVersionKind{Group: "provisioning.cattle.io", Version: "v1", Kind: "Cluster"})},
 		},
 		Spec: fleetv1alpha1.BundleSpec{
 			TargetNamespace: helmop.TargetNamespace,
-			Targets:         []fleetv1alpha1.BundleTarget{{ClusterName: cluster.Name}},
-			Resources:       []fleetv1alpha1.BundleResource{{Name: "scheduler-secret.yaml", Content: string(raw)}},
+			Targets: []fleetv1alpha1.BundleTarget{{
+				Name:        "default",
+				ClusterName: cluster.Name,
+			}},
+			Resources: []fleetv1alpha1.BundleResource{{Name: "scheduler-secret.yaml", Content: string(raw)}},
 		},
 	}
-	_, err = apply.Ensure(c.ctx, c.bundles, bundle)
-	if err != nil {
-		return fmt.Errorf("apply scheduler Bundle %s/%s: %w", cluster.Namespace, bundle.Name, err)
+	if _, err = apply.Ensure(c.ctx, c.bundles, bundle); err != nil {
+		return false, fmt.Errorf("apply scheduler Bundle %s/%s: %w", cluster.Namespace, bundle.Name, err)
 	}
-	return nil
+	current := &unstructured.Unstructured{}
+	if err := c.bundles.Get(c.ctx, cluster.Namespace, bundle.Name, current, metav1.GetOptions{}); err != nil {
+		return false, fmt.Errorf("read scheduler Bundle %s/%s: %w", cluster.Namespace, bundle.Name, err)
+	}
+	return bundleReady(current), nil
+}
+
+func bundleReady(bundle *unstructured.Unstructured) bool {
+	if bundle == nil {
+		return false
+	}
+	generation := bundle.GetGeneration()
+	if generation == 0 {
+		return false
+	}
+	observed, _, _ := unstructured.NestedInt64(bundle.Object, "status", "observedGeneration")
+	ready, _, _ := unstructured.NestedInt64(bundle.Object, "status", "summary", "ready")
+	desired, _, _ := unstructured.NestedInt64(bundle.Object, "status", "summary", "desiredReady")
+	return observed == generation && desired > 0 && ready == desired
 }
 
 func (c *Controller) deleteSchedulerPKI(cluster *provv1.Cluster) error {
@@ -348,8 +539,17 @@ func (c *Controller) deleteSchedulerPKI(cluster *provv1.Cluster) error {
 	}
 	var errs []error
 	if c.bundles != nil {
-		if _, err := apply.Delete(c.ctx, c.bundles, cluster.Namespace, helmop.SchedulerBundleName(cluster.Name)); err != nil {
-			errs = append(errs, fmt.Errorf("delete scheduler Bundle: %w", err))
+		current := &unstructured.Unstructured{}
+		err := c.bundles.Get(c.ctx, cluster.Namespace, helmop.SchedulerBundleName(cluster.Name), current, metav1.GetOptions{})
+		if err == nil {
+			labels := current.GetLabels()
+			if labels["p2p-dragonfly-io"] == "p2p-mtls" && labels["p2p.dragonfly.io/cluster-name"] == cluster.Name {
+				if _, err := apply.Delete(c.ctx, c.bundles, cluster.Namespace, helmop.SchedulerBundleName(cluster.Name)); err != nil {
+					errs = append(errs, fmt.Errorf("delete scheduler Bundle: %w", err))
+				}
+			}
+		} else if !apierrors.IsNotFound(err) {
+			errs = append(errs, fmt.Errorf("get scheduler Bundle: %w", err))
 		}
 	}
 	if c.secrets != nil {

@@ -373,6 +373,12 @@ func TestSharedControlPerSeedSchedulerTemplateAndBundle(t *testing.T) {
 	if ref.Selector == nil || ref.Selector.MatchLabels["p2p-dragonfly-io"] != "p2p-mtls" {
 		t.Errorf("scheduler dependency = %+v, want label selector", ref)
 	}
+	if op.Labels["p2p-dragonfly-io"] != "control" {
+		t.Errorf("control component label = %q, want control (never p2p-mtls)", op.Labels["p2p-dragonfly-io"])
+	}
+	if op.Labels["p2p-dragonfly-io"] == "p2p-mtls" {
+		t.Error("control HelmOp carries the cert Bundle selector label and can self-match")
+	}
 	template := op.Spec.Helm.TemplateValues["scheduler"]
 	for _, want := range []string{AnnotationMTLSCertRevision, "index .ClusterAnnotations", "scheduler-mtls", "client-mtls", ClientCertDir} {
 		if !strings.Contains(template, want) {

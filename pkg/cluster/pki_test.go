@@ -65,6 +65,7 @@ func TestPKIStableCAAndSplitLeaves(t *testing.T) {
 	}}
 
 	seedA := pkiSeed("c1", "c-m-a")
+	seedA.Annotations[AnnotationManager] = "true"
 	seedB := pkiSeed("seed-b", "c-m-b")
 	controller.secrets.(*fakeSecretStore).put(&corev1.Secret{
 		ObjectMeta: metav1.ObjectMeta{Name: "seed-b-kubeconfig", Namespace: "fleet-default"},
@@ -133,10 +134,13 @@ func TestPKIStableCAAndSplitLeaves(t *testing.T) {
 	if bundleA.GetLabels()["p2p-dragonfly-io"] != "p2p-mtls" || bundleA.GetLabels()["p2p.dragonfly.io/cluster-name"] != "c1" {
 		t.Errorf("scheduler Bundle labels = %v", bundleA.GetLabels())
 	}
-	if bundleA.Spec.TargetNamespace != helmop.TargetNamespace || len(bundleA.Spec.Targets) != 1 || bundleA.Spec.Targets[0].ClusterName != "c1" {
+	if bundleA.Spec.TargetNamespace != helmop.TargetNamespace || len(bundleA.Spec.Targets) != 1 || bundleA.Spec.Targets[0].ClusterName != "c1" || bundleA.Spec.Targets[0].Name != "default" {
 		t.Errorf("scheduler Bundle target = %+v", bundleA.Spec)
 	}
-	if len(bundleA.Spec.Resources) != 1 || !strings.Contains(bundleA.Spec.Resources[0].Content, "name: dragonfly-p2p-scheduler") {
+	if len(bundleA.OwnerReferences) != 1 || bundleA.OwnerReferences[0].Kind != "Cluster" || bundleA.OwnerReferences[0].Name != "c1" {
+		t.Errorf("scheduler Bundle ownerReferences = %+v", bundleA.OwnerReferences)
+	}
+	if len(bundleA.Spec.Resources) != 1 || !strings.HasSuffix(bundleA.Spec.Resources[0].Name, ".yaml") || !strings.Contains(bundleA.Spec.Resources[0].Content, "name: dragonfly-p2p-scheduler") {
 		t.Errorf("scheduler Bundle resources = %+v", bundleA.Spec.Resources)
 	}
 }
@@ -152,6 +156,7 @@ func TestSchedulerRotationAffectsOnlyThatSeed(t *testing.T) {
 		{NodeName: "seed-b-node", HostIP: "203.0.113.11"},
 	}}
 	seedA := pkiSeed("c1", "c-m-a")
+	seedA.Annotations[AnnotationManager] = "true"
 	seedB := pkiSeed("seed-b", "c-m-b")
 	controller.secrets.(*fakeSecretStore).put(&corev1.Secret{
 		ObjectMeta: metav1.ObjectMeta{Name: "seed-b-kubeconfig", Namespace: "fleet-default"},
@@ -195,6 +200,9 @@ func TestManagerOnlyPKI(t *testing.T) {
 	if err := controller.bundles.Get(controller.ctx, cluster.Namespace, helmop.SchedulerBundleName(cluster.Name), &fleetv1alpha1.Bundle{}, metav1.GetOptions{}); err == nil {
 		t.Error("manager-only cluster has a scheduler Bundle")
 	}
+	if _, err := controller.secrets.Get(cluster.Namespace, "dragonfly-p2p-mtls", metav1.GetOptions{}); err == nil {
+		t.Error("manager-only cluster replicated the client identity")
+	}
 	managerCert := leaf(t, getSecret(t, controller, "dragonfly-system", helmop.ManagerMTLSSecretName))
 	for _, want := range []string{"grpc.example.com", "api.example.com", "localhost"} {
 		if !slices.Contains(managerCert.DNSNames, want) {
@@ -229,7 +237,13 @@ func TestLegacyTrustPhaseAThenPhaseB(t *testing.T) {
 	if err != nil {
 		t.Fatalf("NewCA(legacy) error = %v", err)
 	}
-	legacyLeaf, err := legacyCA.Sign(pki.IssueOptions{CommonName: "legacy", ServerAuth: true, ClientAuth: true})
+	legacyLeaf, err := legacyCA.Sign(pki.IssueOptions{
+		CommonName:  "legacy",
+		DNSNames:    []string{"d7y-scheduler.c-m-a.example.com", "c1-control-scheduler.dragonfly-system.svc", "grpc.example.com", "api.example.com", "dragonfly-manager.dragonfly-system.svc", "localhost"},
+		IPAddresses: []net.IP{net.ParseIP("203.0.113.10"), net.ParseIP("127.0.0.1"), net.ParseIP("::1")},
+		ServerAuth:  true,
+		ClientAuth:  true,
+	})
 	if err != nil {
 		t.Fatalf("Sign(legacy) error = %v", err)
 	}
@@ -246,8 +260,11 @@ func TestLegacyTrustPhaseAThenPhaseB(t *testing.T) {
 	if err != nil || len(bundleCerts) != 2 {
 		t.Fatalf("Phase A CA bundle = %d certs, error %v", len(bundleCerts), err)
 	}
-	if got := controller.clusters.(*fakeClusterStore).annotation(AnnotationLegacyTrustDeadline); got == "" {
-		t.Error("Phase A did not set legacy trust deadline")
+	if got := ca.Annotations[pki.CAAnnotationLegacyTrustDeadline]; got == "" {
+		t.Error("Phase A did not set the global legacy trust deadline")
+	}
+	if got := controller.clusters.(*fakeClusterStore).annotations()["p2p.dragonfly.io/legacy-trust-deadline"]; got != "" {
+		t.Errorf("legacy trust deadline was written to the Cluster: %q", got)
 	}
 	client := getSecret(t, controller, "dragonfly-system", "dragonfly-p2p-mtls")
 	if string(client.Data[corev1.TLSCertKey]) != string(legacyLeaf.CertPEM) {
@@ -257,8 +274,8 @@ func TestLegacyTrustPhaseAThenPhaseB(t *testing.T) {
 		t.Error("Phase A did not preserve the legacy scheduler identity")
 	}
 
-	cluster = controller.clusters.(*fakeClusterStore).cluster.DeepCopy()
-	cluster.Annotations[AnnotationLegacyTrustDeadline] = time.Now().Add(-time.Minute).UTC().Format(time.RFC3339)
+	ca.Annotations[pki.CAAnnotationLegacyTrustDeadline] = time.Now().Add(-time.Minute).UTC().Format(time.RFC3339)
+	controller.secrets.(*fakeSecretStore).put(ca)
 	controller.clusters.(*fakeClusterStore).set(cluster)
 	if _, err := controller.reconcile("", cluster); err != nil {
 		t.Fatalf("Phase B reconcile error = %v", err)
@@ -316,5 +333,333 @@ func TestPKICAGuardSeesOtherSeedLeaf(t *testing.T) {
 	}
 	if !hasEventReason(events.events, "PKICAUnavailable") {
 		t.Errorf("events = %+v, want PKICAUnavailable", events.events)
+	}
+}
+
+func TestSchedulerRevisionAnnotatedOnlyAfterBundleReady(t *testing.T) {
+	controller, _, _ := newTestController(t)
+	cluster := pkiSeed("c1", "c-m-a")
+	controller.clusters.(*fakeClusterStore).set(cluster)
+	if _, err := controller.reconcile("", cluster); err != nil {
+		t.Fatalf("reconcile() error = %v", err)
+	}
+	if got := controller.clusters.(*fakeClusterStore).annotation(helmop.AnnotationMTLSCertRevision); got != "" {
+		t.Errorf("scheduler revision = %q, want empty until the Bundle is ready", got)
+	}
+
+	bundle := controller.bundles.(*fakeHelmOpStore).object("fleet-default/" + helmop.SchedulerBundleName("c1"))
+	if bundle == nil {
+		t.Fatal("scheduler Bundle is missing")
+	}
+	bundle.SetGeneration(1)
+	if err := unstructured.SetNestedField(bundle.Object, int64(1), "status", "observedGeneration"); err != nil {
+		t.Fatal(err)
+	}
+	if err := unstructured.SetNestedField(bundle.Object, int64(1), "status", "summary", "ready"); err != nil {
+		t.Fatal(err)
+	}
+	if err := unstructured.SetNestedField(bundle.Object, int64(1), "status", "summary", "desiredReady"); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := controller.reconcile("", cluster); err != nil {
+		t.Fatalf("reconcile(ready) error = %v", err)
+	}
+	if got := controller.clusters.(*fakeClusterStore).annotation(helmop.AnnotationMTLSCertRevision); got == "" {
+		t.Error("scheduler revision was not set after Bundle readiness")
+	}
+}
+
+func installLegacyClient(t *testing.T, controller *Controller, clusterID string) (*pki.CA, *pki.Bundle) {
+	t.Helper()
+	legacyCA, err := pki.NewCA(nil)
+	if err != nil {
+		t.Fatalf("NewCA(legacy) error = %v", err)
+	}
+	legacyLeaf, err := legacyCA.Sign(pki.IssueOptions{
+		CommonName: "legacy",
+		DNSNames: []string{
+			"d7y-scheduler." + clusterID + ".example.com",
+			"c1-control-scheduler.dragonfly-system.svc",
+			"grpc.example.com", "api.example.com",
+			"dragonfly-manager.dragonfly-system.svc", "localhost",
+		},
+		IPAddresses: []net.IP{net.ParseIP("203.0.113.10"), net.ParseIP("127.0.0.1"), net.ParseIP("::1")},
+		ServerAuth:  true,
+		ClientAuth:  true,
+	})
+	if err != nil {
+		t.Fatalf("Sign(legacy) error = %v", err)
+	}
+	controller.secrets.(*fakeSecretStore).put(&corev1.Secret{
+		ObjectMeta: metav1.ObjectMeta{Name: "dragonfly-p2p-mtls", Namespace: "dragonfly-system"},
+		Type:       corev1.SecretTypeTLS,
+		Data:       map[string][]byte{"ca.crt": legacyCA.CertPEM, "tls.crt": legacyLeaf.CertPEM, "tls.key": legacyLeaf.KeyPEM},
+	})
+	return legacyCA, legacyLeaf
+}
+
+func TestNewSeedDuringPhaseA(t *testing.T) {
+	controller, _, _ := newTestController(t)
+	_, legacyLeaf := installLegacyClient(t, controller, "c-m-a")
+	controller.machines = &fakeMachineCache{machines: []*capiv1beta2.Machine{
+		seedMachine("c1", "c1-0", "203.0.113.10"),
+		seedMachine("seed-b", "seed-b-0", "203.0.113.11"),
+	}}
+	controller.downstream = &fakeSchedulerPodLister{pods: []schedulerPod{
+		{NodeName: "c1-node", HostIP: "203.0.113.10"},
+		{NodeName: "seed-b-node", HostIP: "203.0.113.11"},
+	}}
+	controller.secrets.(*fakeSecretStore).put(&corev1.Secret{
+		ObjectMeta: metav1.ObjectMeta{Name: "seed-b-kubeconfig", Namespace: "fleet-default"},
+		Data:       map[string][]byte{"value": []byte("fake")},
+	})
+	seedA := pkiSeed("c1", "c-m-a")
+	reconcileCluster(t, controller, seedA)
+	seedB := pkiSeed("seed-b", "c-m-b")
+	reconcileCluster(t, controller, seedB)
+
+	schedulerB := leaf(t, getSecret(t, controller, "dragonfly-system", helmop.SchedulerSourceSecretName("seed-b")))
+	if string(schedulerB.Raw) == string(leaf(t, &corev1.Secret{Data: map[string][]byte{corev1.TLSCertKey: legacyLeaf.CertPEM}}).Raw) {
+		t.Error("new seed reused a legacy scheduler identity without its SANs")
+	}
+	if !slices.Contains(schedulerB.DNSNames, "d7y-scheduler.c-m-b.example.com") {
+		t.Errorf("new seed scheduler SANs = %v", schedulerB.DNSNames)
+	}
+	ca, _ := pki.ParseCertificates(getSecret(t, controller, "dragonfly-system", pki.CASecretName).Data["ca.crt"])
+	if err := schedulerB.CheckSignatureFrom(ca[0]); err != nil {
+		t.Errorf("new seed scheduler is not signed by the active CA: %v", err)
+	}
+	client := leaf(t, getSecret(t, controller, "dragonfly-system", "dragonfly-p2p-mtls"))
+	if string(client.Raw) != string(leaf(t, &corev1.Secret{Data: map[string][]byte{corev1.TLSCertKey: legacyLeaf.CertPEM}}).Raw) {
+		t.Error("Phase A client identity was re-signed for a new seed")
+	}
+}
+
+func TestPhaseAAfterClientReSignUsesLegacyServerSecret(t *testing.T) {
+	controller, _, _ := newTestController(t)
+	_, legacyLeaf := installLegacyClient(t, controller, "c-m-a")
+	controller.machines = &fakeMachineCache{machines: []*capiv1beta2.Machine{seedMachine("c1", "c1-0", "203.0.113.10")}}
+	controller.downstream = &fakeSchedulerPodLister{pods: []schedulerPod{{NodeName: "c1-node", HostIP: "203.0.113.10"}}}
+	cluster := pkiSeed("c1", "c-m-a")
+	cluster.Annotations[AnnotationManager] = "true"
+	reconcileCluster(t, controller, cluster)
+
+	caSecret := getSecret(t, controller, "dragonfly-system", pki.CASecretName)
+	ca, err := pki.LoadCA(caSecret.Data["ca.crt"], caSecret.Data[pki.CAKey], caSecret.Data[pki.CABundleKey])
+	if err != nil {
+		t.Fatalf("LoadCA() error = %v", err)
+	}
+	if _, err := pki.EnsureLeaf(controller.secrets, "dragonfly-system", "dragonfly-p2p-mtls", ca,
+		pki.IssueOptions{CommonName: "active-client", ClientAuth: true}, false); err != nil {
+		t.Fatalf("re-sign client: %v", err)
+	}
+	store := controller.secrets.(*fakeSecretStore)
+	delete(store.secrets, "dragonfly-system/"+helmop.ManagerMTLSSecretName)
+	delete(store.secrets, "dragonfly-system/"+helmop.SchedulerSourceSecretName("c1"))
+	if _, err := controller.reconcile("", cluster); err != nil {
+		t.Fatalf("reconcile() error = %v", err)
+	}
+	manager := leaf(t, getSecret(t, controller, "dragonfly-system", helmop.ManagerMTLSSecretName))
+	scheduler := leaf(t, getSecret(t, controller, "dragonfly-system", helmop.SchedulerSourceSecretName("c1")))
+	want := leaf(t, &corev1.Secret{Data: map[string][]byte{corev1.TLSCertKey: legacyLeaf.CertPEM}})
+	if string(manager.Raw) != string(want.Raw) || string(scheduler.Raw) != string(want.Raw) {
+		t.Error("missing manager/scheduler Secrets were not restored from the preserved legacy server leaf")
+	}
+}
+
+func TestPKICAGuardClientOnly(t *testing.T) {
+	controller, _, events := newTestController(t)
+	controller.secrets.(*fakeSecretStore).put(&corev1.Secret{
+		ObjectMeta: metav1.ObjectMeta{
+			Name: "dragonfly-p2p-mtls", Namespace: "dragonfly-system",
+			Labels: map[string]string{pki.LeafGenerationLabel: pki.LeafGenerationV2},
+		},
+		Type: corev1.SecretTypeTLS,
+		Data: map[string][]byte{"ca.crt": []byte("ca"), "tls.crt": []byte("cert"), "tls.key": []byte("key")},
+	})
+	cluster := pkiSeed("c1", "c-m-a")
+	controller.clusters.(*fakeClusterStore).set(cluster)
+	if _, err := controller.reconcile("", cluster); err == nil {
+		t.Fatal("reconcile() error = nil, want CA unavailable for a labeled client-only leaf")
+	}
+	if _, err := controller.secrets.Get("dragonfly-system", pki.CASecretName, metav1.GetOptions{}); err == nil {
+		t.Error("CA was created while a labeled client leaf existed")
+	}
+	if !hasEventReason(events.events, "PKICAUnavailable") {
+		t.Errorf("events = %+v, want PKICAUnavailable", events.events)
+	}
+}
+
+func TestSeedOnlyDoesNotCreateManager(t *testing.T) {
+	controller, _, _ := newTestController(t)
+	cluster := pkiSeed("c1", "c-m-a")
+	reconcileCluster(t, controller, cluster)
+	if _, err := controller.secrets.Get("dragonfly-system", helmop.ManagerMTLSSecretName, metav1.GetOptions{}); err == nil {
+		t.Error("seed-only cluster created a manager identity Secret")
+	}
+	if _, err := controller.secrets.Get("fleet-default", helmop.ManagerMTLSSecretName, metav1.GetOptions{}); err == nil {
+		t.Error("seed-only cluster replicated a manager identity Secret")
+	}
+}
+
+func TestDeleteSchedulerPKIRespectsBundleOwnership(t *testing.T) {
+	controller, _, _ := newTestController(t)
+	cluster := pkiSeed("c1", "c-m-a")
+	reconcileCluster(t, controller, cluster)
+	store := controller.bundles.(*fakeHelmOpStore)
+	unrelated := &unstructured.Unstructured{Object: map[string]any{
+		"apiVersion": "fleet.cattle.io/v1alpha1",
+		"kind":       "Bundle",
+		"metadata": map[string]any{
+			"name":      helmop.SchedulerBundleName("c1"),
+			"namespace": "fleet-default",
+			"labels":    map[string]any{"p2p-dragonfly-io": "foreign"},
+		},
+	}}
+	store.objects["fleet-default/"+helmop.SchedulerBundleName("c1")] = unrelated
+	if err := controller.deleteSchedulerPKI(cluster); err != nil {
+		t.Fatalf("deleteSchedulerPKI() error = %v", err)
+	}
+	if !store.has("fleet-default/" + helmop.SchedulerBundleName("c1")) {
+		t.Error("deleteSchedulerPKI removed a Bundle it does not own")
+	}
+}
+
+func TestInvalidTrustDeadlineKeepsPhaseAAndEvents(t *testing.T) {
+	controller, _, events := newTestController(t)
+	cluster := pkiSeed("c1", "c-m-a")
+	reconcileCluster(t, controller, cluster)
+	ca := getSecret(t, controller, "dragonfly-system", pki.CASecretName)
+	if ca.Annotations == nil {
+		ca.Annotations = map[string]string{}
+	}
+	ca.Annotations[pki.CAAnnotationLegacyTrustDeadline] = "not-a-time"
+	controller.secrets.(*fakeSecretStore).put(ca)
+	before := getSecret(t, controller, "dragonfly-system", helmop.SchedulerSourceSecretName("c1"))
+	if _, err := controller.reconcile("", cluster); err != nil {
+		t.Fatalf("reconcile() error = %v", err)
+	}
+	after := getSecret(t, controller, "dragonfly-system", helmop.SchedulerSourceSecretName("c1"))
+	if string(after.Data[corev1.TLSCertKey]) != string(before.Data[corev1.TLSCertKey]) {
+		t.Error("invalid deadline caused a Phase B re-sign")
+	}
+	if !hasEventReason(events.events, "LegacyTrustDeadlineInvalid") {
+		t.Errorf("events = %+v, want LegacyTrustDeadlineInvalid", events.events)
+	}
+}
+
+func markSchedulerBundleReady(t *testing.T, controller *Controller, clusterName string) {
+	t.Helper()
+	bundle := controller.bundles.(*fakeHelmOpStore).object("fleet-default/" + helmop.SchedulerBundleName(clusterName))
+	if bundle == nil {
+		t.Fatalf("Bundle %s is missing", clusterName)
+	}
+	bundle.SetGeneration(1)
+	_ = unstructured.SetNestedField(bundle.Object, int64(1), "status", "observedGeneration")
+	_ = unstructured.SetNestedField(bundle.Object, int64(1), "status", "summary", "ready")
+	_ = unstructured.SetNestedField(bundle.Object, int64(1), "status", "summary", "desiredReady")
+}
+
+func TestSchedulerRevisionOnlyChangesForAffectedCluster(t *testing.T) {
+	controller, _, _ := newTestController(t)
+	controller.machines = &fakeMachineCache{machines: []*capiv1beta2.Machine{
+		seedMachine("c1", "c1-0", "203.0.113.10"),
+		seedMachine("seed-b", "seed-b-0", "203.0.113.11"),
+	}}
+	controller.downstream = &fakeSchedulerPodLister{pods: []schedulerPod{
+		{NodeName: "c1-node", HostIP: "203.0.113.10"},
+		{NodeName: "seed-b-node", HostIP: "203.0.113.11"},
+	}}
+	controller.secrets.(*fakeSecretStore).put(&corev1.Secret{
+		ObjectMeta: metav1.ObjectMeta{Name: "seed-b-kubeconfig", Namespace: "fleet-default"},
+		Data:       map[string][]byte{"value": []byte("fake")},
+	})
+	clusterA := pkiSeed("c1", "c-m-a")
+	clusterB := pkiSeed("seed-b", "c-m-b")
+	controller.clusters.(*fakeClusterStore).set(clusterA)
+	if _, err := controller.reconcile("", clusterA); err != nil {
+		t.Fatalf("reconcile A: %v", err)
+	}
+	markSchedulerBundleReady(t, controller, clusterA.Name)
+	updatedA, err := controller.reconcile("", clusterA)
+	if err != nil {
+		t.Fatalf("reconcile A ready: %v", err)
+	}
+	revA := updatedA.Annotations[helmop.AnnotationMTLSCertRevision]
+	if revA == "" {
+		t.Fatal("cluster A scheduler revision is empty")
+	}
+
+	controller.clusters.(*fakeClusterStore).set(clusterB)
+	if _, err := controller.reconcile("", clusterB); err != nil {
+		t.Fatalf("reconcile B: %v", err)
+	}
+	markSchedulerBundleReady(t, controller, clusterB.Name)
+	updatedB, err := controller.reconcile("", clusterB)
+	if err != nil {
+		t.Fatalf("reconcile B ready: %v", err)
+	}
+	revB := updatedB.Annotations[helmop.AnnotationMTLSCertRevision]
+	if revB == "" || revB == revA {
+		t.Fatalf("cluster revisions A=%q B=%q, want distinct non-empty", revA, revB)
+	}
+
+	controller.machines.(*fakeMachineCache).machines[0] = seedMachine("c1", "c1-0", "203.0.113.12")
+	controller.downstream.(*fakeSchedulerPodLister).pods[0].HostIP = "203.0.113.12"
+	controller.clusters.(*fakeClusterStore).set(clusterA)
+	if _, err := controller.reconcile("", clusterA); err != nil {
+		t.Fatalf("reconcile A rotation: %v", err)
+	}
+	markSchedulerBundleReady(t, controller, clusterA.Name)
+	rotatedA, err := controller.reconcile("", clusterA)
+	if err != nil {
+		t.Fatalf("reconcile A rotated: %v", err)
+	}
+	if got := rotatedA.Annotations[helmop.AnnotationMTLSCertRevision]; got == revA {
+		t.Error("cluster A scheduler revision did not change")
+	}
+	if updatedB.Annotations[helmop.AnnotationMTLSCertRevision] != revB {
+		t.Error("cluster B revision changed while only cluster A was reconciled")
+	}
+}
+
+func TestPhaseARepairsCorruptServerLeaf(t *testing.T) {
+	controller, _, _ := newTestController(t)
+	_, legacyLeaf := installLegacyClient(t, controller, "c-m-a")
+	controller.machines = &fakeMachineCache{machines: []*capiv1beta2.Machine{seedMachine("c1", "c1-0", "203.0.113.10")}}
+	controller.downstream = &fakeSchedulerPodLister{pods: []schedulerPod{{NodeName: "c1-node", HostIP: "203.0.113.10"}}}
+	cluster := pkiSeed("c1", "c-m-a")
+	cluster.Annotations[AnnotationManager] = "true"
+	reconcileCluster(t, controller, cluster)
+	manager := getSecret(t, controller, "dragonfly-system", helmop.ManagerMTLSSecretName)
+	manager.Data[corev1.TLSPrivateKeyKey] = []byte("corrupt")
+	controller.secrets.(*fakeSecretStore).put(manager)
+	if _, err := controller.reconcile("", cluster); err != nil {
+		t.Fatalf("reconcile() error = %v", err)
+	}
+	repaired := getSecret(t, controller, "dragonfly-system", helmop.ManagerMTLSSecretName)
+	if string(repaired.Data[corev1.TLSCertKey]) != string(legacyLeaf.CertPEM) || string(repaired.Data[corev1.TLSPrivateKeyKey]) != string(legacyLeaf.KeyPEM) {
+		t.Error("corrupt Phase A manager leaf was not repaired from the preserved legacy server leaf")
+	}
+}
+
+func TestDeleteSchedulerPKICleanup(t *testing.T) {
+	controller, _, _ := newTestController(t)
+	cluster := pkiSeed("c1", "c-m-a")
+	cluster.Annotations[AnnotationManager] = "true"
+	reconcileCluster(t, controller, cluster)
+	if !controller.bundles.(*fakeHelmOpStore).has("fleet-default/" + helmop.SchedulerBundleName("c1")) {
+		t.Fatal("scheduler Bundle was not created")
+	}
+	delete(cluster.Annotations, AnnotationSeed)
+	cluster.Annotations[AnnotationManager] = "true"
+	if _, err := controller.reconcile("", cluster); err != nil {
+		t.Fatalf("reconcile(seed removed) error = %v", err)
+	}
+	if controller.bundles.(*fakeHelmOpStore).has("fleet-default/" + helmop.SchedulerBundleName("c1")) {
+		t.Error("scheduler Bundle was not deleted with the seed role")
+	}
+	if _, err := controller.secrets.Get("dragonfly-system", helmop.SchedulerSourceSecretName("c1"), metav1.GetOptions{}); err == nil {
+		t.Error("scheduler source Secret was not deleted with the seed role")
 	}
 }

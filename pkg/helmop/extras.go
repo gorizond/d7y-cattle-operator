@@ -42,8 +42,7 @@ func Extras(c Cluster, opts ExtrasOptions) *fleetv1alpha1.HelmOp {
 	if opts.IngressEnabled {
 		dependsOn = []string{names.Manager}
 	}
-	op := newHelmOp(ExtrasName(c.Name), c, c.ExtrasChart, "extras", values, dependsOn)
-	return withMTLS(op, ManagerMTLSSecretName)
+	return newHelmOp(ExtrasName(c.Name), c, c.ExtrasChart, "extras", values, dependsOn)
 }
 
 // SharedExtras returns the shared dragonfly-extras HelmOp. It targets seed
@@ -63,9 +62,8 @@ func SharedExtras(c Cluster, opts ExtrasOptions) *fleetv1alpha1.HelmOp {
 	opts.SchedulerPort = SchedulerPort
 	values := extrasValues(c, opts, names)
 	values["ingress"].(map[string]any)["enabled"] = SharedManagerIngressEnabledTemplate
-	op := newSharedHelmOp(SharedExtrasName(), TargetNamespace, c, c.ExtrasChart, "extras",
+	return newSharedHelmOp(SharedExtrasName(), TargetNamespace, c, c.ExtrasChart, "extras",
 		values, nil, SharedSelector())
-	return withMTLS(op, ManagerMTLSSecretName)
 }
 
 func extrasValues(c Cluster, opts ExtrasOptions, names Names) map[string]any {

@@ -25,8 +25,8 @@ func TestExtrasHelmOp(t *testing.T) {
 	if len(op.Spec.DependsOn) != 1 || op.Spec.DependsOn[0].Name != "c1-manager" {
 		t.Errorf("dependsOn = %+v", op.Spec.DependsOn)
 	}
-	if len(op.Spec.DownstreamResources) != 1 || op.Spec.DownstreamResources[0].Name != ManagerMTLSSecretName {
-		t.Errorf("downstreamResources = %+v, want the manager Secret", op.Spec.DownstreamResources)
+	if len(op.Spec.DownstreamResources) != 0 {
+		t.Errorf("downstreamResources = %+v, want none; SharedManager owns the manager Secret", op.Spec.DownstreamResources)
 	}
 	if op.Spec.Helm.Chart != "dragonfly-extras" || op.Spec.Helm.Version != "0.1.10" {
 		t.Errorf("chart = %s %s", op.Spec.Helm.Chart, op.Spec.Helm.Version)

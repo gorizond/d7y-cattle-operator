@@ -14,6 +14,7 @@ import (
 	corev1 "k8s.io/api/core/v1"
 	apierrors "k8s.io/apimachinery/pkg/api/errors"
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
+	"k8s.io/apimachinery/pkg/labels"
 	capiv1beta2 "sigs.k8s.io/cluster-api/api/core/v1beta2"
 
 	capictl "github.com/rancher/rancher/pkg/generated/controllers/cluster.x-k8s.io/v1beta2"
@@ -50,10 +51,12 @@ type Options struct {
 
 type secretUpdater interface {
 	Update(*corev1.Secret) (*corev1.Secret, error)
+	Enqueue(namespace, name string)
 }
 
 type SecretCache interface {
 	Get(namespace, name string) (*corev1.Secret, error)
+	List(namespace string, selector labels.Selector) ([]*corev1.Secret, error)
 }
 
 type MachineCache interface {
@@ -89,6 +92,30 @@ func Register(ctx context.Context, secrets corectl.SecretController, machines ca
 		opts:     opts,
 	}
 	secrets.OnChange(ctx, controllerName, c.reconcile)
+	secrets.OnChange(ctx, controllerName+":client-cert-revision", c.clientSecretChanged)
+}
+
+// clientSecretChanged re-enqueues every machine-bootstrap Secret when the
+// shared client leaf changes, so existing bootstrap blocks pick up the new CA
+// bundle/revision without waiting for an unrelated informer event.
+func (c *Controller) clientSecretChanged(_ string, secret *corev1.Secret) (*corev1.Secret, error) {
+	if secret == nil || c.mtls == nil || c.secrets == nil {
+		return secret, nil
+	}
+	if secret.Namespace != c.opts.OperatorNamespace || secret.Name != c.opts.MTLSSecretName {
+		return secret, nil
+	}
+	items, err := c.mtls.List(metav1.NamespaceAll, labels.Everything())
+	if err != nil {
+		slog.Warn("failed to list bootstrap secrets for client revision", "error", err)
+		return secret, nil
+	}
+	for _, item := range items {
+		if item != nil && item.Type == bootstrapSecretType {
+			c.secrets.Enqueue(item.Namespace, item.Name)
+		}
+	}
+	return secret, nil
 }
 
 func (c *Controller) reconcile(key string, secret *corev1.Secret) (*corev1.Secret, error) {
@@ -173,7 +200,12 @@ func (c *Controller) reconcile(key string, secret *corev1.Secret) (*corev1.Secre
 	if updated.Data == nil {
 		updated.Data = map[string][]byte{}
 	}
-	updated.Data[bootstrapValueKey] = []byte(insertInlineBlock(value, inlineInstallBlock(env)))
+	patched, err := insertInlineBlock(value, inlineInstallBlock(env))
+	if err != nil {
+		c.event(machine, cluster, secret, corev1.EventTypeWarning, "BootstrapPatchFailed", err.Error())
+		return secret, err
+	}
+	updated.Data[bootstrapValueKey] = []byte(patched)
 	if updated.Annotations == nil {
 		updated.Annotations = map[string]string{}
 	}

@@ -326,7 +326,7 @@ func newHelmOpInNamespace(name, targetNamespace string, c Cluster, chart Chart, 
 		ReleaseName: name,
 		Values:      &fleetv1alpha1.GenericMap{Data: values},
 	}
-	op.Spec.Targets = []fleetv1alpha1.BundleTarget{{ClusterName: c.Name}}
+	op.Spec.Targets = []fleetv1alpha1.BundleTarget{{Name: "default", ClusterName: c.Name}}
 	for _, dependency := range dependsOn {
 		op.Spec.DependsOn = append(op.Spec.DependsOn, fleetv1alpha1.BundleRef{Name: dependency})
 	}
@@ -381,6 +381,7 @@ func newSharedHelmOp(name, targetNamespace string, c Cluster, chart Chart, compo
 		Values:        &fleetv1alpha1.GenericMap{Data: values},
 	}
 	op.Spec.Targets = []fleetv1alpha1.BundleTarget{{
+		Name:            "default",
 		ClusterSelector: &metav1.LabelSelector{MatchLabels: selector},
 	}}
 	for _, dependency := range dependsOn {
@@ -399,6 +400,12 @@ func schedulerClusterIDValue(c Cluster) any {
 // withMTLS declares the downstream P2P Secret so Fleet copies it into the
 // release namespace before the chart starts.
 func withMTLS(op *fleetv1alpha1.HelmOp, secretName string) *fleetv1alpha1.HelmOp {
-	op.Spec.DownstreamResources = []fleetv1alpha1.DownstreamResource{{Kind: "Secret", Name: secretName}}
+	for _, resource := range op.Spec.DownstreamResources {
+		if resource.Kind == "Secret" && resource.Name == secretName {
+			return op
+		}
+	}
+	op.Spec.DownstreamResources = append(op.Spec.DownstreamResources,
+		fleetv1alpha1.DownstreamResource{Kind: "Secret", Name: secretName})
 	return op
 }

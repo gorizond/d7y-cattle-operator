@@ -41,6 +41,17 @@ func ReplicateSecret(source *corev1.Secret, namespace string, store SecretStore)
 	}
 
 	changed := current.Type != source.Type || !equality.Semantic.DeepEqual(current.Data, source.Data)
+	if source.Labels != nil {
+		if current.Labels == nil {
+			current.Labels = map[string]string{}
+		}
+		for key, value := range source.Labels {
+			if current.Labels[key] != value {
+				current.Labels[key] = value
+				changed = true
+			}
+		}
+	}
 	if current.Annotations != nil {
 		if _, ok := current.Annotations[lastAppliedAnnotation]; ok {
 			delete(current.Annotations, lastAppliedAnnotation)

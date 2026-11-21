@@ -10,6 +10,7 @@ import (
 	apierrors "k8s.io/apimachinery/pkg/api/errors"
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
 	"k8s.io/apimachinery/pkg/apis/meta/v1/unstructured"
+	"k8s.io/apimachinery/pkg/labels"
 	"k8s.io/apimachinery/pkg/runtime"
 	"k8s.io/apimachinery/pkg/runtime/schema"
 	capiv1beta2 "sigs.k8s.io/cluster-api/api/core/v1beta2"
@@ -227,17 +228,18 @@ func newTestController(t *testing.T) (*Controller, *fakeHelmOpStore, *fakeEventS
 	bundles := newFakeHelmOpStore()
 	events := &fakeEventStore{}
 	controller := &Controller{
-		ctx:        context.Background(),
-		secrets:    secrets,
-		events:     events,
-		helmops:    store,
-		bundles:    bundles,
-		clusters:   newFakeClusterStore(),
-		configmaps: newFakeConfigMapStore(),
-		machines:   &fakeMachineCache{machines: []*capiv1beta2.Machine{seedMachine("c1", "c1-0", "203.0.113.10")}},
-		downstream: &fakeSchedulerPodLister{pods: []schedulerPod{{NodeName: "c1-node", HostIP: "203.0.113.10"}}},
-		registrar:  newFakeRegistrar(),
-		allocator:  newFakeAllocator(),
+		ctx:         context.Background(),
+		secrets:     secrets,
+		secretCache: secrets,
+		events:      events,
+		helmops:     store,
+		bundles:     bundles,
+		clusters:    newFakeClusterStore(),
+		configmaps:  newFakeConfigMapStore(),
+		machines:    &fakeMachineCache{machines: []*capiv1beta2.Machine{seedMachine("c1", "c1-0", "203.0.113.10")}},
+		downstream:  &fakeSchedulerPodLister{pods: []schedulerPod{{NodeName: "c1-node", HostIP: "203.0.113.10"}}},
+		registrar:   newFakeRegistrar(),
+		allocator:   newFakeAllocator(),
 		opts: Options{
 			OperatorNamespace:           "dragonfly-system",
 			MTLSSecretName:              "dragonfly-p2p-mtls",
@@ -455,6 +457,21 @@ func (f *fakeSecretStore) Update(secret *corev1.Secret) (*corev1.Secret, error) 
 	return secret.DeepCopy(), nil
 }
 
+func (f *fakeSecretStore) List(namespace string, selector labels.Selector) ([]*corev1.Secret, error) {
+	result := make([]*corev1.Secret, 0, len(f.secrets))
+	for key, secret := range f.secrets {
+		if secret.Namespace != namespace {
+			continue
+		}
+		if selector != nil && !selector.Matches(labels.Set(secret.Labels)) {
+			continue
+		}
+		result = append(result, secret.DeepCopy())
+		_ = key
+	}
+	return result, nil
+}
+
 func (f *fakeSecretStore) Delete(namespace, name string, _ *metav1.DeleteOptions) error {
 	key := namespace + "/" + name
 	if _, ok := f.secrets[key]; !ok {
@@ -467,6 +484,7 @@ func (f *fakeSecretStore) Delete(namespace, name string, _ *metav1.DeleteOptions
 func TestHelmopClusterCarriesSchedulerIdentityAndCertRevision(t *testing.T) {
 	controller, _, _ := newTestController(t)
 	cluster := testSeedCluster("42")
+	cluster.Annotations[AnnotationManager] = "true"
 	controller.clusters.(*fakeClusterStore).set(cluster)
 	if _, err := controller.reconcile("", cluster); err != nil {
 		t.Fatalf("reconcile() error = %v", err)

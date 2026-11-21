@@ -55,15 +55,17 @@ func shellQuote(value string) string {
 // insertInlineBlock replaces an existing injected block, otherwise inserts a
 // new block before the first do_install "$@" line, falling back to before the
 // last exit 0 and then the end.
-func insertInlineBlock(raw, block string) string {
+func insertInlineBlock(raw, block string) (string, error) {
 	lines := strings.Split(raw, "\n")
-	if start, end, ok := existingBlock(lines); ok {
+	if start, end, ok, err := existingBlock(lines); err != nil {
+		return "", err
+	} else if ok {
 		blockLines := strings.Split(strings.TrimSuffix(block, "\n"), "\n")
 		out := make([]string, 0, len(lines)-(end-start)+len(blockLines))
 		out = append(out, lines[:start]...)
 		out = append(out, blockLines...)
 		out = append(out, lines[end:]...)
-		return strings.Join(out, "\n")
+		return strings.Join(out, "\n"), nil
 	}
 	at := -1
 	for i, line := range lines {
@@ -81,25 +83,25 @@ func insertInlineBlock(raw, block string) string {
 	}
 	if at < 0 {
 		if raw == "" {
-			return block
+			return block, nil
 		}
 		if strings.HasSuffix(raw, "\n") {
-			return raw + block
+			return raw + block, nil
 		}
-		return raw + "\n" + block
+		return raw + "\n" + block, nil
 	}
 	blockLines := strings.Split(strings.TrimSuffix(block, "\n"), "\n")
 	out := make([]string, 0, len(lines)+len(blockLines))
 	out = append(out, lines[:at]...)
 	out = append(out, blockLines...)
 	out = append(out, lines[at:]...)
-	return strings.Join(out, "\n")
+	return strings.Join(out, "\n"), nil
 }
 
 // existingBlock returns the half-open line range of the previously injected
 // block. Blocks written by older versions have no end marker; their shape is
 // still recognized by the bash invocation followed by fi.
-func existingBlock(lines []string) (int, int, bool) {
+func existingBlock(lines []string) (int, int, bool, error) {
 	start := -1
 	for i, line := range lines {
 		if strings.TrimSpace(line) == bootstrap.Marker {
@@ -108,11 +110,11 @@ func existingBlock(lines []string) (int, int, bool) {
 		}
 	}
 	if start < 0 {
-		return 0, 0, false
+		return 0, 0, false, nil
 	}
 	for i := start + 1; i < len(lines); i++ {
 		if strings.TrimSpace(lines[i]) == bootstrap.EndMarker {
-			return start, i + 1, true
+			return start, i + 1, true, nil
 		}
 	}
 	bashLine := -1
@@ -123,8 +125,8 @@ func existingBlock(lines []string) (int, int, bool) {
 			continue
 		}
 		if bashLine >= 0 && trimmed == "fi" {
-			return start, i + 1, true
+			return start, i + 1, true, nil
 		}
 	}
-	return start, start + 1, true
+	return 0, 0, false, fmt.Errorf("machinebootstrap: existing p2p marker has an unrecognized block shape")
 }

@@ -209,13 +209,21 @@ func TestEnsureLeafStableThenRotates(t *testing.T) {
 func TestEnsureLeafReusesLegacyIdentity(t *testing.T) {
 	store := newFakeSecretStore()
 	ca := testCA(t)
+	legacyCA, err := NewCA(nil)
+	if err != nil {
+		t.Fatalf("NewCA(legacy) error = %v", err)
+	}
+	legacyLeaf, err := legacyCA.Sign(IssueOptions{CommonName: "legacy-client", ServerAuth: true, ClientAuth: true})
+	if err != nil {
+		t.Fatalf("Sign(legacy) error = %v", err)
+	}
 	legacy := &corev1.Secret{
 		ObjectMeta: metav1.ObjectMeta{Name: "dragonfly-p2p-mtls", Namespace: "dragonfly-system"},
 		Type:       corev1.SecretTypeTLS,
 		Data: map[string][]byte{
-			"ca.crt":                []byte("legacy-ca"),
-			corev1.TLSCertKey:       []byte("legacy-cert"),
-			corev1.TLSPrivateKeyKey: []byte("legacy-key"),
+			"ca.crt":                legacyCA.CertPEM,
+			corev1.TLSCertKey:       legacyLeaf.CertPEM,
+			corev1.TLSPrivateKeyKey: legacyLeaf.KeyPEM,
 		},
 	}
 	if _, err := store.Create(legacy); err != nil {
@@ -227,7 +235,7 @@ func TestEnsureLeafReusesLegacyIdentity(t *testing.T) {
 		t.Fatalf("EnsureLeaf(reuse) = %+v, %v", result, err)
 	}
 	got, _ := store.Get("dragonfly-system", "dragonfly-p2p-mtls", metav1.GetOptions{})
-	if string(got.Data[corev1.TLSCertKey]) != "legacy-cert" || string(got.Data[corev1.TLSPrivateKeyKey]) != "legacy-key" {
+	if string(got.Data[corev1.TLSCertKey]) != string(legacyLeaf.CertPEM) || string(got.Data[corev1.TLSPrivateKeyKey]) != string(legacyLeaf.KeyPEM) {
 		t.Error("Phase A did not preserve legacy identity")
 	}
 	if string(got.Data["ca.crt"]) != string(ca.BundlePEM) {
@@ -338,4 +346,75 @@ func keysOf(data map[string][]byte) []string {
 		keys = append(keys, key)
 	}
 	return keys
+}
+
+func TestLoadCARejectsBundleMissingActiveCA(t *testing.T) {
+	active, err := NewCA(nil)
+	if err != nil {
+		t.Fatalf("NewCA(active) error = %v", err)
+	}
+	other, err := NewCA(nil)
+	if err != nil {
+		t.Fatalf("NewCA(other) error = %v", err)
+	}
+	if _, err := LoadCA(active.CertPEM, active.KeyPEM, other.CertPEM); err == nil {
+		t.Fatal("LoadCA accepted a bundle missing the active CA")
+	}
+}
+
+func TestEnsureLeafRepairsCorruptKey(t *testing.T) {
+	store := newFakeSecretStore()
+	ca := testCA(t)
+	opts := IssueOptions{CommonName: "manager", DNSNames: []string{"manager.example.com"}, ServerAuth: true}
+	if _, err := EnsureLeaf(store, "dragonfly-system", "leaf", ca, opts, false); err != nil {
+		t.Fatalf("EnsureLeaf() error = %v", err)
+	}
+	secret, _ := store.Get("dragonfly-system", "leaf", metav1.GetOptions{})
+	before := string(secret.Data[corev1.TLSCertKey])
+	secret.Data[corev1.TLSPrivateKeyKey] = []byte("corrupt")
+	if _, err := store.Update(secret); err != nil {
+		t.Fatalf("corrupt key: %v", err)
+	}
+	result, err := EnsureLeaf(store, "dragonfly-system", "leaf", ca, opts, false)
+	if err != nil || !result.Updated {
+		t.Fatalf("EnsureLeaf(repair) = %+v, %v", result, err)
+	}
+	repaired, _ := store.Get("dragonfly-system", "leaf", metav1.GetOptions{})
+	if string(repaired.Data[corev1.TLSCertKey]) == before {
+		t.Error("corrupt key was not repaired with a new leaf")
+	}
+	if !KeyMatches(repaired.Data[corev1.TLSCertKey], repaired.Data[corev1.TLSPrivateKeyKey]) {
+		t.Error("repaired leaf key does not match the certificate")
+	}
+}
+
+func TestEnsureLeafLabelsV2(t *testing.T) {
+	store := newFakeSecretStore()
+	ca := testCA(t)
+	if _, err := EnsureLeaf(store, "dragonfly-system", "leaf", ca, IssueOptions{CommonName: "client", ClientAuth: true}, false); err != nil {
+		t.Fatalf("EnsureLeaf() error = %v", err)
+	}
+	secret, _ := store.Get("dragonfly-system", "leaf", metav1.GetOptions{})
+	if secret.Labels[LeafGenerationLabel] != LeafGenerationV2 || secret.Labels[ManagedByLabel] != ManagedByValue {
+		t.Errorf("leaf labels = %v", secret.Labels)
+	}
+}
+
+func TestSANsCoverWildcardService(t *testing.T) {
+	ca := testCA(t)
+	leaf, err := ca.Sign(IssueOptions{
+		CommonName: "legacy",
+		DNSNames:   []string{"*.dragonfly-system.svc"},
+		ServerAuth: true,
+	})
+	if err != nil {
+		t.Fatalf("Sign() error = %v", err)
+	}
+	cert := mustCert(t, leaf.CertPEM)
+	if !SANsCover(cert, []string{"c1-control-scheduler.dragonfly-system.svc"}, nil) {
+		t.Error("wildcard service SAN did not cover the scheduler Service")
+	}
+	if SANsCover(cert, []string{"a.b.dragonfly-system.svc"}, nil) {
+		t.Error("wildcard service SAN covered a multi-label prefix")
+	}
 }

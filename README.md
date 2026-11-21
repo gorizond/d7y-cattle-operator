@@ -410,8 +410,9 @@ The PKI layout is:
 
 - `dragonfly-p2p-ca` (Opaque, operator namespace): stable `ca.crt`, `ca.key`,
   and `ca-bundle.crt`. The CA is create-only and invalid material is reported,
-  never regenerated. Manual rotation requires deleting the CA Secret and all
-  leaf Secrets together; automatic rotation is intentionally absent.
+  never regenerated. The Phase A/B deadline lives in the
+  `p2p.dragonfly.io/legacy-trust-deadline` annotation on this CA Secret, not on
+  a Cluster.
 - `dragonfly-p2p-mtls`: shared client identity, ClientAuth only, no SANs,
   CN `d7y-cattle-operator-client`, used by the control/data clients and
   machine bootstrap.
@@ -435,13 +436,17 @@ exists, so the first upgrade must rotate trust once:
 
 1. **Phase A (trust-first).** The operator creates the new stable CA and writes
    `ca-bundle.crt = new CA + legacy CA`, sets
-   `p2p.dragonfly.io/legacy-trust-deadline` (24h), and keeps the legacy
-   `tls.crt`/`tls.key` in the client, manager, and per-seed scheduler Secrets.
-   The values switch to the new Secret names and the pods roll with the legacy
-   identity while trusting both CAs. The machine-bootstrap CA bundle is updated.
+   `p2p.dragonfly.io/legacy-trust-deadline` (24h) on the CA Secret, and
+   preserves the legacy server identity once in `dragonfly-p2p-legacy`. The
+   client identity stays legacy until Phase B; manager/scheduler identities use
+   the preserved server leaf only when it has ServerAuth and covers the role
+   SANs, otherwise they are signed by the new CA. The values switch to the new
+   Secret names. The machine-bootstrap CA bundle is updated.
 2. **Phase B (after the deadline).** Reconcile re-signs the client, manager, and
-   each per-seed scheduler leaf with the new CA. Each seed's scheduler rolls
-   independently; the CA bundle remains until manual legacy retirement.
+   each per-seed scheduler leaf with the new CA. Global client/manager leaves
+   are not re-signed during Phase A; they move in Phase B after the deadline.
+   Each seed's scheduler rolls independently; the CA bundle remains until
+   manual legacy retirement.
 3. **Rollback.** Restore the previous values/Secret names and the legacy
    `dragonfly-p2p-mtls` material; the bundle still trusts the legacy CA until
    the deadline. Do not delete `dragonfly-p2p-ca` during rollback.
@@ -451,6 +456,17 @@ bootstrap/cloud-init) after the bootstrap Secret revision changes. A running
 host dfdaemon keeps its old certificate/config until the embedded block is
 re-executed; the machine-bootstrap Secret now carries a client-certificate
 revision and replaces the injected block when that revision changes.
+
+#### Manual CA rotation
+
+1. Replace `ca.crt` and `ca.key` in `dragonfly-p2p-ca` in place and set
+   `ca-bundle.crt` to the new CA followed by the old CA.
+2. Set `p2p.dragonfly.io/legacy-trust-deadline` on the CA Secret to a future
+   time and let all pods and machine-bootstrap blocks pick up the bundle.
+3. After the deadline, reconcile re-signs the client/manager/per-seed leaves.
+4. Remove the old CA from the bundle only after every leaf and host bootstrap
+   has rolled. Never delete leaf Secrets; the stable CA Secret is the only
+   control point.
 
 ### Fail-open node bootstrap
 
@@ -542,11 +558,11 @@ recommendation-only VPAs. The operator creates the shared `d7y-extras` HelmOp:
   are `ingress.grpc.enabled` and `ingress.rest.enabled`; both default to `true`.
 - `ingress.controller=nginx` (default) terminates client mTLS at the edge,
   serves the P2P certificate for the gRPC host, and reaches the manager with
-  `backend-protocol: GRPCS`, `proxy-ssl-secret` (the P2P Secret, which carries
-  `ca.crt` for backend verification and `tls.crt`/`tls.key` as the client
+  `backend-protocol: GRPCS`, `proxy-ssl-secret` (the manager identity Secret,
+  which carries `ca.crt` for backend verification and `tls.crt`/`tls.key` as the client
   certificate), `proxy-ssl-verify: "on"` and `proxy-ssl-name` set to
   `ingress.grpc.host`. Client certificates are verified at the edge from
-  `dragonfly-p2p-mtls`; REST keeps `backend-protocol: HTTPS` and the public
+  `dragonfly-p2p-manager`; REST keeps `backend-protocol: HTTPS` and the public
   certificate.
 - `ingress.controller=traefik` renders a `traefik.io/v1alpha1` `IngressRoute`
   named `<release>-manager-api` for the REST backend (Traefik v3 ignores
@@ -571,7 +587,9 @@ recommendation-only VPAs. The operator creates the shared `d7y-extras` HelmOp:
   the public certificate.
 - The public scheduler route is disabled (`scheduler.enabled=false`); clients
   use the per-seed scheduler cert at the node IPs. The scheduler Service and
-  port remain in the values only for the VPA target.
+  port remain in the values only for the VPA target. The nginx gRPC ingress
+  uses the `dragonfly-p2p-manager` identity Secret; extras does not deliver it
+  (the manager release owns that delivery).
 - `ingress.tls.enabled` adds the public REST TLS block using
   `ingress.tls.secretName`. Manager gRPC uses TCP passthrough and does not
   attach a certificate; `ingress.grpc.tlsSecret` and `ingress.mtlsSecret`
@@ -585,7 +603,7 @@ recommendation-only VPAs. The operator creates the shared `d7y-extras` HelmOp:
       className: traefik
       grpcEnabled: false
       restEnabled: true
-      tlsSecret: dragonfly-p2p-mtls
+      tlsSecret: dragonfly-p2p-manager
   ```
 - The manager gRPC server serves TLS with client mTLS on `:65003` using the
   mounted `/etc/dragonfly/certs` material; the edge controller must therefore
@@ -749,8 +767,9 @@ names above. Verify them against the live release in the pilot, especially the
 when explicit names are empty, but the operator always sets them.
 
 The nginx gRPC Ingress reads `auth-tls-secret` and `proxy-ssl-secret` from
-`dragonfly-system`; the operator must be installed there (the default
-`namespace`) so the P2P Secret is present in the Ingress namespace.
+`dragonfly-system`. They reference `dragonfly-p2p-manager`; the shared manager
+release delivers that Secret to manager-labeled clusters, while extras does not
+deliver it.
 
 ## Known pilot risk: fork chart dependency
 
@@ -801,11 +820,15 @@ make helm-template  # render the operator, extras, p2p-static, and mirror charts
 ## Security notes
 
 - The operator runs as UID/GID 65532 with a read-only root filesystem.
-- Leaf private keys exist only in `kubernetes.io/tls` Secrets; the CA private key
-  exists only in the Opaque `dragonfly-p2p-ca` Secret. Neither is logged.
+- Leaf private keys exist in `kubernetes.io/tls` Secrets, the per-seed source
+  Secret, and the inline Secret inside the scheduler cert Bundle. The CA private
+  key exists only in the Opaque `dragonfly-p2p-ca` Secret. Neither is logged.
+  Restrict Bundle read access: anyone who can read the cert Bundle can read the
+  scheduler leaf `tls.key`.
 - The operator uses Wrangler/lasso clients for its own resources and a client-go
   clientset only to read downstream scheduler pods through the per-cluster
-  kubeconfig. It requests no Ingress or VPA permissions.
+  kubeconfig. Its ClusterRole includes create/update/patch on Fleet Bundles for
+  the per-seed scheduler cert Bundle; it requests no Ingress or VPA permissions.
 
 ## Release
 

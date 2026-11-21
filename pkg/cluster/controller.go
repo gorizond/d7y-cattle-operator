@@ -61,13 +61,14 @@ type Options struct {
 
 // Controller reconciles provisioning.cattle.io/v1 Clusters.
 type Controller struct {
-	ctx        context.Context
-	secrets    apply.SecretStore
-	configmaps configMapStore
-	events     eventStore
-	helmops    apply.Store
-	bundles    apply.Store
-	opts       Options
+	ctx         context.Context
+	secrets     apply.SecretStore
+	secretCache secretCache
+	configmaps  configMapStore
+	events      eventStore
+	helmops     apply.Store
+	bundles     apply.Store
+	opts        Options
 
 	clusters     clusterStore
 	clusterCache clusterCache
@@ -86,6 +87,7 @@ func Register(ctx context.Context, clusters provctl.ClusterController, machines 
 	c := &Controller{
 		ctx:          ctx,
 		secrets:      secrets,
+		secretCache:  secrets.Cache(),
 		configmaps:   configmaps,
 		events:       events,
 		helmops:      helmops,
@@ -101,10 +103,10 @@ func Register(ctx context.Context, clusters provctl.ClusterController, machines 
 	if watcher, ok := helmops.(helmOpWatcher); ok {
 		go c.watchHelmOps(watcher)
 	}
-	// A raw scheduler Bundle can be changed by Fleet; re-enqueue the owning
-	// Cluster so the annotation and dependent HelmOp converge.
+	// A raw scheduler Bundle can be changed by Fleet; re-enqueue only the
+	// owning Cluster so the Bundle-ready gate and dependent HelmOp converge.
 	if watcher, ok := bundles.(helmOpWatcher); ok {
-		go c.watchHelmOps(watcher)
+		go c.watchBundles(watcher)
 	}
 }
 

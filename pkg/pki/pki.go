@@ -28,6 +28,17 @@ const (
 	CAKey = "ca.key"
 	// CABundleKey is the trust bundle used by leaf Secrets.
 	CABundleKey = "ca-bundle.crt"
+	// LeafGenerationLabel marks leaves managed by the v2 split-identity PKI.
+	LeafGenerationLabel = "p2p.dragonfly.io/pki-generation"
+	// LeafGenerationV2 is the current leaf generation.
+	LeafGenerationV2 = "v2"
+	// ManagedByLabel marks operator-managed PKI Secrets.
+	ManagedByLabel = "app.kubernetes.io/managed-by"
+	// ManagedByValue is the operator's managed-by value.
+	ManagedByValue = "d7y-cattle-operator"
+	// CAAnnotationLegacyTrustDeadline stores the global Phase A deadline on the
+	// CA Secret.
+	CAAnnotationLegacyTrustDeadline = "p2p.dragonfly.io/legacy-trust-deadline"
 
 	// validity is the lifetime of the CA and leaf certificates.
 	validity = 100 * 365 * 24 * time.Hour
@@ -110,8 +121,23 @@ func LoadCA(certPEM, keyPEM, bundlePEM []byte) (*CA, error) {
 		bundlePEM = certPEM
 	}
 	if len(bundlePEM) > 0 {
-		if _, err := ParseCertificates(bundlePEM); err != nil {
+		bundleCerts, err := ParseCertificates(bundlePEM)
+		if err != nil {
 			return nil, fmt.Errorf("pki: parse CA bundle: %w", err)
+		}
+		active, err := ParseCertificates(certPEM)
+		if err != nil {
+			return nil, fmt.Errorf("pki: parse active CA: %w", err)
+		}
+		found := false
+		for _, bundled := range bundleCerts {
+			if string(bundled.Raw) == string(active[0].Raw) {
+				found = true
+				break
+			}
+		}
+		if !found {
+			return nil, errors.New("pki: CA bundle does not contain the active CA in ca.crt")
 		}
 	}
 	return loadCA(certPEM, keyPEM, bundlePEM)
@@ -183,11 +209,15 @@ func (ca *CA) Sign(opts IssueOptions) (*Bundle, error) {
 		return nil, err
 	}
 	now := time.Now()
+	notAfter := now.Add(validity)
+	if ca.Cert.NotAfter.Before(notAfter) {
+		notAfter = ca.Cert.NotAfter
+	}
 	template := &x509.Certificate{
 		SerialNumber:          serial,
 		Subject:               pkix.Name{CommonName: commonName},
 		NotBefore:             now.Add(-time.Hour),
-		NotAfter:              now.Add(validity),
+		NotAfter:              notAfter,
 		BasicConstraintsValid: true,
 		KeyUsage:              x509.KeyUsageDigitalSignature,
 		ExtKeyUsage:           eku,
@@ -289,6 +319,78 @@ func NormalizeIPs(values []net.IP) []net.IP {
 		result = append(result, append(net.IP(nil), value...))
 	}
 	return result
+}
+
+// SANsCover reports whether the certificate carries every desired DNS and IP
+// SAN. Extra SANs are allowed; this is the Phase A legacy-server check.
+func SANsCover(cert *x509.Certificate, dnsNames []string, ips []net.IP) bool {
+	if cert == nil {
+		return false
+	}
+	gotDNS := map[string]struct{}{}
+	for _, name := range cert.DNSNames {
+		gotDNS[strings.ToLower(name)] = struct{}{}
+	}
+	for _, name := range NormalizeDNSNames(dnsNames) {
+		if _, ok := gotDNS[strings.ToLower(name)]; ok {
+			continue
+		}
+		if !dnsWildcardCovered(gotDNS, name) {
+			return false
+		}
+	}
+	gotIPs := map[string]struct{}{}
+	for _, ip := range cert.IPAddresses {
+		gotIPs[ip.String()] = struct{}{}
+	}
+	for _, ip := range NormalizeIPs(ips) {
+		if _, ok := gotIPs[ip.String()]; !ok {
+			return false
+		}
+	}
+	return true
+}
+
+// KeyMatches reports whether the certificate public key matches the private key.
+func KeyMatches(certPEM, keyPEM []byte) bool {
+	return keyMatches(certPEM, keyPEM)
+}
+
+// HasServerAuth reports whether the certificate carries ServerAuth EKU.
+func HasServerAuth(cert *x509.Certificate) bool {
+	return cert != nil && containsEKU(cert.ExtKeyUsage, x509.ExtKeyUsageServerAuth)
+}
+
+// HasClientAuth reports whether the certificate carries ClientAuth EKU.
+func HasClientAuth(cert *x509.Certificate) bool {
+	return cert != nil && containsEKU(cert.ExtKeyUsage, x509.ExtKeyUsageClientAuth)
+}
+
+func dnsWildcardCovered(got map[string]struct{}, name string) bool {
+	name = strings.ToLower(strings.TrimSuffix(name, "."))
+	for candidate := range got {
+		if !strings.HasPrefix(candidate, "*.") {
+			continue
+		}
+		suffix := candidate[1:]
+		if !strings.HasSuffix(name, suffix) {
+			continue
+		}
+		prefix := strings.TrimSuffix(name, suffix)
+		if prefix != "" && !strings.Contains(prefix, ".") {
+			return true
+		}
+	}
+	return false
+}
+
+func containsEKU(values []x509.ExtKeyUsage, want x509.ExtKeyUsage) bool {
+	for _, value := range values {
+		if value == want {
+			return true
+		}
+	}
+	return false
 }
 
 // SANsMatch reports whether the certificate carries exactly the desired DNS

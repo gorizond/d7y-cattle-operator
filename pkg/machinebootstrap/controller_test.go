@@ -10,6 +10,7 @@ import (
 	corev1 "k8s.io/api/core/v1"
 	apierrors "k8s.io/apimachinery/pkg/api/errors"
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
+	"k8s.io/apimachinery/pkg/labels"
 	"k8s.io/apimachinery/pkg/runtime/schema"
 	capiv1beta2 "sigs.k8s.io/cluster-api/api/core/v1beta2"
 
@@ -21,6 +22,25 @@ type fakeSecrets struct {
 	mtls      *corev1.Secret
 	updates   int
 	updateErr error
+	enqueued  []string
+}
+
+func (f *fakeSecrets) Enqueue(namespace, name string) {
+	f.enqueued = append(f.enqueued, namespace+"/"+name)
+}
+
+func (f *fakeSecrets) List(namespace string, selector labels.Selector) ([]*corev1.Secret, error) {
+	var result []*corev1.Secret
+	for _, secret := range []*corev1.Secret{f.secret, f.mtls} {
+		if secret == nil || (namespace != metav1.NamespaceAll && secret.Namespace != namespace) {
+			continue
+		}
+		if selector != nil && !selector.Matches(labels.Set(secret.Labels)) {
+			continue
+		}
+		result = append(result, secret.DeepCopy())
+	}
+	return result, nil
 }
 
 func (f *fakeSecrets) Update(secret *corev1.Secret) (*corev1.Secret, error) {
@@ -354,7 +374,10 @@ func TestInsertInlineBlockReplacesLegacyBlockWithoutEndMarker(t *testing.T) {
 	legacy := strings.TrimSuffix(inlineInstallBlockFor("echo legacy\n", "SCHEDULER_IPS=''\n"), bootstrap.EndMarker+"\n")
 	raw := "#!/bin/bash\n" + legacy + `do_install "$@"` + "\nexit 0\n"
 	next := inlineInstallBlockFor("echo new\n", "SCHEDULER_IPS='203.0.113.10'\n")
-	got := insertInlineBlock(raw, next)
+	got, err := insertInlineBlock(raw, next)
+	if err != nil {
+		t.Fatalf("insertInlineBlock() error = %v", err)
+	}
 	if strings.Contains(got, "echo legacy") {
 		t.Errorf("legacy block was not removed: %q", got)
 	}
@@ -366,5 +389,28 @@ func TestInsertInlineBlockReplacesLegacyBlockWithoutEndMarker(t *testing.T) {
 	}
 	if !strings.Contains(got, "do_install \"$@\"\n") {
 		t.Errorf("do_install line was lost: %q", got)
+	}
+}
+
+func TestClientSecretChangeEnqueuesBootstrapSecrets(t *testing.T) {
+	controller, secrets, _, _, _, _ := testController()
+	if _, err := controller.clientSecretChanged("", secrets.mtls.DeepCopy()); err != nil {
+		t.Fatalf("clientSecretChanged() error = %v", err)
+	}
+	if len(secrets.enqueued) != 1 || secrets.enqueued[0] != "fleet-default/machine-1-machine-bootstrap" {
+		t.Errorf("enqueued = %v, want the bootstrap Secret", secrets.enqueued)
+	}
+	if _, err := controller.clientSecretChanged("", secrets.secret.DeepCopy()); err != nil {
+		t.Fatalf("clientSecretChanged(bootstrap) error = %v", err)
+	}
+	if len(secrets.enqueued) != 1 {
+		t.Errorf("enqueued = %v, want no change for a non-client Secret", secrets.enqueued)
+	}
+}
+
+func TestInsertInlineBlockRejectsUnknownLegacyShape(t *testing.T) {
+	raw := "#!/bin/bash\n" + bootstrap.Marker + "\ndo_install \"$@\"\n"
+	if _, err := insertInlineBlock(raw, inlineInstallBlockFor("echo new\n", "")); err == nil {
+		t.Fatal("insertInlineBlock() error = nil, want unrecognized legacy shape error")
 	}
 }

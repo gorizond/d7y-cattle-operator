@@ -1,6 +1,7 @@
 package pki
 
 import (
+	"crypto/ecdsa"
 	"crypto/x509"
 	"errors"
 	"fmt"
@@ -93,7 +94,7 @@ func EnsureLeaf(store SecretStore, namespace, name string, ca *CA, opts IssueOpt
 			return Result{}, err
 		}
 		secret := &corev1.Secret{
-			ObjectMeta: metav1.ObjectMeta{Name: name, Namespace: namespace},
+			ObjectMeta: metav1.ObjectMeta{Name: name, Namespace: namespace, Labels: leafLabels()},
 			Type:       corev1.SecretTypeTLS,
 			Data:       leafData(leaf),
 		}
@@ -120,10 +121,17 @@ func ensureExistingLeaf(store SecretStore, current *corev1.Secret, ca *CA, opts 
 		return Result{}, errors.New("pki: leaf Secret is nil")
 	}
 	changed := removeLastApplied(current)
+	if ensureLeafLabels(current) {
+		changed = true
+	}
 	certPEM := current.Data[corev1.TLSCertKey]
 	keyPEM := current.Data[corev1.TLSPrivateKeyKey]
-	reuse := reuseExisting && len(certPEM) > 0 && len(keyPEM) > 0
-	if !reuse && !leafMatches(certPEM, ca, opts) {
+	keyOK := keyMatches(certPEM, keyPEM)
+	reuse := reuseExisting && len(certPEM) > 0 && keyOK
+	if reuse && opts.ClientAuth && !certHasClientAuth(certPEM) {
+		reuse = false
+	}
+	if !reuse && (!leafMatches(certPEM, ca, opts) || !keyOK) {
 		leaf, err := ca.Sign(opts)
 		if err != nil {
 			return Result{}, err
@@ -144,6 +152,51 @@ func ensureExistingLeaf(store SecretStore, current *corev1.Secret, ca *CA, opts 
 		}
 	}
 	return Result{Updated: changed, Revision: SecretRevision(current.Data)}, nil
+}
+
+func certHasClientAuth(certPEM []byte) bool {
+	certs, err := ParseCertificates(certPEM)
+	return err == nil && len(certs) > 0 && HasClientAuth(certs[0])
+}
+
+func keyMatches(certPEM, keyPEM []byte) bool {
+	if len(certPEM) == 0 || len(keyPEM) == 0 {
+		return false
+	}
+	certs, err := ParseCertificates(certPEM)
+	if err != nil || len(certs) == 0 {
+		return false
+	}
+	key, err := ParsePrivateKey(keyPEM)
+	if err != nil {
+		return false
+	}
+	public, ok := certs[0].PublicKey.(*ecdsa.PublicKey)
+	return ok && public.Equal(&key.PublicKey)
+}
+
+func leafLabels() map[string]string {
+	return map[string]string{
+		LeafGenerationLabel: LeafGenerationV2,
+		ManagedByLabel:      ManagedByValue,
+	}
+}
+
+func ensureLeafLabels(secret *corev1.Secret) bool {
+	if secret == nil {
+		return false
+	}
+	if secret.Labels == nil {
+		secret.Labels = map[string]string{}
+	}
+	changed := false
+	for key, value := range leafLabels() {
+		if secret.Labels[key] != value {
+			secret.Labels[key] = value
+			changed = true
+		}
+	}
+	return changed
 }
 
 func leafMatches(certPEM []byte, ca *CA, opts IssueOptions) bool {
