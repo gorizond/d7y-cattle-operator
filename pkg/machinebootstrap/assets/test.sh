@@ -261,6 +261,9 @@ assert_contains "${ROOT_ONE}/usr/local/bin/dfdaemon-bootstrap-switch" 'command -
 assert_contains "${ROOT_ONE}/usr/local/bin/dfdaemon-bootstrap-switch" '/usr/local/bin/crictl'
 assert_contains "${ROOT_ONE}/usr/local/bin/dfdaemon-bootstrap-switch" '/var/lib/rancher/k3s/data/*/bin/crictl'
 assert_contains "${ROOT_ONE}/usr/local/bin/dfdaemon-bootstrap-switch" 'k3s crictl'
+assert_contains "${ROOT_ONE}/usr/local/bin/dfdaemon-bootstrap-switch" 'in-cluster client pod present; host bootstrap disabled'
+assert_contains "${ROOT_ONE}/usr/local/bin/dfdaemon-bootstrap-switch" 'in-cluster client is absent; host bootstrap re-enabled'
+assert_not_contains "${ROOT_ONE}/usr/local/bin/dfdaemon-bootstrap-switch" 'pod_has_running_container'
 bash -n "${ROOT_ONE}/usr/local/bin/dfdaemon-bootstrap-switch"
 
 timer_starts="$(grep -Fc 'systemctl start nydus-updater.timer dfdaemon-bootstrap-switch.timer' "$INSTALL" || true)"
@@ -319,7 +322,7 @@ cat > "${WORK}/switch-bin/crictl" <<'FAKECRICTL'
 [ "${FAKE_CRICTL_EMPTY:-0}" = "1" ] && exit 0
 case "$*" in
   *" pods "*) printf 'pod1\n' ;;
-  *" ps "*) printf 'ctr1\n' ;;
+  *" ps "*) [ "${FAKE_CRICTL_NO_RUNNING:-0}" = "1" ] || printf 'ctr1\n' ;;
 esac
 FAKECRICTL
 chmod 0755 "${WORK}/switch-bin/systemctl" "${WORK}/switch-bin/crictl"
@@ -346,7 +349,7 @@ fi
 touch "$SWITCH_ENABLED" "$SWITCH_ACTIVE"
 PATH="${WORK}/switch-bin:${PATH}" \
   SYSTEMCTL_LOG="$SWITCH_LOG" SYSTEMCTL_ENABLED="$SWITCH_ENABLED" SYSTEMCTL_ACTIVE="$SWITCH_ACTIVE" \
-  BOOTSTRAP_SWITCH_MARKER="$SWITCH_MARKER" DFDAEMON_CLIENT_PORT=45999 CRICTL="${WORK}/switch-bin/crictl" \
+  BOOTSTRAP_SWITCH_MARKER="$SWITCH_MARKER" DFDAEMON_CLIENT_PORT=45999 CRICTL="${WORK}/switch-bin/crictl" FAKE_CRICTL_NO_RUNNING=1 \
   bash "$SWITCH"
 assert_contains "$SWITCH_LOG" 'disable --now dfdaemon-bootstrap.service'
 assert_file "$SWITCH_MARKER"
