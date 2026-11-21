@@ -58,5 +58,8 @@ jobs:
       - name: Render extras ingress modes
         run: bash scripts/test-extras-ingress.sh
 
+      - name: Render p2p host-sync and updater coupling
+        run: bash scripts/test-p2p-host-sync.sh
+
       - name: Render fork chart TLS probes
         run: bash scripts/test-fork-chart-tls.sh

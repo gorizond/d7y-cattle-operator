@@ -30,7 +30,25 @@ const (
 	DefaultMirrorChartVersion            = "0.1.0"
 	DefaultHostSyncChartRepo             = "https://gorizond.github.io/d7y-cattle-operator"
 	DefaultHostSyncChartName             = "p2p-host-sync"
-	DefaultHostSyncChartVersion          = "0.1.1"
+	DefaultHostSyncChartVersion          = "0.1.2"
+	DefaultStaticChartRepo               = "https://gorizond.github.io/d7y-cattle-operator"
+	DefaultStaticChartName               = "p2p-static"
+	DefaultStaticChartVersion            = "0.1.10"
+	DefaultStaticReleaseName             = "p2p-static"
+	DefaultClientReleaseRepo             = "dragonflyoss/client"
+	DefaultNydusReleaseRepo              = "dragonflyoss/nydus"
+	DefaultSnapshotterReleaseRepo        = "containerd/nydus-snapshotter"
+	DefaultClientSHA256AMD64             = "ba080e62f1626ab2fc2a5a0629a5cd912cc15099508820403108abbe2f75b1f7"
+	DefaultClientSHA256ARM64             = "370ff792a1c6957a7244b770d6cd12792668e326b2282b3017fea2cbfa3510af"
+	DefaultNydusSHA256AMD64              = "1ad7b793a1996577e462b0bf5c1a22e4450b9c04f7e9e99d4b274ccc92f19072"
+	DefaultNydusSHA256ARM64              = "85925af702d79fc3a8b9d501a5267ddc9f81449ff9fe94841845eb98eda84593"
+	DefaultSnapshotterSHA256AMD64        = "24e4ceaae9c87e396e71e89bd3eb074f2cc6a5a14b1a2081c8d890481857a0e4"
+	DefaultSnapshotterSHA256ARM64        = "136e9c649a63c16b3d3322a15fcdf918e7dda9a4cbb043e2923451e87a8ba08f"
+	DefaultSnapshotterBinarySHA256AMD64  = ""
+	DefaultSnapshotterBinarySHA256ARM64  = ""
+	DefaultClientVersion                 = "v1.5.14"
+	DefaultNydusVersion                  = "v2.4.5"
+	DefaultSnapshotterVersion            = "v0.16.0"
 	DefaultExtrasIngressController       = "nginx"
 	DefaultExtrasIngressClassName        = ""
 	DefaultExtrasIngressGRPCEnabled      = true
@@ -44,37 +62,55 @@ var chartVersionPattern = regexp.MustCompile(`^v?[0-9]+\.[0-9]+\.[0-9]+(?:[-+][0
 
 // Config is the operator configuration derived from flags and environment variables.
 type Config struct {
-	ManagerGRPCDomain           string
-	ManagerGRPCPort             int
-	ContainerdMirrorPort        int
-	ManagerAPIURL               string
-	NginxStaticURL              string
-	NydusMirrorURL              string
-	P2PDomain                   string
-	ClusterIDFallback           string
-	MTLSSecretName              string
-	ManagerAPICredentialsSecret string
-	DragonflyChartRepo          string
-	DragonflyChartName          string
-	DragonflyChartVersion       string
-	ExtrasChartRepo             string
-	ExtrasChartName             string
-	ExtrasChartVersion          string
-	MirrorChartRepo             string
-	MirrorChartName             string
-	MirrorChartVersion          string
-	HostSyncChartRepo           string
-	HostSyncChartName           string
-	HostSyncChartVersion        string
-	ExtrasIngressController     string
-	ExtrasIngressClassName      string
-	ExtrasIngressGRPCEnabled    bool
-	ExtrasIngressRESTEnabled    bool
-	ExtrasIngressTLSSecret      string
-	ExtrasTraefikTransport      bool
-	Namespace                   string
-	LeaderElect                 bool
-	Kubeconfig                  string
+	ManagerGRPCDomain            string
+	ManagerGRPCPort              int
+	ContainerdMirrorPort         int
+	ManagerAPIURL                string
+	NginxStaticURL               string
+	NydusMirrorURL               string
+	P2PDomain                    string
+	ClusterIDFallback            string
+	MTLSSecretName               string
+	ManagerAPICredentialsSecret  string
+	DragonflyChartRepo           string
+	DragonflyChartName           string
+	DragonflyChartVersion        string
+	ExtrasChartRepo              string
+	ExtrasChartName              string
+	ExtrasChartVersion           string
+	MirrorChartRepo              string
+	MirrorChartName              string
+	MirrorChartVersion           string
+	HostSyncChartRepo            string
+	HostSyncChartName            string
+	HostSyncChartVersion         string
+	StaticChartRepo              string
+	StaticChartName              string
+	StaticChartVersion           string
+	StaticReleaseName            string
+	ClientReleaseRepo            string
+	NydusReleaseRepo             string
+	SnapshotterReleaseRepo       string
+	ClientSHA256AMD64            string
+	ClientSHA256ARM64            string
+	NydusSHA256AMD64             string
+	NydusSHA256ARM64             string
+	SnapshotterSHA256AMD64       string
+	SnapshotterSHA256ARM64       string
+	SnapshotterBinarySHA256AMD64 string
+	SnapshotterBinarySHA256ARM64 string
+	ClientVersion                string
+	NydusVersion                 string
+	SnapshotterVersion           string
+	ExtrasIngressController      string
+	ExtrasIngressClassName       string
+	ExtrasIngressGRPCEnabled     bool
+	ExtrasIngressRESTEnabled     bool
+	ExtrasIngressTLSSecret       string
+	ExtrasTraefikTransport       bool
+	Namespace                    string
+	LeaderElect                  bool
+	Kubeconfig                   string
 }
 
 // Load parses args (without the program name) and validates the result.
@@ -125,6 +161,24 @@ func Load(args []string) (*Config, error) {
 	fs.StringVar(&cfg.HostSyncChartRepo, "host-sync-chart-repo", envOr("HOST_SYNC_CHART_REPO", DefaultHostSyncChartRepo), "Helm repository URL of the p2p-host-sync chart")
 	fs.StringVar(&cfg.HostSyncChartName, "host-sync-chart-name", envOr("HOST_SYNC_CHART_NAME", DefaultHostSyncChartName), "p2p-host-sync chart name")
 	fs.StringVar(&cfg.HostSyncChartVersion, "host-sync-chart-version", envOr("HOST_SYNC_CHART_VERSION", DefaultHostSyncChartVersion), "p2p-host-sync chart version")
+	fs.StringVar(&cfg.StaticChartRepo, "static-chart-repo", envOr("STATIC_CHART_REPO", DefaultStaticChartRepo), "Helm repository URL of the p2p-static chart")
+	fs.StringVar(&cfg.StaticChartName, "static-chart-name", envOr("STATIC_CHART_NAME", DefaultStaticChartName), "p2p-static chart name")
+	fs.StringVar(&cfg.StaticChartVersion, "static-chart-version", envOr("STATIC_CHART_VERSION", DefaultStaticChartVersion), "p2p-static chart version")
+	fs.StringVar(&cfg.StaticReleaseName, "static-release-name", envOr("STATIC_RELEASE_NAME", DefaultStaticReleaseName), "Helm release name for p2p-static")
+	fs.StringVar(&cfg.ClientReleaseRepo, "client-release-repo", envOr("CLIENT_RELEASE_REPO", DefaultClientReleaseRepo), "GitHub repository for Dragonfly client releases")
+	fs.StringVar(&cfg.NydusReleaseRepo, "nydus-release-repo", envOr("NYDUS_RELEASE_REPO", DefaultNydusReleaseRepo), "GitHub repository for nydus releases")
+	fs.StringVar(&cfg.SnapshotterReleaseRepo, "snapshotter-release-repo", envOr("NYDUS_SNAPSHOTTER_RELEASE_REPO", DefaultSnapshotterReleaseRepo), "GitHub repository for nydus-snapshotter releases")
+	fs.StringVar(&cfg.ClientSHA256AMD64, "client-sha256-amd64", envOr("CLIENT_SHA256_AMD64", DefaultClientSHA256AMD64), "fallback amd64 Dragonfly client tarball SHA-256")
+	fs.StringVar(&cfg.ClientSHA256ARM64, "client-sha256-arm64", envOr("CLIENT_SHA256_ARM64", DefaultClientSHA256ARM64), "fallback arm64 Dragonfly client tarball SHA-256")
+	fs.StringVar(&cfg.NydusSHA256AMD64, "nydus-sha256-amd64", envOr("NYDUS_SHA256_AMD64", DefaultNydusSHA256AMD64), "fallback amd64 nydus tarball SHA-256")
+	fs.StringVar(&cfg.NydusSHA256ARM64, "nydus-sha256-arm64", envOr("NYDUS_SHA256_ARM64", DefaultNydusSHA256ARM64), "fallback arm64 nydus tarball SHA-256")
+	fs.StringVar(&cfg.SnapshotterSHA256AMD64, "snapshotter-sha256-amd64", envOr("NYDUS_SNAPSHOTTER_SHA256_AMD64", DefaultSnapshotterSHA256AMD64), "fallback amd64 nydus-snapshotter tarball SHA-256")
+	fs.StringVar(&cfg.SnapshotterSHA256ARM64, "snapshotter-sha256-arm64", envOr("NYDUS_SNAPSHOTTER_SHA256_ARM64", DefaultSnapshotterSHA256ARM64), "fallback arm64 nydus-snapshotter tarball SHA-256")
+	fs.StringVar(&cfg.SnapshotterBinarySHA256AMD64, "snapshotter-binary-sha256-amd64", envOr("NYDUS_SNAPSHOTTER_BINARY_SHA256_AMD64", DefaultSnapshotterBinarySHA256AMD64), "fallback amd64 containerd-nydus-grpc SHA-256")
+	fs.StringVar(&cfg.SnapshotterBinarySHA256ARM64, "snapshotter-binary-sha256-arm64", envOr("NYDUS_SNAPSHOTTER_BINARY_SHA256_ARM64", DefaultSnapshotterBinarySHA256ARM64), "fallback arm64 containerd-nydus-grpc SHA-256")
+	fs.StringVar(&cfg.ClientVersion, "client-version", envOr("CLIENT_VERSION", DefaultClientVersion), "Dragonfly client release used by the host bootstrap")
+	fs.StringVar(&cfg.NydusVersion, "nydus-version", envOr("NYDUS_VERSION", DefaultNydusVersion), "nydus static release used by the host bootstrap")
+	fs.StringVar(&cfg.SnapshotterVersion, "nydus-snapshotter-version", envOr("NYDUS_SNAPSHOTTER_VERSION", DefaultSnapshotterVersion), "upstream nydus-snapshotter release used by the host bootstrap")
 	fs.StringVar(&cfg.ExtrasIngressController, "extras-ingress-controller", envOr("EXTRAS_INGRESS_CONTROLLER", DefaultExtrasIngressController), "extras Ingress controller: nginx or traefik")
 	fs.StringVar(&cfg.ExtrasIngressClassName, "extras-ingress-class-name", envOr("EXTRAS_INGRESS_CLASS_NAME", DefaultExtrasIngressClassName), "extras Ingress class name (empty uses the cluster default)")
 	fs.BoolVar(&cfg.ExtrasIngressGRPCEnabled, "extras-ingress-grpc-enabled", defaultGRPCEnabled, "render the extras gRPC Ingress")
@@ -171,6 +225,66 @@ func (c *Config) Validate() error {
 		add("--nginx-static-url is required")
 	} else if err := validateURL(c.NginxStaticURL, "http", "https"); err != nil {
 		add("--nginx-static-url: %v", err)
+	}
+	for _, chart := range []struct {
+		name  string
+		value string
+	}{
+		{"--static-chart-repo", c.StaticChartRepo},
+		{"--static-chart-name", c.StaticChartName},
+	} {
+		if chart.value == "" {
+			add("%s is required", chart.name)
+		}
+	}
+	if !chartVersionPattern.MatchString(c.StaticChartVersion) {
+		add("--static-chart-version: %q is not a release version", c.StaticChartVersion)
+	}
+	if c.StaticReleaseName == "" {
+		add("--static-release-name is required")
+	}
+	for _, repo := range []struct {
+		name  string
+		value string
+	}{
+		{"--client-release-repo", c.ClientReleaseRepo},
+		{"--nydus-release-repo", c.NydusReleaseRepo},
+		{"--snapshotter-release-repo", c.SnapshotterReleaseRepo},
+	} {
+		if !regexp.MustCompile(`^[A-Za-z0-9_.-]+/[A-Za-z0-9_.-]+$`).MatchString(repo.value) {
+			add("%s must be owner/repo", repo.name)
+		}
+	}
+	for _, sum := range []struct {
+		name  string
+		value string
+	}{
+		{"--client-sha256-amd64", c.ClientSHA256AMD64},
+		{"--client-sha256-arm64", c.ClientSHA256ARM64},
+		{"--nydus-sha256-amd64", c.NydusSHA256AMD64},
+		{"--nydus-sha256-arm64", c.NydusSHA256ARM64},
+		{"--snapshotter-sha256-amd64", c.SnapshotterSHA256AMD64},
+		{"--snapshotter-sha256-arm64", c.SnapshotterSHA256ARM64},
+		{"--snapshotter-binary-sha256-amd64", c.SnapshotterBinarySHA256AMD64},
+		{"--snapshotter-binary-sha256-arm64", c.SnapshotterBinarySHA256ARM64},
+	} {
+		if sum.value != "" && !regexp.MustCompile(`^[0-9a-f]{64}$`).MatchString(sum.value) {
+			add("%s must be a 64-character lowercase hex digest", sum.name)
+		}
+	}
+	for _, version := range []struct {
+		name  string
+		value string
+	}{
+		{"--client-version", c.ClientVersion},
+		{"--nydus-version", c.NydusVersion},
+		{"--nydus-snapshotter-version", c.SnapshotterVersion},
+	} {
+		if version.value == "" {
+			add("%s is required", version.name)
+		} else if !chartVersionPattern.MatchString(version.value) {
+			add("%s: %q is not a release version", version.name, version.value)
+		}
 	}
 	if c.NydusMirrorURL != "" {
 		if err := validateNydusMirrorURL(c.NydusMirrorURL); err != nil {

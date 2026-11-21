@@ -32,6 +32,24 @@ var envKeys = []string{
 	"POD_NAMESPACE",
 	"NGINX_STATIC_URL",
 	"NYDUS_MIRROR_URL",
+	"CLIENT_VERSION",
+	"NYDUS_VERSION",
+	"NYDUS_SNAPSHOTTER_VERSION",
+	"STATIC_CHART_REPO",
+	"STATIC_CHART_NAME",
+	"STATIC_CHART_VERSION",
+	"STATIC_RELEASE_NAME",
+	"CLIENT_RELEASE_REPO",
+	"NYDUS_RELEASE_REPO",
+	"NYDUS_SNAPSHOTTER_RELEASE_REPO",
+	"CLIENT_SHA256_AMD64",
+	"CLIENT_SHA256_ARM64",
+	"NYDUS_SHA256_AMD64",
+	"NYDUS_SHA256_ARM64",
+	"NYDUS_SNAPSHOTTER_SHA256_AMD64",
+	"NYDUS_SNAPSHOTTER_SHA256_ARM64",
+	"NYDUS_SNAPSHOTTER_BINARY_SHA256_AMD64",
+	"NYDUS_SNAPSHOTTER_BINARY_SHA256_ARM64",
 	"KUBECONFIG",
 }
 
@@ -74,6 +92,21 @@ func TestLoadDefaults(t *testing.T) {
 	}
 	if cfg.MTLSSecretName != DefaultMTLSSecretName {
 		t.Errorf("MTLSSecretName = %q, want %q", cfg.MTLSSecretName, DefaultMTLSSecretName)
+	}
+	if cfg.ClientVersion != DefaultClientVersion {
+		t.Errorf("ClientVersion = %q, want %q", cfg.ClientVersion, DefaultClientVersion)
+	}
+	if cfg.NydusVersion != DefaultNydusVersion {
+		t.Errorf("NydusVersion = %q, want %q", cfg.NydusVersion, DefaultNydusVersion)
+	}
+	if cfg.SnapshotterVersion != DefaultSnapshotterVersion {
+		t.Errorf("SnapshotterVersion = %q, want %q", cfg.SnapshotterVersion, DefaultSnapshotterVersion)
+	}
+	if cfg.StaticChartName != DefaultStaticChartName || cfg.StaticReleaseName != DefaultStaticReleaseName {
+		t.Errorf("static chart/release = %q/%q", cfg.StaticChartName, cfg.StaticReleaseName)
+	}
+	if cfg.ClientSHA256AMD64 != DefaultClientSHA256AMD64 || cfg.SnapshotterSHA256ARM64 != DefaultSnapshotterSHA256ARM64 {
+		t.Errorf("checksum defaults = %q/%q", cfg.ClientSHA256AMD64, cfg.SnapshotterSHA256ARM64)
 	}
 	if cfg.DragonflyChartRepo != DefaultDragonflyChartRepo {
 		t.Errorf("DragonflyChartRepo = %q, want %q", cfg.DragonflyChartRepo, DefaultDragonflyChartRepo)
@@ -231,6 +264,9 @@ func TestLoadEnvOverride(t *testing.T) {
 	t.Setenv("EXTRAS_TRAEFIK_SERVERS_TRANSPORT_ENABLED", "false")
 	t.Setenv("POD_NAMESPACE", "env-namespace")
 	t.Setenv("NGINX_STATIC_URL", "http://static.env.example.com")
+	t.Setenv("CLIENT_VERSION", "v1.5.15")
+	t.Setenv("NYDUS_VERSION", "v2.4.6")
+	t.Setenv("NYDUS_SNAPSHOTTER_VERSION", "v0.16.1")
 	t.Setenv("KUBECONFIG", "/tmp/kubeconfig")
 
 	cfg, err := Load(nil)
@@ -310,6 +346,9 @@ func TestLoadEnvOverride(t *testing.T) {
 	}
 	if cfg.Namespace != "env-namespace" {
 		t.Errorf("Namespace = %q", cfg.Namespace)
+	}
+	if cfg.ClientVersion != "v1.5.15" || cfg.NydusVersion != "v2.4.6" || cfg.SnapshotterVersion != "v0.16.1" {
+		t.Errorf("versions = %q/%q/%q", cfg.ClientVersion, cfg.NydusVersion, cfg.SnapshotterVersion)
 	}
 
 	if cfg.Kubeconfig != "/tmp/kubeconfig" {

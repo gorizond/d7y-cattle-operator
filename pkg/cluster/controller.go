@@ -44,27 +44,44 @@ type eventStore interface {
 
 // Options carries the operator configuration needed for reconciliation.
 type Options struct {
-	OperatorNamespace           string
-	MTLSSecretName              string
-	ManagerGRPCDomain           string
-	ManagerGRPCPort             int
-	ContainerdMirrorPort        int
-	ManagerAPIHost              string
-	ManagerAPIURL               string
-	ManagerAPICredentialsSecret string
-	P2PDomain                   string
-	ClusterIDFallback           string
-	DragonflyChart              helmop.Chart
-	ExtrasChart                 helmop.Chart
-	MirrorChart                 helmop.Chart
-	HostSyncChart               helmop.Chart
-	ExtrasIngressController     string
-	ExtrasIngressClassName      string
-	ExtrasIngressGRPCEnabled    bool
-	ExtrasIngressRESTEnabled    bool
-	ExtrasIngressTLSSecret      string
-	ExtrasTraefikTransport      bool
-	VPAEnabled                  bool
+	OperatorNamespace            string
+	MTLSSecretName               string
+	ManagerGRPCDomain            string
+	ManagerGRPCPort              int
+	ContainerdMirrorPort         int
+	ManagerAPIHost               string
+	ManagerAPIURL                string
+	ManagerAPICredentialsSecret  string
+	P2PDomain                    string
+	ClusterIDFallback            string
+	DragonflyChart               helmop.Chart
+	ExtrasChart                  helmop.Chart
+	MirrorChart                  helmop.Chart
+	HostSyncChart                helmop.Chart
+	ExtrasIngressController      string
+	ExtrasIngressClassName       string
+	ExtrasIngressGRPCEnabled     bool
+	ExtrasIngressRESTEnabled     bool
+	ExtrasIngressTLSSecret       string
+	ExtrasTraefikTransport       bool
+	VPAEnabled                   bool
+	StaticChart                  helmop.Chart
+	StaticReleaseName            string
+	StaticClientRepo             string
+	StaticNydusRepo              string
+	StaticSnapshotterRepo        string
+	ClientSHA256AMD64            string
+	ClientSHA256ARM64            string
+	NydusSHA256AMD64             string
+	NydusSHA256ARM64             string
+	SnapshotterSHA256AMD64       string
+	SnapshotterSHA256ARM64       string
+	SnapshotterBinarySHA256AMD64 string
+	SnapshotterBinarySHA256ARM64 string
+	StaticURL                    string
+	ClientVersion                string
+	NydusVersion                 string
+	SnapshotterVersion           string
 }
 
 // Controller reconciles provisioning.cattle.io/v1 Clusters.
@@ -286,7 +303,7 @@ func (c *Controller) reconcile(key string, cluster *provv1.Cluster) (result *pro
 	}
 	for _, err := range []error{
 		shared.keydb, shared.manager, shared.control, shared.data, shared.extras,
-		shared.mirror, shared.hostSync, shared.cleanup,
+		shared.mirror, shared.hostSync, shared.static, shared.cleanup,
 	} {
 		if err != nil {
 			errs = append(errs, err)
@@ -326,26 +343,43 @@ func (c *Controller) warnUnsupportedChartVersion(cluster *provv1.Cluster, versio
 
 func (c *Controller) helmopCluster(cluster *provv1.Cluster) helmop.Cluster {
 	hc := helmop.Cluster{
-		Name:                        cluster.Name,
-		Namespace:                   cluster.Namespace,
-		MTLSSecretName:              c.opts.MTLSSecretName,
-		Chart:                       c.opts.DragonflyChart,
-		ExtrasChart:                 c.opts.ExtrasChart,
-		MirrorChart:                 c.opts.MirrorChart,
-		HostSyncChart:               c.opts.HostSyncChart,
-		MirrorPort:                  c.opts.ContainerdMirrorPort,
-		ManagerGRPCDomain:           c.opts.ManagerGRPCDomain,
-		P2PDomain:                   c.opts.P2PDomain,
-		ManagerGRPCPort:             c.opts.ManagerGRPCPort,
-		ManagerAPIHost:              c.opts.ManagerAPIHost,
-		ManagerAPICredentialsSecret: c.opts.ManagerAPICredentialsSecret,
-		SchedulerClusterID:          schedulerClusterID(cluster),
-		SchedulerReplicas:           helmop.ReplicasOrOne(AnnotationSchedulerReplicas, cluster.Annotations[AnnotationSchedulerReplicas]),
-		SeedClientReplicas:          helmop.ReplicasOrOne(AnnotationSeedClientReplicas, cluster.Annotations[AnnotationSeedClientReplicas]),
-		SchedulerIPs:                strings.TrimSpace(cluster.Annotations[AnnotationSchedulerIPs]),
-		Monitoring:                  monitoringEnabled(cluster),
-		P2PDataTLS:                  p2pDataTLSEnabled(cluster),
-		Labels:                      apply.Labels(cluster.Namespace, cluster.Name),
+		Name:                         cluster.Name,
+		Namespace:                    cluster.Namespace,
+		MTLSSecretName:               c.opts.MTLSSecretName,
+		Chart:                        c.opts.DragonflyChart,
+		ExtrasChart:                  c.opts.ExtrasChart,
+		MirrorChart:                  c.opts.MirrorChart,
+		HostSyncChart:                c.opts.HostSyncChart,
+		StaticChart:                  c.opts.StaticChart,
+		StaticReleaseName:            c.opts.StaticReleaseName,
+		StaticClientVersion:          c.opts.ClientVersion,
+		StaticNydusVersion:           c.opts.NydusVersion,
+		StaticSnapshotterVersion:     c.opts.SnapshotterVersion,
+		StaticClientRepo:             c.opts.StaticClientRepo,
+		StaticNydusRepo:              c.opts.StaticNydusRepo,
+		StaticSnapshotterRepo:        c.opts.StaticSnapshotterRepo,
+		StaticClientSHA256AMD64:      c.opts.ClientSHA256AMD64,
+		StaticClientSHA256ARM64:      c.opts.ClientSHA256ARM64,
+		StaticNydusSHA256AMD64:       c.opts.NydusSHA256AMD64,
+		StaticNydusSHA256ARM64:       c.opts.NydusSHA256ARM64,
+		StaticSnapshotterSHA256AMD64: c.opts.SnapshotterSHA256AMD64,
+		StaticSnapshotterSHA256ARM64: c.opts.SnapshotterSHA256ARM64,
+		StaticManagerHost:            c.opts.ManagerAPIHost,
+		StaticTLSSecret:              c.opts.ExtrasIngressTLSSecret,
+		StaticIngressClassName:       c.opts.ExtrasIngressClassName,
+		MirrorPort:                   c.opts.ContainerdMirrorPort,
+		ManagerGRPCDomain:            c.opts.ManagerGRPCDomain,
+		P2PDomain:                    c.opts.P2PDomain,
+		ManagerGRPCPort:              c.opts.ManagerGRPCPort,
+		ManagerAPIHost:               c.opts.ManagerAPIHost,
+		ManagerAPICredentialsSecret:  c.opts.ManagerAPICredentialsSecret,
+		SchedulerClusterID:           schedulerClusterID(cluster),
+		SchedulerReplicas:            helmop.ReplicasOrOne(AnnotationSchedulerReplicas, cluster.Annotations[AnnotationSchedulerReplicas]),
+		SeedClientReplicas:           helmop.ReplicasOrOne(AnnotationSeedClientReplicas, cluster.Annotations[AnnotationSeedClientReplicas]),
+		SchedulerIPs:                 strings.TrimSpace(cluster.Annotations[AnnotationSchedulerIPs]),
+		Monitoring:                   monitoringEnabled(cluster),
+		P2PDataTLS:                   p2pDataTLSEnabled(cluster),
+		Labels:                       apply.Labels(cluster.Namespace, cluster.Name),
 	}
 	if c.secrets != nil {
 		if client, err := c.secrets.Get(c.opts.OperatorNamespace, c.opts.MTLSSecretName, metav1.GetOptions{}); err == nil {
@@ -395,9 +429,9 @@ func schedulerClusterID(cluster *provv1.Cluster) int {
 // sharedHelmOps carries the per-component shared apply results so conditions
 // and legacy cleanup only act on components whose shared HelmOp was applied.
 type sharedHelmOps struct {
-	keydb, manager, control, data, extras, mirror, hostSync error
-	managerApplied                                          bool
-	cleanup                                                 error
+	keydb, manager, control, data, extras, mirror, hostSync, static error
+	managerApplied                                                  bool
+	cleanup                                                         error
 }
 
 // ensureClusterMetadata stamps the cluster-id label used by shared Fleet
@@ -460,6 +494,9 @@ func (c *Controller) ensureSharedHelmOps(cluster *provv1.Cluster, hc helmop.Clus
 		VPAEnabled:                     c.opts.VPAEnabled,
 	}))
 	result.mirror = c.applyHelmOp(cluster, helmop.SharedMirror(hc))
+	if roles.Manager && mtlsReady {
+		result.static = c.applyHelmOp(cluster, helmop.SharedStatic(hc))
+	}
 	if roles.Seed && strings.Trim(hc.SchedulerIPs, " ,") != "" {
 		result.hostSync = c.applyHelmOp(cluster, helmop.HostSync(hc))
 	} else {

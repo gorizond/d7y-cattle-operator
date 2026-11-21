@@ -72,6 +72,42 @@ spec:
               value: {{ .Values.hostSync.chart.name | quote }}
             - name: HOST_SYNC_CHART_VERSION
               value: {{ .Values.hostSync.chart.version | quote }}
+            - name: STATIC_CHART_REPO
+              value: {{ .Values.static.chart.repo | quote }}
+            - name: STATIC_CHART_NAME
+              value: {{ .Values.static.chart.name | quote }}
+            - name: STATIC_CHART_VERSION
+              value: {{ .Values.static.chart.version | quote }}
+            - name: STATIC_RELEASE_NAME
+              value: {{ .Values.static.releaseName | quote }}
+            - name: CLIENT_RELEASE_REPO
+              value: {{ .Values.releases.client | quote }}
+            - name: NYDUS_RELEASE_REPO
+              value: {{ .Values.releases.nydus | quote }}
+            - name: NYDUS_SNAPSHOTTER_RELEASE_REPO
+              value: {{ .Values.releases.snapshotter | quote }}
+            - name: CLIENT_VERSION
+              value: {{ .Values.versions.client | quote }}
+            - name: NYDUS_VERSION
+              value: {{ .Values.versions.nydus | quote }}
+            - name: NYDUS_SNAPSHOTTER_VERSION
+              value: {{ .Values.versions.snapshotter | quote }}
+            - name: CLIENT_SHA256_AMD64
+              value: {{ .Values.checksums.client.amd64 | quote }}
+            - name: CLIENT_SHA256_ARM64
+              value: {{ .Values.checksums.client.arm64 | quote }}
+            - name: NYDUS_SHA256_AMD64
+              value: {{ .Values.checksums.nydus.amd64 | quote }}
+            - name: NYDUS_SHA256_ARM64
+              value: {{ .Values.checksums.nydus.arm64 | quote }}
+            - name: NYDUS_SNAPSHOTTER_SHA256_AMD64
+              value: {{ .Values.checksums.snapshotter.amd64 | quote }}
+            - name: NYDUS_SNAPSHOTTER_SHA256_ARM64
+              value: {{ .Values.checksums.snapshotter.arm64 | quote }}
+            - name: NYDUS_SNAPSHOTTER_BINARY_SHA256_AMD64
+              value: {{ .Values.checksums.snapshotterBinary.amd64 | quote }}
+            - name: NYDUS_SNAPSHOTTER_BINARY_SHA256_ARM64
+              value: {{ .Values.checksums.snapshotterBinary.arm64 | quote }}
             - name: EXTRAS_INGRESS_CONTROLLER
               value: {{ .Values.extras.ingress.controller | quote }}
             - name: EXTRAS_INGRESS_CLASS_NAME

@@ -21,7 +21,7 @@ const (
 	// the injected block.
 	ClientCertRevisionAnnotation = "p2p.dragonfly.io/client-cert-revision"
 	// BootstrapInputsAnnotation stores the full desired bootstrap-input
-	// fingerprint (client revision, scheduler IPs/ID, distro).
+	// fingerprint (client revision, scheduler IPs/ID, distro, asset versions).
 	BootstrapInputsAnnotation = "p2p.dragonfly.io/bootstrap-inputs"
 	SchedulerIPsAnnotation    = "p2p.dragonfly.io/scheduler-ips"
 )
@@ -29,13 +29,16 @@ const (
 // InstallConfig carries the operator-wide values used to build the p2p install
 // block for the machine-bootstrap Secret controller.
 type InstallConfig struct {
-	ManagerGRPCDomain string
-	ManagerGRPCPort   int
-	StaticURL         string
-	SmartProxyURL     string
-	NydusMirrorURL    string
-	SchedulerDomain   string
-	ClusterIDFallback string
+	ManagerGRPCDomain  string
+	ManagerGRPCPort    int
+	StaticURL          string
+	SmartProxyURL      string
+	NydusMirrorURL     string
+	SchedulerDomain    string
+	ClusterIDFallback  string
+	ClientVersion      string
+	NydusVersion       string
+	SnapshotterVersion string
 }
 
 // BuildInstallEnv builds the env-file assignments for the embedded p2p install
@@ -79,6 +82,9 @@ func BuildInstallEnv(cluster *provv1.Cluster, secret *corev1.Secret, schedulerID
 		NydusMirrorURL:     cfg.NydusMirrorURL,
 		SchedulerHost:      host,
 		SchedulerClusterID: schedulerID,
+		ClientVersion:      cfg.ClientVersion,
+		NydusVersion:       cfg.NydusVersion,
+		SnapshotterVersion: cfg.SnapshotterVersion,
 		CACert:             caBundle,
 		ClientCert:         secret.Data[corev1.TLSCertKey],
 		ClientKey:          secret.Data[corev1.TLSPrivateKeyKey],

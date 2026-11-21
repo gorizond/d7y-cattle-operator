@@ -7,6 +7,14 @@ metadata:
     app.kubernetes.io/name: p2p-host-sync
     app.kubernetes.io/instance: {{ .Release.Name }}
 data:
+  versions.env: |-
+{{ include "p2p-host-sync.versionsEnv" . | indent 4 }}
+  updater.env: |-
+{{ include "p2p-host-sync.versionsEnv" . | indent 4 }}
+  nydus-updater: |-
+{{ .Files.Get "files/nydus-updater" | indent 4 }}
+  nydus-fs-select.sh: |-
+{{ .Files.Get "files/nydus-fs-select.sh" | indent 4 }}
   scheduler-ips: {{ join "," .Values.schedulerIPs | quote }}
   dynconfig.yaml: |
     scheduler:
@@ -22,10 +30,12 @@ data:
     #!/bin/sh
     set -u
     HOST_DIR=/host{{ .Values.hostConfigDir }}
+    HOST_NYDUS=/host/etc/nydus
+    HOST_BIN=/host/usr/local/bin
     SRC_CONFIG=/source/config
     SRC_CERTS=/source/certs
     log() { echo "p2p-host-sync: $*" >&2; }
-    mkdir -p "$HOST_DIR/certs" || exit 1
+    mkdir -p "$HOST_DIR/certs" "$HOST_NYDUS" "$HOST_BIN" || exit 1
 
     sync_file() {
       src="$1"
@@ -44,9 +54,13 @@ data:
       chmod "$mode" "$tmp" || { rm -f "$tmp"; log "chmod $tmp failed"; return 0; }
       if [ -f "$dst" ] && cmp -s "$tmp" "$dst"; then
         rm -f "$tmp"
-      else
-        mv -f "$tmp" "$dst" || log "replace $dst failed"
+        return 0
       fi
+      if mv -f "$tmp" "$dst"; then
+        return 1
+      fi
+      log "replace $dst failed"
+      return 0
     }
 
     while true; do
@@ -82,6 +96,28 @@ data:
         sync_file "$SRC_CERTS/tls.key" "$HOST_DIR/certs/tls.key" 0600
       else
         log "client certificate source is incomplete; keeping existing certs"
+      fi
+
+      version_changed=0
+      sync_file "$SRC_CONFIG/versions.env" "$HOST_NYDUS/versions.env" 0644 || version_changed=1
+      sync_file "$SRC_CONFIG/updater.env" "$HOST_NYDUS/updater.env" 0644 || version_changed=1
+      sync_file "$SRC_CONFIG/nydus-updater" "$HOST_BIN/nydus-updater" 0755 || version_changed=1
+      sync_file "$SRC_CONFIG/nydus-fs-select.sh" "$HOST_BIN/nydus-fs-select" 0755 || version_changed=1
+
+      # Trigger the host updater once per revision. It decides whether the
+      # snapshotter/client actually changed and is the only component that
+      # restarts those services.
+      if [ -x "$HOST_BIN/nydus-updater" ] && [ -r "$SRC_CONFIG/versions.env" ] && [ -r "$SRC_CONFIG/updater.env" ]; then
+        revision="$(cat "$SRC_CONFIG/versions.env" "$SRC_CONFIG/updater.env" "$SRC_CONFIG/nydus-updater" "$SRC_CONFIG/nydus-fs-select.sh" | sha256sum | cut -d' ' -f1)"
+        marker="$HOST_NYDUS/.host-sync-revision"
+        if [ "$version_changed" = 1 ] || [ "$(cat "$marker" 2>/dev/null || true)" != "$revision" ]; then
+          if nsenter -t 1 -m -u -i -n -p -- systemctl start nydus-updater.service; then
+            printf '%s\n' "$revision" > "$marker.tmp.$$" && mv -f "$marker.tmp.$$" "$marker"
+            log "triggered nydus-updater for revision $revision"
+          else
+            log "failed to trigger nydus-updater; will retry"
+          fi
+        fi
       fi
 
       sleep "${SYNC_INTERVAL_SECONDS:-30}"

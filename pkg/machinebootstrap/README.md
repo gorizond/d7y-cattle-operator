@@ -37,6 +37,86 @@ scheduler IPs are still empty, so the host dfdaemon does not start; later
 reconciles keep the marker and are idempotent. Workers normally have the
 annotation by the time their bootstrap Secret is rendered.
 
+## P2P bootstrap asset delivery
+
+The first delivery is deliberately direct. `p2p-install.sh` detects the node
+architecture like RKE2/k3s: `uname -m` `x86_64`/`amd64` maps to the Rust
+`x86_64` target and nydus `amd64`; `aarch64`/`arm64` maps to `aarch64` and
+nydus `arm64`; `TARGET_ARCH` overrides detection. `armv7l`/`armhf`/`armv6l`
+fail clearly because no client/nydus armv7 assets exist. It then installs both
+`dfdaemon` and `dfget` from the static store
+(`/client/<version>/<arch>/`, then legacy `/bin/`) or the pinned
+`dragonflyoss/client` `v1.5.14` GNU tarball for the detected arch, verifying
+its SHA-256. The amd64 GNU tarball is
+`dragonfly-client-v1.5.14-x86_64-unknown-linux-gnu.tar.gz`, SHA-256
+`ba080e62…b1f7`; its `dfdaemon` is the 42.1 MB GNU build (SHA-256
+`e0d03d4759…bf85`). The arm64 GNU tarball is
+`dragonfly-client-v1.5.14-aarch64-unknown-linux-gnu.tar.gz`, SHA-256
+`370ff792…10af`. Both GNU and musl binaries report `1.5.14 (8887c145f)`, so the
+artifact hash is the discriminator. Using
+dfget for dfdaemon itself would be the chicken-and-egg case and is never done.
+
+After that, if `SCHEDULER_IPS` is non-empty, `/usr/local/bin/dfget` exists,
+`P2P_ASSETS` is `auto` (default) or `1`, and the normal preflight passed, the
+installer starts `dfdaemon-bootstrap.service` before downloading nydus. It
+waits up to `P2P_ASSETS_READY_TIMEOUT` seconds (default 60) for
+`/var/run/dragonfly/dfdaemon.sock`; a timeout or start failure stops the
+service and switches the remaining downloads to direct.
+`dfget --scheduling-policy always --endpoint /var/run/dragonfly/dfdaemon.sock
+--timeout 10m [--digest sha256:<sum>] <url> -O <tmp>` fetches the pinned nydus
+tarball (`nydus-static-v2.4.5-linux-amd64.tgz`) and the upstream
+`containerd/nydus-snapshotter` `v0.16.0` tarball (extracts
+`bin/containerd-nydus-grpc`).
+The static-store and P2P URLs carry version+arch:
+`/nydus/<version>/<arch>/nydus-static.tgz` and
+`/snapshotter/<version>/<arch>/<asset>`. The nydus order is P2P, static-store
+tarball, GitHub release; the snapshotter order is the pinned per-arch checksum,
+P2P with digest, static store, GitHub release. Every nydus tarball and
+snapshotter is SHA-256 verified; a mismatch is discarded and never installed.
+A final direct checksum mismatch is fatal. Upstream v0.16.0 publishes amd64
+and arm64 tarballs with `bin/containerd-nydus-grpc`; both the tarball and the
+extracted binary are pinned per arch. The amd64 binary matches the 236-node
+reference `9bd24308…`. Upstream v0.16.0 reads mirrors only from its optional
+mirrors-config directory and does **not** implicitly consume containerd's
+`certs.d`; that fork-only behavior is gone. Set `NYDUS_MIRROR_URL` to populate
+`/etc/nydus/mirrors`, or rely on the origin registry/kubeconfig keychain.
+
+The client, nydus, and snapshotter versions come from the bootstrap payload
+(`CLIENT_VERSION`, `NYDUS_VERSION`, `NYDUS_SNAPSHOTTER_VERSION`; defaults
+`v1.5.14`, `v2.4.5`, `v0.16.0`). The operator renders the p2p-static
+HelmOp values from the same config. `P2P_ASSETS=0` disables the early dfdaemon/P2P path entirely;
+the variable is a plain env entry, so it can be added to the bootstrap payload
+for rollback.
+Concurrent boots are safe: each node downloads to its own temp directory and
+installs atomically, while the scheduler/dfdaemon deduplicate P2P blobs; there
+is no shared host lock. The host dfdaemon bootstrap switch still disables the
+host daemon once the in-cluster client is running. The first seed normally has
+no scheduler IPs and no peers and therefore stays direct.
+
+The P2P data path is plaintext (dfdaemon upload), so SHA-256 is the integrity
+guard. The installer's manager gRPC preflight remains a known avoidable
+dependency for asset fetching: assets only need the scheduler, but the preflight
+is intentionally unchanged. `nydus-snapshotter-bootstrap.service` gains
+`After=dfdaemon-bootstrap.service` without `Wants`, so an early P2P dfdaemon is
+ordered first without pulling it in on non-P2P paths. `nydus-updater` does not
+use P2P yet: it runs after the cluster exists, where the host dfdaemon socket is
+normally disabled by the switch. P2P updater support is deferred.
+
+## Host-sync live updates
+
+`p2p-host-sync` writes the operator-configured versions/repositories/checksum
+fallbacks to `/etc/nydus/versions.env` and `/etc/nydus/updater.env`, installs
+the current `/usr/local/bin/nydus-updater` and `nydus-fs-select`, and triggers
+`nydus-updater.service` via hostPID/`nsenter` when the revision changes.
+`nydus-updater` fetches release checksums first, updates
+`dfdaemon`/`dfget`, nydus binaries, and upstream
+`containerd-nydus-grpc`, then restarts the snapshotter only when a binary or
+the fs driver changed and `dfdaemon-bootstrap` only when client binaries
+changed and the service is active. `p2p-install.sh` sources
+`/etc/nydus/versions.env` on a later block re-run, so a re-run uses the
+live-converged versions. A new node still needs the bootstrap block (normal
+cloud-init/reboot); existing nodes converge versions without reboot.
+
 ## Kernel prerequisites
 
 - `CONFIG_EROFS_FS_ONDEMAND=y`
