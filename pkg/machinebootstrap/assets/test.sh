@@ -125,6 +125,9 @@ assert_contains "${ROOT_ONE}/etc/dragonfly/dfget.yaml" 'scheduler:'
 assert_contains "${ROOT_ONE}/etc/dragonfly/dfget.yaml" '  caCert: "/etc/dragonfly/certs/ca.crt"'
 assert_contains "${ROOT_ONE}/etc/dragonfly/dfget.yaml" '  cert: "/etc/dragonfly/certs/tls.crt"'
 assert_contains "${ROOT_ONE}/etc/dragonfly/dfget.yaml" '  key: "/etc/dragonfly/certs/tls.key"'
+for want in 'proxy:' 'blobs/sha256.*' 'manifests/sha256.*' 'schedulingPolicy: always'; do
+  assert_contains "${ROOT_ONE}/etc/dragonfly/dfget.yaml" "$want"
+done
 assert_not_contains "${ROOT_ONE}/etc/dragonfly/dfget.yaml" 'tls:'
 assert_not_contains "${ROOT_ONE}/etc/dragonfly/dfget.yaml" 'upload:'
 assert_not_contains "${ROOT_ONE}/etc/dragonfly/dfget.yaml" 'client:'
@@ -811,6 +814,9 @@ NO_IPS_CFG="$(payload scheduler.example.test "" "")"
 P2P_ROOT="$ROOT_NO_IPS" SKIP_DOWNLOAD=1 SKIP_MODULES=1 SKIP_SYSTEMD=1 SKIP_PREFLIGHT=1 CONTAINERD_MAJOR=1 \
   "$RUNNER" "$INSTALL" "$NO_IPS_CFG" > "${WORK}/no-ips.log" 2>&1
 assert_contains "${ROOT_NO_IPS}/etc/dragonfly/dynconfig.yaml" 'addrs: []'
+for want in 'proxy:' 'blobs/sha256.*' 'manifests/sha256.*' 'schedulingPolicy: always'; do
+  assert_contains "${ROOT_NO_IPS}/etc/dragonfly/dfget.yaml" "$want"
+done
 assert_not_contains "${WORK}/no-ips.log" 'direct-registry'
 if [ -e "${ROOT_NO_IPS}/etc/dragonfly/scheduler-ips" ]; then
   echo "p2p-static self-test: empty scheduler IPs wrote the dfdaemon marker" >&2
