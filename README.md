@@ -530,7 +530,10 @@ removes the HelmOp. The chart renders a ConfigMap containing
 `scheduler-ips` (`<ip>:8002` entries) and a matching `scheduler:` `addrs` list.
 
 The DaemonSet mounts only `/etc/dragonfly` from the host, the operator-generated
-ConfigMap, and the `dragonfly-p2p-mtls` client Secret. It runs privileged as
+ConfigMap, and the `dragonfly-p2p-mtls` client Secret. The shared control HelmOp
+is the only downstream owner of that Secret; host-sync depends on control and
+does not redeclare it, so Fleet does not rewrite the Secret copy on every
+host-sync reconcile. It runs privileged as
 root, has no Kubernetes API access, and every 30 seconds copies the ConfigMap
 `dynconfig.yaml`/`scheduler-ips` and the client `ca.crt`/`tls.crt`/`tls.key` to
 the host files (`tls.key` is mode 0600). Missing or transiently unreadable
@@ -570,13 +573,21 @@ DaemonSets may run on the same node, seedClient ports are shifted to
 
 All releases target `dragonfly-system` and depend on each other through
 `spec.dependsOn`: the shared control depends on shared KeyDB, shared data
-depends on shared control, KeyDB, and extras. The shared control additionally
-depends on the per-seed scheduler certificate Bundle by label selector. The
-shared mirror depends on shared data, and the shared manager depends on shared
-KeyDB. The client, manager, and manager credentials Secrets are copied into the
-HelmOp namespace and delivered downstream through Fleet
-`spec.downstreamResources`; the per-seed scheduler Secret is delivered by its
-raw Bundle.
+depends on shared control, KeyDB, and extras, and the per-seed host-sync depends
+on shared control. The shared control additionally depends on the per-seed
+scheduler certificate Bundle by label selector. The shared mirror depends on
+shared data, and the shared manager depends on shared KeyDB. The per-seed
+scheduler Secret is delivered by its raw Bundle.
+
+Fleet `spec.downstreamResources` copies Secrets into the release namespace.
+Each copied Secret must have exactly one owning HelmOp per target cluster:
+Fleet stamps `fleet.cattle.io/bundledeployment` on the destination Secret, and a
+second declaration overwrites the stamp, forcing a Helm upgrade of that
+release. The shared control is therefore the sole owner of the
+`dragonfly-p2p-mtls` client identity; the manager is the sole owner of its
+server identity (`dragonfly-p2p-manager`) and API credentials. Data and
+host-sync only mount the client Secret control delivers, and their HelmOps
+depend on control so the copy exists before their pods start.
 
 ### Extras chart
 

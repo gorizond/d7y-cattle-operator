@@ -265,6 +265,33 @@ func TestSharedManagerKeepsGlobalSecrets(t *testing.T) {
 	}
 }
 
+// TestClientSecretHasSingleOwner locks the Fleet copy contract: exactly one
+// HelmOp may declare the client identity Secret. A second owner overwrites
+// fleet.cattle.io/bundledeployment on the destination and forces an upgrade.
+func TestClientSecretHasSingleOwner(t *testing.T) {
+	c := sharedTestCluster()
+	ops := map[string]*fleetv1alpha1.HelmOp{
+		"keydb":     SharedKeyDB(c),
+		"manager":   SharedManager(c),
+		"control":   SharedControl(c),
+		"data":      SharedData(c),
+		"extras":    SharedExtras(c, ExtrasOptions{}),
+		"mirror":    SharedMirror(c),
+		"host-sync": HostSync(c),
+	}
+	var owners []string
+	for name, op := range ops {
+		for _, resource := range op.Spec.DownstreamResources {
+			if resource.Kind == "Secret" && resource.Name == c.MTLSSecretName {
+				owners = append(owners, name)
+			}
+		}
+	}
+	if len(owners) != 1 || owners[0] != "control" {
+		t.Fatalf("client Secret owners = %v, want [control]", owners)
+	}
+}
+
 func TestSharedExtrasManagerIngressGate(t *testing.T) {
 	if got := valueAt(t, SharedExtras(sharedTestCluster(), ExtrasOptions{}).Spec.Helm.Values.Data, "ingress", "enabled"); got != SharedManagerIngressEnabledTemplate {
 		t.Errorf("SharedExtras ingress.enabled = %v, want the manager-label template", got)
@@ -409,8 +436,8 @@ func TestSharedDataUsesClientRevision(t *testing.T) {
 	if got := valueAt(t, op.Spec.Helm.Values.Data, "seedClient", "podAnnotations", certRevisionAnnotation); got != "rev1" {
 		t.Errorf("seedClient revision = %v", got)
 	}
-	if len(op.Spec.DownstreamResources) != 1 || op.Spec.DownstreamResources[0].Name != "dragonfly-p2p-mtls" {
-		t.Errorf("data downstreamResources = %+v", op.Spec.DownstreamResources)
+	if len(op.Spec.DownstreamResources) != 0 {
+		t.Errorf("data downstreamResources = %+v, want none: control is the sole client Secret owner", op.Spec.DownstreamResources)
 	}
 }
 

@@ -9,6 +9,11 @@ import (
 // externalManager.host empty so the chart renders the local dynconfig.yaml and
 // points clients at the control release's scheduler.
 //
+// The control HelmOp is the sole Fleet owner of the client identity Secret;
+// data only mounts the copy control delivers. Declaring the same Secret here
+// would make Fleet overwrite fleet.cattle.io/bundledeployment on the
+// destination and force a Helm upgrade on every data reconcile.
+//
 // The upload and storage ports below are the peer ports dfdaemon advertises to
 // schedulers and other peers; with hostNetwork they are bound on the node.
 // The Dragonfly chart has no separate advertise fields for dfdaemon.
@@ -19,11 +24,12 @@ func Data(c Cluster) *fleetv1alpha1.HelmOp {
 		values,
 		[]string{names.Control, names.KeyDB, ExtrasName(c.Name)})
 	withSchedulerAddrsTemplate(op, values)
-	return withMTLS(op, c.MTLSSecretName)
+	return op
 }
 
 // SharedData returns the shared seedClient/client HelmOp. The scheduler host
-// and scheduler cluster ID are per-target Fleet templates.
+// and scheduler cluster ID are per-target Fleet templates. Like Data, it
+// mounts but never redeclares the client Secret owned by SharedControl.
 func SharedData(c Cluster) *fleetv1alpha1.HelmOp {
 	c = sharedCluster(c)
 	names := SharedNames()
@@ -32,7 +38,7 @@ func SharedData(c Cluster) *fleetv1alpha1.HelmOp {
 		values,
 		[]string{SharedControlName(), SharedKeyDBName(), SharedExtrasName()}, SharedSelector())
 	withSchedulerAddrsTemplate(op, values)
-	return withMTLS(op, c.MTLSSecretName)
+	return op
 }
 
 func dataValues(c Cluster, names Names) map[string]any {
