@@ -15,7 +15,6 @@ import (
 
 	fleetv1alpha1 "github.com/rancher/fleet/pkg/apis/fleet.cattle.io/v1alpha1"
 	provv1 "github.com/rancher/rancher/pkg/apis/provisioning.cattle.io/v1"
-	capictl "github.com/rancher/rancher/pkg/generated/controllers/cluster.x-k8s.io/v1beta2"
 	provctl "github.com/rancher/rancher/pkg/generated/controllers/provisioning.cattle.io/v1"
 	"github.com/rancher/wrangler/v3/pkg/condition"
 	corectl "github.com/rancher/wrangler/v3/pkg/generated/controllers/core/v1"
@@ -74,8 +73,6 @@ type Controller struct {
 
 	clusters     clusterStore
 	clusterCache clusterCache
-	machines     machineCache
-	infra        apply.Store
 
 	managerMu         sync.Mutex
 	managerHTTPClient *http.Client
@@ -85,7 +82,7 @@ type Controller struct {
 
 // Register wires the Cluster controller. Handlers must be registered before
 // the factories are started.
-func Register(ctx context.Context, clusters provctl.ClusterController, machines capictl.MachineController, secrets corectl.SecretController, configmaps corectl.ConfigMapController, events corectl.EventController, infra, helmops, bundles apply.Store, opts Options) {
+func Register(ctx context.Context, clusters provctl.ClusterController, secrets corectl.SecretController, configmaps corectl.ConfigMapController, events corectl.EventController, helmops, bundles apply.Store, opts Options) {
 	c := &Controller{
 		ctx:          ctx,
 		secrets:      secrets,
@@ -95,12 +92,9 @@ func Register(ctx context.Context, clusters provctl.ClusterController, machines 
 		bundles:      bundles,
 		clusters:     clusters,
 		clusterCache: clusters.Cache(),
-		machines:     machines.Cache(),
-		infra:        infra,
 		opts:         opts,
 	}
 	clusters.OnChange(ctx, controllerName, c.reconcile)
-	machines.OnChange(ctx, controllerName+":scheduler-ips", c.machineChanged)
 	if watcher, ok := helmops.(helmOpWatcher); ok {
 		go c.watchHelmOps(watcher)
 	}
