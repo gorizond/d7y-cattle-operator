@@ -458,6 +458,27 @@ if [ -e "${BAD_INSTALL}/containerd-nydus-grpc" ]; then
   echo "p2p-static self-test: updater installed a bad snapshotter after checksum mismatch" >&2
   exit 1
 fi
+# A wrong extracted-binary pin must fail even when the tarball checksum is good.
+BAD_BIN_INSTALL="${UPDATER_ROOT}/install-bad-bin"
+mkdir -p "$BAD_BIN_INSTALL"
+sed 's/^NYDUS_SNAPSHOTTER_BINARY_SHA256=.*/NYDUS_SNAPSHOTTER_BINARY_SHA256=deadbeef/' "${UPDATER_ROOT}/updater.env" > "${UPDATER_ROOT}/updater-bad-bin.env"
+if NYDUS_UPDATER_ENV="${UPDATER_ROOT}/updater-bad-bin.env" \
+  NYDUS_UPDATER_BIN_DIR="$BAD_BIN_INSTALL" \
+  NYDUS_UPDATER_SELECTOR="${UPDATER_ROOT}/no-selector" \
+  UPDATER_CLIENT_TGZ="${UPDATER_ROOT}/client.tgz" \
+  UPDATER_NYDUS_TGZ="${UPDATER_ROOT}/nydus.tgz" \
+  UPDATER_SNAP_TGZ="${UPDATER_ROOT}/snapshotter.tgz" \
+  PATH="${UPDATER_BIN}:${PATH}" \
+  bash "${ROOT_ONE}/usr/local/bin/nydus-updater" > "${WORK}/updater-bad-bin.log" 2>&1; then
+  echo "p2p-static self-test: updater accepted a bad binary checksum" >&2
+  exit 1
+fi
+assert_contains "${WORK}/updater-bad-bin.log" 'checksum mismatch'
+if [ -e "${BAD_BIN_INSTALL}/containerd-nydus-grpc" ]; then
+  echo "p2p-static self-test: updater installed a snapshotter with a bad binary checksum" >&2
+  exit 1
+fi
+
 assert_contains "${ROOT_ONE}/etc/systemd/system/dfdaemon-bootstrap.service" 'Before=rke2-server.service rke2-agent.service'
 assert_contains "${ROOT_ONE}/etc/systemd/system/nydus-snapshotter-bootstrap.service" 'Before=rke2-server.service rke2-agent.service'
 assert_contains "${ROOT_ONE}/etc/systemd/system/nydus-snapshotter-bootstrap.service" 'ExecStartPre=/usr/local/bin/nydus-fs-select'

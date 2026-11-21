@@ -30,7 +30,7 @@ const (
 	DefaultMirrorChartVersion            = "0.1.0"
 	DefaultHostSyncChartRepo             = "https://gorizond.github.io/d7y-cattle-operator"
 	DefaultHostSyncChartName             = "p2p-host-sync"
-	DefaultHostSyncChartVersion          = "0.1.3"
+	DefaultHostSyncChartVersion          = "0.1.4"
 	DefaultStaticChartRepo               = "https://gorizond.github.io/d7y-cattle-operator"
 	DefaultStaticChartName               = "p2p-static"
 	DefaultStaticChartVersion            = "0.1.11"
