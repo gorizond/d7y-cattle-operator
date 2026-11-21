@@ -24,6 +24,7 @@ spec:
 {{- end }}
     spec:
       automountServiceAccountToken: false
+      hostPID: true
       tolerations:
 {{ toYaml .Values.tolerations | indent 8 }}
 {{- with .Values.nodeSelector }}
@@ -46,6 +47,10 @@ spec:
           volumeMounts:
             - name: host-config
               mountPath: /host{{ .Values.hostConfigDir }}
+            - name: host-nydus
+              mountPath: /host/etc/nydus
+            - name: host-bin
+              mountPath: /host/usr/local/bin
             - name: source-config
               mountPath: /source/config
               readOnly: true
@@ -60,6 +65,14 @@ spec:
           hostPath:
             path: {{ .Values.hostConfigDir }}
             type: DirectoryOrCreate
+        - name: host-nydus
+          hostPath:
+            path: /etc/nydus
+            type: DirectoryOrCreate
+        - name: host-bin
+          hostPath:
+            path: /usr/local/bin
+            type: DirectoryOrCreate
         - name: source-config
           configMap:
             name: {{ .Release.Name }}-config
@@ -68,6 +81,14 @@ spec:
                 path: dynconfig.yaml
               - key: scheduler-ips
                 path: scheduler-ips
+              - key: versions.env
+                path: versions.env
+              - key: updater.env
+                path: updater.env
+              - key: nydus-updater
+                path: nydus-updater
+              - key: nydus-fs-select.sh
+                path: nydus-fs-select.sh
         - name: source-certs
           secret:
             secretName: {{ .Values.mtlsSecret }}

@@ -31,6 +31,12 @@ CERT_DIR="/etc/dragonfly/certs"
 DFGET_CONFIG="/etc/dragonfly/dfget.yaml"
 DYNCONFIG="/etc/dragonfly/dynconfig.yaml"
 NYDUS_DIR="/etc/nydus"
+# Host-sync writes versions.env before a later block re-run. It is authoritative
+# for live-converged versions/checksums; bootstrap env remains the first source.
+if [ -f "${ROOT}${NYDUS_DIR}/versions.env" ]; then
+  # shellcheck disable=SC1090
+  . "${ROOT}${NYDUS_DIR}/versions.env"
+fi
 # Static-store assets for nydusd/nydus-image/nydus-overlayfs. The host
 # snapshotter is the upstream containerd/nydus-snapshotter release, see below.
 NYDUS_VERSION="${NYDUS_VERSION:-v2.4.5}"
@@ -49,10 +55,10 @@ NYDUS_SNAPSHOTTER_BINARY="containerd-nydus-grpc"
 # static store is not populated. The tarball contains nydusd, nydus-image, and
 # nydus-overlayfs.
 NYDUS_ALLOW_GITHUB="${NYDUS_ALLOW_GITHUB:-1}"
-NYDUS_GITHUB_REPO="${NYDUS_GITHUB_REPO:-dragonflyoss/nydus}"
+NYDUS_GITHUB_REPO="${NYDUS_GITHUB_REPO:-${NYDUS_RELEASE_REPO:-dragonflyoss/nydus}}"
 # Direct Dragonfly client tarball for dfdaemon/dfget. The first delivery must
 # stay direct: dfget cannot use dfdaemon before dfdaemon exists.
-DRAGONFLY_CLIENT_REPO="${DRAGONFLY_CLIENT_REPO:-dragonflyoss/client}"
+DRAGONFLY_CLIENT_REPO="${DRAGONFLY_CLIENT_REPO:-${CLIENT_RELEASE_REPO:-dragonflyoss/client}}"
 DRAGONFLY_CLIENT_VERSION="${DRAGONFLY_CLIENT_VERSION:-${CLIENT_VERSION:-v1.5.14}}"
 DRAGONFLY_CLIENT_LIBC="${DRAGONFLY_CLIENT_LIBC:-gnu}"
 DRAGONFLY_CLIENT_BINARIES="dfdaemon
@@ -138,6 +144,26 @@ DRAGONFLY_CLIENT_ROOT="${DRAGONFLY_CLIENT_ROOT:-dragonfly-client-${DRAGONFLY_CLI
 DRAGONFLY_CLIENT_ASSET="${DRAGONFLY_CLIENT_ASSET:-${DRAGONFLY_CLIENT_ROOT}.tar.gz}"
 DRAGONFLY_CLIENT_URL="${DRAGONFLY_CLIENT_URL:-https://github.com/${DRAGONFLY_CLIENT_REPO}/releases/download/${DRAGONFLY_CLIENT_VERSION}/${DRAGONFLY_CLIENT_ASSET}}"
 NYDUS_SNAPSHOTTER_ARCH="$HOST_ARCH"
+case "$HOST_ARCH" in
+  amd64)
+    : "${CLIENT_SHA256:=${CLIENT_SHA256_AMD64:-}}"
+    : "${NYDUS_SHA256:=${NYDUS_SHA256_AMD64:-}}"
+    : "${NYDUS_SNAPSHOTTER_SHA256:=${NYDUS_SNAPSHOTTER_SHA256_AMD64:-}}"
+    : "${NYDUS_SNAPSHOTTER_BINARY_SHA256:=${NYDUS_SNAPSHOTTER_BINARY_SHA256_AMD64:-}}"
+    ;;
+  arm64)
+    : "${CLIENT_SHA256:=${CLIENT_SHA256_ARM64:-}}"
+    : "${NYDUS_SHA256:=${NYDUS_SHA256_ARM64:-}}"
+    : "${NYDUS_SNAPSHOTTER_SHA256:=${NYDUS_SNAPSHOTTER_SHA256_ARM64:-}}"
+    : "${NYDUS_SNAPSHOTTER_BINARY_SHA256:=${NYDUS_SNAPSHOTTER_BINARY_SHA256_ARM64:-}}"
+    ;;
+esac
+if [ -n "${CLIENT_SHA256:-}" ]; then
+  DRAGONFLY_CLIENT_SHA256="${DRAGONFLY_CLIENT_SHA256:-${CLIENT_SHA256}}"
+fi
+if [ -n "${NYDUS_SHA256:-}" ]; then
+  NYDUS_GITHUB_SHA256="${NYDUS_GITHUB_SHA256:-${NYDUS_SHA256}}"
+fi
 NYDUS_SNAPSHOTTER_ASSET="${NYDUS_SNAPSHOTTER_ASSET:-nydus-snapshotter-${NYDUS_SNAPSHOTTER_VERSION}-linux-${NYDUS_SNAPSHOTTER_ARCH}.tar.gz}"
 
 # Per-architecture SHA-256 pins for the upstream v0.16.0 release tarballs.
@@ -147,13 +173,11 @@ case "$HOST_ARCH" in
     : "${DRAGONFLY_CLIENT_SHA256:=ba080e62f1626ab2fc2a5a0629a5cd912cc15099508820403108abbe2f75b1f7}"
     : "${NYDUS_GITHUB_SHA256:=1ad7b793a1996577e462b0bf5c1a22e4450b9c04f7e9e99d4b274ccc92f19072}"
     : "${NYDUS_SNAPSHOTTER_SHA256:=24e4ceaae9c87e396e71e89bd3eb074f2cc6a5a14b1a2081c8d890481857a0e4}"
-    : "${NYDUS_SNAPSHOTTER_BINARY_SHA256:=9bd24308ef51139310bf58927a97eec49567d0154606bc5774ad69d2ee492ff0}"
     ;;
   arm64)
     : "${DRAGONFLY_CLIENT_SHA256:=370ff792a1c6957a7244b770d6cd12792668e326b2282b3017fea2cbfa3510af}"
     : "${NYDUS_GITHUB_SHA256:=85925af702d79fc3a8b9d501a5267ddc9f81449ff9fe94841845eb98eda84593}"
     : "${NYDUS_SNAPSHOTTER_SHA256:=136e9c649a63c16b3d3322a15fcdf918e7dda9a4cbb043e2923451e87a8ba08f}"
-    : "${NYDUS_SNAPSHOTTER_BINARY_SHA256:=399f7a5b800bb6d05c63bbb340e7fa1820b84609b882589a6a95dd8796d03859}"
     ;;
 esac
 
@@ -202,6 +226,32 @@ verify_sha256() {
   return 0
 }
 
+# Prefer the release-provided checksum sidecar (.sha256sum or .sha256). The
+# caller's pinned fallback is used only when the release publishes no checksum
+# asset (the Dragonfly client v1.5.14 release has none).
+resolve_checksum() {
+  local url fallback suffix sum_file sum
+  url="$1"
+  fallback="${2:-}"
+  for suffix in .sha256sum .sha256; do
+    sum_file="${TMP}/checksum.$$"
+    if curl -fsSL --retry 3 --connect-timeout 10 --max-time 60 -o "$sum_file" "${url}${suffix}" && [ -s "$sum_file" ]; then
+      IFS=' ' read -r sum _ < "$sum_file"
+      rm -f "$sum_file"
+      if [ -n "$sum" ]; then
+        printf '%s' "$sum"
+        return 0
+      fi
+    fi
+    rm -f "$sum_file"
+  done
+  if [ -n "$fallback" ]; then
+    printf '%s' "$fallback"
+    return 0
+  fi
+  return 1
+}
+
 nydus_github_tarball_url() {
   local base="https://github.com/${NYDUS_GITHUB_REPO}/releases"
   if [ "$NYDUS_VERSION" = "latest" ]; then
@@ -226,7 +276,9 @@ ensure_dragonfly_client_assets() {
     log "Dragonfly client tarball unavailable: ${DRAGONFLY_CLIENT_URL}"
     return 1
   fi
-  verify_sha256 "$tarball" "$DRAGONFLY_CLIENT_SHA256" "dragonfly-client ${DRAGONFLY_CLIENT_VERSION}" \
+  resolved="$(resolve_checksum "$DRAGONFLY_CLIENT_URL" "$DRAGONFLY_CLIENT_SHA256")" \
+    || die "no checksum available for dragonfly-client ${DRAGONFLY_CLIENT_VERSION}: ${DRAGONFLY_CLIENT_URL}"
+  verify_sha256 "$tarball" "$resolved" "dragonfly-client ${DRAGONFLY_CLIENT_VERSION}" \
     || die "direct client tarball checksum verification failed: ${DRAGONFLY_CLIENT_URL}"
   if ! tar -xzf "$tarball" -C "$dir"; then
     log "invalid Dragonfly client tarball: ${DRAGONFLY_CLIENT_URL}"
@@ -379,11 +431,13 @@ start_dfdaemon_for_assets() {
 # Prefer the pinned tarball over P2P, then the static-store mirror, then the
 # GitHub release. Every source is checked against NYDUS_GITHUB_SHA256.
 download_nydus_tarball() {
-  local p2p_ready="$1" out="$2" github_url candidate
+  local p2p_ready="$1" out="$2" github_url candidate checksum
   github_url="$(nydus_github_tarball_url)"
+  checksum="$(resolve_checksum "$github_url" "$NYDUS_GITHUB_SHA256")" \
+    || die "no checksum available for nydus ${NYDUS_VERSION}: ${github_url}"
   rm -f "$out"
-  if [ "$p2p_ready" = "1" ] && p2p_fetch "$github_url" "$out" "$NYDUS_GITHUB_SHA256"; then
-    if verify_sha256 "$out" "$NYDUS_GITHUB_SHA256" "nydus ${NYDUS_VERSION} (P2P)"; then
+  if [ "$p2p_ready" = "1" ] && p2p_fetch "$github_url" "$out" "$checksum"; then
+    if verify_sha256 "$out" "$checksum" "nydus ${NYDUS_VERSION} (P2P)"; then
       log "nydus tarball: using P2P"
       return 0
     fi
@@ -395,7 +449,7 @@ download_nydus_tarball() {
     "${STATIC_URL%/}/nydus/${NYDUS_VERSION}/nydus-static.tgz" \
     "${STATIC_URL%/}/bin/nydus-static.tgz"; do
     if curl -fsSL --retry 3 --connect-timeout 10 --max-time 300 -o "$out" "$candidate" && [ -s "$out" ]; then
-      if verify_sha256 "$out" "$NYDUS_GITHUB_SHA256" "nydus ${NYDUS_VERSION} (static store)"; then
+      if verify_sha256 "$out" "$checksum" "nydus ${NYDUS_VERSION} (static store)"; then
         log "nydus tarball: using static store ${candidate}"
         return 0
       fi
@@ -411,7 +465,7 @@ download_nydus_tarball() {
     log "nydus GitHub release unavailable: ${github_url}"
     return 1
   fi
-  verify_sha256 "$out" "$NYDUS_GITHUB_SHA256" "nydus ${NYDUS_VERSION} (GitHub)" \
+  verify_sha256 "$out" "$checksum" "nydus ${NYDUS_VERSION} (GitHub)" \
     || die "checksum verification failed for ${github_url}"
   log "nydus tarball: using GitHub release"
   return 0
@@ -454,22 +508,6 @@ nydus_snapshotter_release_url() {
   fi
 }
 
-fetch_nydus_snapshotter_checksum() {
-  local out="$1" url candidate
-  url="$(nydus_snapshotter_release_url)"
-  for candidate in \
-    "${STATIC_URL%/}/snapshotter/${NYDUS_SNAPSHOTTER_VERSION}/${HOST_ARCH}/${NYDUS_SNAPSHOTTER_ASSET}.sha256sum" \
-    "${url}.sha256sum" \
-    "${url}.sha256"; do
-    if curl -fsSL --retry 3 --connect-timeout 10 --max-time 300 -o "$out" "$candidate" && [ -s "$out" ]; then
-      log "nydus-snapshotter checksum: using ${candidate}"
-      return 0
-    fi
-  done
-  rm -f "$out"
-  return 1
-}
-
 # Upstream v0.16.0 publishes a tarball with bin/containerd-nydus-grpc. Verify
 # both the tarball and the extracted binary: the binary pin is the reference
 # already running on the 236 node (9bd24308... on amd64).
@@ -503,30 +541,17 @@ extract_nydus_snapshotter_binary() {
 # Fetch the upstream tarball through P2P, static store, then GitHub; verify the
 # tarball SHA-256 and the extracted binary SHA-256 before install.
 install_nydus_snapshotter_asset() {
-  local p2p_ready="$1" out="$2" url checksum expected candidate tarball
+  local p2p_ready="$1" out="$2" url expected candidate tarball
   url="$(nydus_snapshotter_release_url)"
-  checksum="${out}.sha256sum"
   tarball="${out}.tgz"
-  rm -f "$out" "$tarball" "$checksum"
-  expected="${NYDUS_SNAPSHOTTER_SHA256:-}"
-  if [ -z "$expected" ]; then
-    log "no pinned nydus-snapshotter asset for ${HOST_ARCH} (${NYDUS_SNAPSHOTTER_REPO} ${NYDUS_SNAPSHOTTER_VERSION}); trying release checksum"
-    if ! fetch_nydus_snapshotter_checksum "$checksum"; then
-      log "nydus-snapshotter checksum is unavailable: ${url}.sha256sum"
-      return 1
-    fi
-    IFS=' ' read -r expected _ < "$checksum"
-    if [ -z "$expected" ]; then
-      rm -f "$checksum"
-      log "nydus-snapshotter checksum is empty"
-      return 1
-    fi
-  fi
+  rm -f "$out" "$tarball"
+  expected="$(resolve_checksum "$url" "${NYDUS_SNAPSHOTTER_SHA256:-}")" \
+    || { log "no checksum available for nydus-snapshotter ${NYDUS_SNAPSHOTTER_VERSION} ${HOST_ARCH}: ${url}"; return 1; }
   if [ "$p2p_ready" = "1" ] && p2p_fetch "$url" "$tarball" "$expected"; then
     if verify_sha256 "$tarball" "$expected" "nydus-snapshotter ${NYDUS_SNAPSHOTTER_VERSION} tarball (P2P)" &&
       extract_nydus_snapshotter_binary "$tarball" "$out"; then
       log "nydus-snapshotter: using P2P"
-      rm -f "$tarball" "$checksum"
+      rm -f "$tarball"
       return 0
     fi
     log "nydus P2P snapshotter failed verification; discarding"
@@ -538,19 +563,19 @@ install_nydus_snapshotter_asset() {
     "$url"; do
     if curl -fsSL --retry 3 --connect-timeout 10 --max-time 300 -o "$tarball" "$candidate" && [ -s "$tarball" ]; then
       if ! verify_sha256 "$tarball" "$expected" "nydus-snapshotter ${NYDUS_SNAPSHOTTER_VERSION} tarball"; then
-        rm -f "$tarball" "$checksum"
+        rm -f "$tarball"
         die "checksum verification failed for ${candidate}"
       fi
       if extract_nydus_snapshotter_binary "$tarball" "$out"; then
         log "nydus-snapshotter: using ${candidate}"
-        rm -f "$tarball" "$checksum"
+        rm -f "$tarball"
         return 0
       fi
-      rm -f "$tarball" "$checksum"
+      rm -f "$tarball"
       die "nydus-snapshotter tarball failed binary verification: ${candidate}"
     fi
   done
-  rm -f "$tarball" "$checksum"
+  rm -f "$tarball"
   return 1
 }
 
@@ -1486,11 +1511,36 @@ UNIT
 # script, not by the static-store updater. It never touches Kubernetes.
 {
   printf 'STATIC_URL=%q\n' "$STATIC_URL"
+  printf 'CLIENT_VERSION=%q\n' "$DRAGONFLY_CLIENT_VERSION"
+  printf 'CLIENT_RELEASE_REPO=%q\n' "$DRAGONFLY_CLIENT_REPO"
+  printf 'CLIENT_SHA256=%q\n' "${DRAGONFLY_CLIENT_SHA256:-}"
   printf 'NYDUS_VERSION=%q\n' "$NYDUS_VERSION"
+  printf 'NYDUS_RELEASE_REPO=%q\n' "$NYDUS_GITHUB_REPO"
   printf 'NYDUS_GITHUB_REPO=%q\n' "$NYDUS_GITHUB_REPO"
-  printf 'NYDUS_GITHUB_SHA256=%q\n' "$NYDUS_GITHUB_SHA256"
+  printf 'NYDUS_SHA256=%q\n' "${NYDUS_GITHUB_SHA256:-}"
+  printf 'NYDUS_GITHUB_SHA256=%q\n' "${NYDUS_GITHUB_SHA256:-}"
+  printf 'NYDUS_SNAPSHOTTER_VERSION=%q\n' "$NYDUS_SNAPSHOTTER_VERSION"
+  printf 'NYDUS_SNAPSHOTTER_REPO=%q\n' "$NYDUS_SNAPSHOTTER_REPO"
+  printf 'NYDUS_SNAPSHOTTER_SHA256=%q\n' "${NYDUS_SNAPSHOTTER_SHA256:-}"
+  printf 'NYDUS_SNAPSHOTTER_BINARY_SHA256=%q\n' "${NYDUS_SNAPSHOTTER_BINARY_SHA256:-}"
   printf 'NYDUS_ALLOW_GITHUB=%q\n' "$NYDUS_ALLOW_GITHUB"
 } | write_file "${ROOT}${NYDUS_DIR}/updater.env" 0644
+{
+  printf 'STATIC_URL=%q\n' "$STATIC_URL"
+  printf 'CLIENT_VERSION=%q\n' "$DRAGONFLY_CLIENT_VERSION"
+  printf 'CLIENT_RELEASE_REPO=%q\n' "$DRAGONFLY_CLIENT_REPO"
+  printf 'CLIENT_SHA256=%q\n' "${DRAGONFLY_CLIENT_SHA256:-}"
+  printf 'NYDUS_VERSION=%q\n' "$NYDUS_VERSION"
+  printf 'NYDUS_RELEASE_REPO=%q\n' "$NYDUS_GITHUB_REPO"
+  printf 'NYDUS_GITHUB_REPO=%q\n' "$NYDUS_GITHUB_REPO"
+  printf 'NYDUS_SHA256=%q\n' "${NYDUS_GITHUB_SHA256:-}"
+  printf 'NYDUS_GITHUB_SHA256=%q\n' "${NYDUS_GITHUB_SHA256:-}"
+  printf 'NYDUS_SNAPSHOTTER_VERSION=%q\n' "$NYDUS_SNAPSHOTTER_VERSION"
+  printf 'NYDUS_SNAPSHOTTER_REPO=%q\n' "$NYDUS_SNAPSHOTTER_REPO"
+  printf 'NYDUS_SNAPSHOTTER_SHA256=%q\n' "${NYDUS_SNAPSHOTTER_SHA256:-}"
+  printf 'NYDUS_SNAPSHOTTER_BINARY_SHA256=%q\n' "${NYDUS_SNAPSHOTTER_BINARY_SHA256:-}"
+  printf 'NYDUS_ALLOW_GITHUB=%q\n' "$NYDUS_ALLOW_GITHUB"
+} | write_file "${ROOT}${NYDUS_DIR}/versions.env" 0644
 
 write_file "${BIN_DIR}/nydus-updater" 0755 <<'UPDATER'
 #!/usr/bin/env bash
@@ -1504,113 +1554,154 @@ if [ ! -f "$env_file" ]; then
 fi
 # shellcheck disable=SC1090
 . "$env_file"
-: "${STATIC_URL:?STATIC_URL is required}"
+: "${CLIENT_VERSION:?CLIENT_VERSION is required}"
 : "${NYDUS_VERSION:?NYDUS_VERSION is required}"
-NYDUS_GITHUB_REPO="${NYDUS_GITHUB_REPO:-dragonflyoss/nydus}"
+: "${NYDUS_SNAPSHOTTER_VERSION:?NYDUS_SNAPSHOTTER_VERSION is required}"
+CLIENT_RELEASE_REPO="${CLIENT_RELEASE_REPO:-dragonflyoss/client}"
+NYDUS_RELEASE_REPO="${NYDUS_RELEASE_REPO:-dragonflyoss/nydus}"
+NYDUS_SNAPSHOTTER_REPO="${NYDUS_SNAPSHOTTER_REPO:-containerd/nydus-snapshotter}"
+CLIENT_SHA256="${CLIENT_SHA256:-}"
+NYDUS_SHA256="${NYDUS_SHA256:-}"
+NYDUS_SNAPSHOTTER_SHA256="${NYDUS_SNAPSHOTTER_SHA256:-}"
+NYDUS_SNAPSHOTTER_BINARY_SHA256="${NYDUS_SNAPSHOTTER_BINARY_SHA256:-}"
 NYDUS_ALLOW_GITHUB="${NYDUS_ALLOW_GITHUB:-1}"
-NYDUS_GITHUB_SHA256="${NYDUS_GITHUB_SHA256:-}"
 
 bin_dir="${NYDUS_UPDATER_BIN_DIR:-/usr/local/bin}"
 selector="${NYDUS_UPDATER_SELECTOR:-/usr/local/bin/nydus-fs-select}"
 tmp="$(mktemp -d)"
 trap 'rm -rf "$tmp"' EXIT
-github_dir=""
 
-nydus_github_url() {
-  local base="https://github.com/${NYDUS_GITHUB_REPO}/releases"
-  if [ "$NYDUS_VERSION" = "latest" ]; then
-    printf '%s/latest/download/nydus-static-latest-linux-amd64.tgz' "$base"
-  else
-    printf '%s/download/%s/nydus-static-%s-linux-amd64.tgz' "$base" "$NYDUS_VERSION" "$NYDUS_VERSION"
-  fi
+log() { echo "nydus-updater: $*" >&2; }
+
+case "$(uname -m)" in
+  x86_64|amd64) HOST_ARCH="amd64"; CLIENT_ARCH="x86_64" ;;
+  aarch64|arm64) HOST_ARCH="arm64"; CLIENT_ARCH="aarch64" ;;
+  armv7l|armhf|armv6l) log "unsupported architecture $(uname -m)"; exit 1 ;;
+  *) log "unsupported architecture $(uname -m)"; exit 1 ;;
+esac
+case "$HOST_ARCH" in
+  amd64)
+    CLIENT_SHA256="${CLIENT_SHA256_AMD64:-${CLIENT_SHA256:-}}"
+    NYDUS_SHA256="${NYDUS_SHA256_AMD64:-${NYDUS_SHA256:-}}"
+    NYDUS_SNAPSHOTTER_SHA256="${NYDUS_SNAPSHOTTER_SHA256_AMD64:-${NYDUS_SNAPSHOTTER_SHA256:-}}"
+    NYDUS_SNAPSHOTTER_BINARY_SHA256="${NYDUS_SNAPSHOTTER_BINARY_SHA256_AMD64:-${NYDUS_SNAPSHOTTER_BINARY_SHA256:-}}"
+    ;;
+  arm64)
+    CLIENT_SHA256="${CLIENT_SHA256_ARM64:-${CLIENT_SHA256:-}}"
+    NYDUS_SHA256="${NYDUS_SHA256_ARM64:-${NYDUS_SHA256:-}}"
+    NYDUS_SNAPSHOTTER_SHA256="${NYDUS_SNAPSHOTTER_SHA256_ARM64:-${NYDUS_SNAPSHOTTER_SHA256:-}}"
+    NYDUS_SNAPSHOTTER_BINARY_SHA256="${NYDUS_SNAPSHOTTER_BINARY_SHA256_ARM64:-${NYDUS_SNAPSHOTTER_BINARY_SHA256:-}}"
+    ;;
+esac
+
+# Release-provided checksum first; the configured pin is only a fallback.
+resolve_checksum() {
+  local url="$1" fallback="${2:-}" suffix sum_file sum
+  for suffix in .sha256sum .sha256; do
+    sum_file="${tmp}/checksum.$$"
+    if curl -fsSL --retry 3 --connect-timeout 10 --max-time 60 -o "$sum_file" "${url}${suffix}" && [ -s "$sum_file" ]; then
+      IFS=' ' read -r sum _ < "$sum_file"
+      rm -f "$sum_file"
+      if [ -n "$sum" ]; then
+        printf '%s' "$sum"
+        return 0
+      fi
+    fi
+    rm -f "$sum_file"
+  done
+  [ -n "$fallback" ] && { printf '%s' "$fallback"; return 0; }
+  return 1
 }
 
-# Same tarball fallback as the installer: static store first, then the pinned
-# GitHub release. The tarball is verified before any binary is installed.
-fetch_github_assets() {
-  local url tarball actual
-  if [ "$NYDUS_ALLOW_GITHUB" != "1" ]; then
-    echo "nydus-updater: GitHub fallback disabled (NYDUS_ALLOW_GITHUB=${NYDUS_ALLOW_GITHUB})" >&2
-    return 1
-  fi
-  if [ -z "$NYDUS_GITHUB_SHA256" ]; then
-    echo "nydus-updater: NYDUS_GITHUB_SHA256 is required for the GitHub fallback" >&2
-    return 1
-  fi
-  command -v sha256sum >/dev/null 2>&1 || {
-    echo "nydus-updater: sha256sum is required to verify the GitHub tarball" >&2
-    return 1
-  }
-  url="$(nydus_github_url)"
-  tarball="${tmp}/nydus-static.tgz"
-  echo "nydus-updater: static store miss; trying GitHub release ${url}" >&2
-  if ! curl -fL --retry 3 --retry-delay 5 --retry-all-errors \
-    --connect-timeout 10 --max-time 600 -o "$tarball" "$url"; then
-    echo "nydus-updater: GitHub release unavailable: ${url}" >&2
-    return 1
-  fi
-  actual="$(sha256sum "$tarball")"
+verify_sha256() {
+  local file="$1" expected="$2" label="$3" actual
+  [ -n "$expected" ] || { log "missing checksum for ${label}"; return 1; }
+  actual="$(sha256sum "$file")"
   actual="${actual%% *}"
-  if [ "$actual" != "$NYDUS_GITHUB_SHA256" ]; then
-    echo "nydus-updater: checksum mismatch for ${url}: got ${actual} want ${NYDUS_GITHUB_SHA256}" >&2
+  if [ "$actual" != "$expected" ]; then
+    log "checksum mismatch for ${label}: got ${actual} want ${expected}"
     return 1
   fi
-  mkdir -p "${tmp}/github"
-  if ! tar -xzf "$tarball" -C "${tmp}/github"; then
-    echo "nydus-updater: invalid GitHub tarball: ${url}" >&2
-    return 1
-  fi
-  if [ ! -d "${tmp}/github/nydus-static" ]; then
-    echo "nydus-updater: GitHub tarball has no nydus-static directory: ${url}" >&2
-    return 1
-  fi
-  github_dir="${tmp}/github/nydus-static"
-  echo "nydus-updater: using GitHub release ${NYDUS_VERSION}" >&2
 }
 
-# Fetch every asset first so a partial update never mixes versions.
-missing=""
-for binary in nydusd nydus-image nydus-overlayfs; do
-  fetched=0
-  for url in "${STATIC_URL%/}/nydus/${NYDUS_VERSION}/${binary}" "${STATIC_URL%/}/bin/${binary}"; do
-    if curl -fsSL --retry 3 --connect-timeout 10 --max-time 300 -o "$tmp/$binary" "$url" && [ -s "$tmp/$binary" ]; then
-      fetched=1
-      break
-    fi
-  done
-  if [ "$fetched" != 1 ]; then
-    missing="${missing}${binary}"$'\n'
-    echo "nydus-updater: static store miss for ${binary}: ${STATIC_URL%/}/nydus/${NYDUS_VERSION}/${binary}, ${STATIC_URL%/}/bin/${binary}" >&2
+download_verified() {
+  local url="$1" out="$2" checksum="$3" label="$4"
+  if ! curl -fL --retry 3 --connect-timeout 10 --max-time 600 -o "$out" "$url"; then
+    log "download failed: ${url}"
+    return 1
   fi
-done
+  verify_sha256 "$out" "$checksum" "$label"
+}
 
-if [ -n "$missing" ]; then
-  if ! fetch_github_assets; then
-    echo "nydus-updater: failed to fetch nydus ${NYDUS_VERSION}: ${missing}" >&2
-    exit 1
+install_if_changed() {
+  local src="$1" dst="$2" label="$3"
+  if [ -x "$dst" ] && cmp -s "$src" "$dst"; then
+    return 0
   fi
-  for binary in $missing; do
-    if [ -s "${github_dir}/${binary}" ]; then
-      cp "${github_dir}/${binary}" "$tmp/$binary"
-    else
-      echo "nydus-updater: GitHub tarball is missing ${binary}" >&2
-      exit 1
-    fi
-  done
+  install -m 0755 "$src" "${dst}.new.$$"
+  mv -f "${dst}.new.$$" "$dst"
+  log "updated ${label}"
+  return 1
+}
+
+extract_tarball() {
+  local tarball="$1" dir="$2"
+  rm -rf "$dir"
+  mkdir -p "$dir"
+  tar -xzf "$tarball" -C "$dir"
+}
+
+# Client: dfdaemon/dfget from the same GNU tarball as the bootstrap.
+client_root="dragonfly-client-${CLIENT_VERSION}-${CLIENT_ARCH}-unknown-linux-gnu"
+client_url="https://github.com/${CLIENT_RELEASE_REPO}/releases/download/${CLIENT_VERSION}/${client_root}.tar.gz"
+client_checksum="$(resolve_checksum "$client_url" "$CLIENT_SHA256")" \
+  || { log "no checksum available for client ${CLIENT_VERSION} ${HOST_ARCH}"; exit 1; }
+if ! download_verified "$client_url" "$tmp/client.tgz" "$client_checksum" "client ${CLIENT_VERSION}"; then
+  exit 1
 fi
-
-changed=0
-for binary in nydusd nydus-image nydus-overlayfs; do
-  if [ -x "${bin_dir}/${binary}" ] && cmp -s "$tmp/$binary" "${bin_dir}/${binary}"; then
-    continue
-  fi
-  install -m 0755 "$tmp/$binary" "${bin_dir}/.${binary}.new"
-  mv -f "${bin_dir}/.${binary}.new" "${bin_dir}/${binary}"
-  changed=1
+extract_tarball "$tmp/client.tgz" "$tmp/client"
+client_changed=0
+for binary in dfdaemon dfget; do
+  src="$tmp/client/${client_root}/${binary}"
+  [ -s "$src" ] || { log "client tarball is missing ${binary}"; exit 1; }
+  install_if_changed "$src" "${bin_dir}/${binary}" "client ${binary} ${CLIENT_VERSION}" || client_changed=1
 done
-# Re-evaluate the driver even when the binaries did not change: a kernel
-# upgrade can make fscache usable (or unusable). Restart only when the
-# selection actually rewrote config.toml.
+
+# Nydus daemon binaries.
+nydus_url="https://github.com/${NYDUS_RELEASE_REPO}/releases/download/${NYDUS_VERSION}/nydus-static-${NYDUS_VERSION}-linux-${HOST_ARCH}.tgz"
+nydus_checksum="$(resolve_checksum "$nydus_url" "$NYDUS_SHA256")" \
+  || { log "no checksum available for nydus ${NYDUS_VERSION} ${HOST_ARCH}"; exit 1; }
+if ! download_verified "$nydus_url" "$tmp/nydus.tgz" "$nydus_checksum" "nydus ${NYDUS_VERSION}"; then
+  exit 1
+fi
+extract_tarball "$tmp/nydus.tgz" "$tmp/nydus"
+nydus_changed=0
+for binary in nydusd nydus-image nydus-overlayfs; do
+  src="$tmp/nydus/nydus-static/${binary}"
+  [ -s "$src" ] || { log "nydus tarball is missing ${binary}"; exit 1; }
+  install_if_changed "$src" "${bin_dir}/${binary}" "nydus ${binary} ${NYDUS_VERSION}" || nydus_changed=1
+done
+
+# Upstream snapshotter tarball with bin/containerd-nydus-grpc.
+snapshotter_asset="nydus-snapshotter-${NYDUS_SNAPSHOTTER_VERSION}-linux-${HOST_ARCH}.tar.gz"
+snapshotter_url="https://github.com/${NYDUS_SNAPSHOTTER_REPO}/releases/download/${NYDUS_SNAPSHOTTER_VERSION}/${snapshotter_asset}"
+snapshotter_checksum="$(resolve_checksum "$snapshotter_url" "$NYDUS_SNAPSHOTTER_SHA256")" \
+  || { log "no checksum available for nydus-snapshotter ${NYDUS_SNAPSHOTTER_VERSION} ${HOST_ARCH}"; exit 1; }
+if ! download_verified "$snapshotter_url" "$tmp/snapshotter.tgz" "$snapshotter_checksum" "nydus-snapshotter ${NYDUS_SNAPSHOTTER_VERSION}"; then
+  exit 1
+fi
+extract_tarball "$tmp/snapshotter.tgz" "$tmp/snapshotter"
+snapshotter_src="$tmp/snapshotter/bin/containerd-nydus-grpc"
+[ -s "$snapshotter_src" ] || { log "nydus-snapshotter tarball is missing bin/containerd-nydus-grpc"; exit 1; }
+if [ -n "$NYDUS_SNAPSHOTTER_BINARY_SHA256" ]; then
+  verify_sha256 "$snapshotter_src" "$NYDUS_SNAPSHOTTER_BINARY_SHA256" "nydus-snapshotter ${NYDUS_SNAPSHOTTER_VERSION} binary" || exit 1
+fi
+snapshotter_changed=0
+install_if_changed "$snapshotter_src" "${bin_dir}/containerd-nydus-grpc" "nydus-snapshotter ${NYDUS_SNAPSHOTTER_VERSION}" || snapshotter_changed=1
+
+# Re-evaluate the driver even when binaries did not change: a kernel upgrade can
+# make fscache usable (or unusable). Restart only when the selection or binaries
+# actually changed.
 config_changed=0
 if [ -x "$selector" ]; then
   config_before=""
@@ -1627,15 +1718,24 @@ if [ -x "$selector" ]; then
   fi
 fi
 
-if [ "$changed" = 1 ] || [ "$config_changed" = 1 ]; then
+if [ "$nydus_changed" = 1 ] || [ "$snapshotter_changed" = 1 ] || [ "$config_changed" = 1 ]; then
   systemctl restart nydus-snapshotter-bootstrap.service
   systemctl is-active --quiet nydus-snapshotter-bootstrap.service || {
-    echo "nydus-updater: nydus-snapshotter-bootstrap.service is not active after restart" >&2
+    log "nydus-snapshotter-bootstrap.service is not active after restart"
     exit 1
   }
-  echo "nydus-updater: updated to ${NYDUS_VERSION} and restarted the host snapshotter"
+  log "updated nydus/snapshotter and restarted the host snapshotter"
 else
-  echo "nydus-updater: ${NYDUS_VERSION} already installed; fs_driver selection unchanged"
+  log "nydus/snapshotter already current; fs_driver selection unchanged"
+fi
+
+if [ "$client_changed" = 1 ]; then
+  if systemctl is-active --quiet dfdaemon-bootstrap.service; then
+    systemctl restart dfdaemon-bootstrap.service
+    log "updated client binaries and restarted dfdaemon-bootstrap"
+  else
+    log "updated client binaries; dfdaemon-bootstrap is inactive"
+  fi
 fi
 UPDATER
 

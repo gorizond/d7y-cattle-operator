@@ -222,7 +222,9 @@ Defaults: `mtlsSecretName=dragonfly-p2p-mtls`, `dragonfly.chart.name=dragonfly`,
 `dragonfly.chart.repo=https://gorizond.github.io/dragonflyoss-helm-charts`,
 `dragonfly.chart.version=1.10.1-patch.2`, `extras.chart.name=dragonfly-extras`,
 `extras.chart.version=0.1.10`, `hostSync.chart.name=p2p-host-sync`,
-`hostSync.chart.version=0.1.1`, `extras.ingress.controller=nginx`,
+`hostSync.chart.version=0.1.2`, `static.chart.name=p2p-static`,
+`static.chart.version=0.1.10`, `static.releaseName=p2p-static`,
+`extras.ingress.controller=nginx`,
 `extras.ingress.grpcEnabled=true`, `extras.ingress.restEnabled=true`,
 `manager.grpcPort=443`, `leaderElect=false`. Scheduler node IPs come from
 downstream scheduler pods/CAPI Machines; there is no scheduler IP value.
@@ -550,8 +552,8 @@ mismatch is discarded and never installed. The P2P data path is plaintext
 
 The operator can pin `CLIENT_VERSION`, `NYDUS_VERSION`, and
 `NYDUS_SNAPSHOTTER_VERSION` in the bootstrap payload; defaults are
-`v1.5.14`, `v2.4.5`, and `v0.16.0`. The p2p-static chart values must be
-kept in sync manually when those versions change. `P2P_ASSETS=0` disables the
+`v1.5.14`, `v2.4.5`, and `v0.16.0`. The operator renders the p2p-static
+HelmOp values from the same config, so no manual chart edit is needed. `P2P_ASSETS=0` disables the
 early dfdaemon/P2P path completely; `auto` uses it only when the scheduler IPs
 and `dfget` are present. The variable is a plain
 bootstrap env entry (for rollback, append `P2P_ASSETS=0` to the payload).
@@ -790,6 +792,44 @@ are values. If an asset download fails after retries, the init container fails
 instead of starting nginx with a directory that answers 404. The chart's
 `nydus-fs-select.sh` is a copy of the embedded operator asset and
 `scripts/test-p2p-static.sh` fails if the two drift.
+
+### Operator-managed static values and live convergence
+
+The operator creates a singleton `p2p-static` HelmOp on the manager-labeled
+cluster (`spec.helm.releaseName=p2p-static`, `takeOwnership=true`) so the
+existing poligon release is adopted rather than reinstalled. Its values are
+rendered from operator config: `CLIENT_VERSION`, `NYDUS_VERSION`,
+`NYDUS_SNAPSHOTTER_VERSION`, the release repositories, the manager host/TLS
+Secret, and ingress class. `STATIC_CHART_VERSION` selects the chart; the
+release name is `STATIC_RELEASE_NAME` (default `p2p-static`). No hand-edited
+chart values are required.
+
+Checksums are dynamic: the chart/installer/updater first fetch the release
+sidecar (`.sha256sum`/`.sha256`) and verify it. The operator-provided
+`CLIENT_SHA256_*` / `NYDUS_SHA256_*` / `NYDUS_SNAPSHOTTER_*` values are
+fallback pins only (required for the client v1.5.14 release, which publishes no
+checksum asset). A mismatch is fatal.
+
+`p2p-host-sync` writes the same versions/repos/checksums to
+`/etc/nydus/versions.env` and `/etc/nydus/updater.env`, installs the current
+`/usr/local/bin/nydus-updater` and `nydus-fs-select`, and triggers
+`nydus-updater.service` through hostPID/`nsenter` once per revision. The updater
+updates `dfdaemon`/`dfget`, the nydus binaries, and the upstream
+`containerd-nydus-grpc`, verifying release checksums and the snapshotter binary
+pin. It restarts the snapshotter only when a nydus/snapshotter binary or the
+selected fs driver changed, and restarts `dfdaemon-bootstrap` only when the
+client binaries changed and that service is active. It never restarts the
+snapshotter or dfdaemon unconditionally.
+
+**Live without reboot:** p2p-static values/release (Fleet HelmOp), host-sync
+version files/updater/selector, and the resulting client/nydus/snapshotter
+binaries on each node. **Still requires a bootstrap block re-run (normally
+reboot/cloud-init):** a brand-new node that has never installed the bootstrap
+block; an existing node can keep using the live-updated versions because
+`p2p-install.sh` sources `/etc/nydus/versions.env` on a later block re-run.
+Rollback: set `P2P_ASSETS=0` to disable early P2P, and set the previous
+version/checksum values in config; the same host-sync/updater path converges
+them live.
 
 ## Known pilot risk: extras target names
 

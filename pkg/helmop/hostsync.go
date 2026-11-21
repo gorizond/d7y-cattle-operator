@@ -19,6 +19,35 @@ func HostSync(c Cluster) *fleetv1alpha1.HelmOp {
 	values := map[string]any{
 		"schedulerIPs": schedulerAddrs(c.SchedulerIPs),
 		"mtlsSecret":   c.MTLSSecretName,
+		"staticURL":    c.StaticURL,
+		"versions": map[string]any{
+			"client":      c.StaticClientVersion,
+			"nydus":       c.StaticNydusVersion,
+			"snapshotter": c.StaticSnapshotterVersion,
+		},
+		"repos": map[string]any{
+			"client":      c.StaticClientRepo,
+			"nydus":       c.StaticNydusRepo,
+			"snapshotter": c.StaticSnapshotterRepo,
+		},
+		"checksums": map[string]any{
+			"client": map[string]any{
+				"amd64": c.StaticClientSHA256AMD64,
+				"arm64": c.StaticClientSHA256ARM64,
+			},
+			"nydus": map[string]any{
+				"amd64": c.StaticNydusSHA256AMD64,
+				"arm64": c.StaticNydusSHA256ARM64,
+			},
+			"snapshotter": map[string]any{
+				"amd64": c.StaticSnapshotterSHA256AMD64,
+				"arm64": c.StaticSnapshotterSHA256ARM64,
+			},
+			"snapshotterBinary": map[string]any{
+				"amd64": c.StaticSnapshotterBinarySHA256AMD64,
+				"arm64": c.StaticSnapshotterBinarySHA256ARM64,
+			},
+		},
 	}
 	return newHelmOp(HostSyncName(c.Name), c, c.HostSyncChart, "host-sync", values, []string{SharedControlName()})
 }

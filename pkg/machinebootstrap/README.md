@@ -83,8 +83,8 @@ mirrors-config directory and does **not** implicitly consume containerd's
 
 The client, nydus, and snapshotter versions come from the bootstrap payload
 (`CLIENT_VERSION`, `NYDUS_VERSION`, `NYDUS_SNAPSHOTTER_VERSION`; defaults
-`v1.5.14`, `v2.4.5`, `v0.16.0`). The p2p-static chart values must be kept
-in sync manually. `P2P_ASSETS=0` disables the early dfdaemon/P2P path entirely;
+`v1.5.14`, `v2.4.5`, `v0.16.0`). The operator renders the p2p-static
+HelmOp values from the same config. `P2P_ASSETS=0` disables the early dfdaemon/P2P path entirely;
 the variable is a plain env entry, so it can be added to the bootstrap payload
 for rollback.
 Concurrent boots are safe: each node downloads to its own temp directory and
@@ -101,6 +101,21 @@ is intentionally unchanged. `nydus-snapshotter-bootstrap.service` gains
 ordered first without pulling it in on non-P2P paths. `nydus-updater` does not
 use P2P yet: it runs after the cluster exists, where the host dfdaemon socket is
 normally disabled by the switch. P2P updater support is deferred.
+
+## Host-sync live updates
+
+`p2p-host-sync` writes the operator-configured versions/repositories/checksum
+fallbacks to `/etc/nydus/versions.env` and `/etc/nydus/updater.env`, installs
+the current `/usr/local/bin/nydus-updater` and `nydus-fs-select`, and triggers
+`nydus-updater.service` via hostPID/`nsenter` when the revision changes.
+`nydus-updater` fetches release checksums first, updates
+`dfdaemon`/`dfget`, nydus binaries, and upstream
+`containerd-nydus-grpc`, then restarts the snapshotter only when a binary or
+the fs driver changed and `dfdaemon-bootstrap` only when client binaries
+changed and the service is active. `p2p-install.sh` sources
+`/etc/nydus/versions.env` on a later block re-run, so a re-run uses the
+live-converged versions. A new node still needs the bootstrap block (normal
+cloud-init/reboot); existing nodes converge versions without reboot.
 
 ## Kernel prerequisites
 

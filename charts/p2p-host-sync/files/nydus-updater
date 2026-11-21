@@ -1,0 +1,194 @@
+#!/usr/bin/env bash
+set -Eeuo pipefail
+IFS=$'\n\t'
+
+env_file="${NYDUS_UPDATER_ENV:-/etc/nydus/updater.env}"
+if [ ! -f "$env_file" ]; then
+  echo "nydus-updater: missing ${env_file}" >&2
+  exit 1
+fi
+# shellcheck disable=SC1090
+. "$env_file"
+: "${CLIENT_VERSION:?CLIENT_VERSION is required}"
+: "${NYDUS_VERSION:?NYDUS_VERSION is required}"
+: "${NYDUS_SNAPSHOTTER_VERSION:?NYDUS_SNAPSHOTTER_VERSION is required}"
+CLIENT_RELEASE_REPO="${CLIENT_RELEASE_REPO:-dragonflyoss/client}"
+NYDUS_RELEASE_REPO="${NYDUS_RELEASE_REPO:-dragonflyoss/nydus}"
+NYDUS_SNAPSHOTTER_REPO="${NYDUS_SNAPSHOTTER_REPO:-containerd/nydus-snapshotter}"
+CLIENT_SHA256="${CLIENT_SHA256:-}"
+NYDUS_SHA256="${NYDUS_SHA256:-}"
+NYDUS_SNAPSHOTTER_SHA256="${NYDUS_SNAPSHOTTER_SHA256:-}"
+NYDUS_SNAPSHOTTER_BINARY_SHA256="${NYDUS_SNAPSHOTTER_BINARY_SHA256:-}"
+NYDUS_ALLOW_GITHUB="${NYDUS_ALLOW_GITHUB:-1}"
+
+bin_dir="${NYDUS_UPDATER_BIN_DIR:-/usr/local/bin}"
+selector="${NYDUS_UPDATER_SELECTOR:-/usr/local/bin/nydus-fs-select}"
+tmp="$(mktemp -d)"
+trap 'rm -rf "$tmp"' EXIT
+
+log() { echo "nydus-updater: $*" >&2; }
+
+case "$(uname -m)" in
+  x86_64|amd64) HOST_ARCH="amd64"; CLIENT_ARCH="x86_64" ;;
+  aarch64|arm64) HOST_ARCH="arm64"; CLIENT_ARCH="aarch64" ;;
+  armv7l|armhf|armv6l) log "unsupported architecture $(uname -m)"; exit 1 ;;
+  *) log "unsupported architecture $(uname -m)"; exit 1 ;;
+esac
+case "$HOST_ARCH" in
+  amd64)
+    CLIENT_SHA256="${CLIENT_SHA256_AMD64:-${CLIENT_SHA256:-}}"
+    NYDUS_SHA256="${NYDUS_SHA256_AMD64:-${NYDUS_SHA256:-}}"
+    NYDUS_SNAPSHOTTER_SHA256="${NYDUS_SNAPSHOTTER_SHA256_AMD64:-${NYDUS_SNAPSHOTTER_SHA256:-}}"
+    NYDUS_SNAPSHOTTER_BINARY_SHA256="${NYDUS_SNAPSHOTTER_BINARY_SHA256_AMD64:-${NYDUS_SNAPSHOTTER_BINARY_SHA256:-}}"
+    ;;
+  arm64)
+    CLIENT_SHA256="${CLIENT_SHA256_ARM64:-${CLIENT_SHA256:-}}"
+    NYDUS_SHA256="${NYDUS_SHA256_ARM64:-${NYDUS_SHA256:-}}"
+    NYDUS_SNAPSHOTTER_SHA256="${NYDUS_SNAPSHOTTER_SHA256_ARM64:-${NYDUS_SNAPSHOTTER_SHA256:-}}"
+    NYDUS_SNAPSHOTTER_BINARY_SHA256="${NYDUS_SNAPSHOTTER_BINARY_SHA256_ARM64:-${NYDUS_SNAPSHOTTER_BINARY_SHA256:-}}"
+    ;;
+esac
+
+# Release-provided checksum first; the configured pin is only a fallback.
+resolve_checksum() {
+  local url="$1" fallback="${2:-}" suffix sum_file sum
+  for suffix in .sha256sum .sha256; do
+    sum_file="${tmp}/checksum.$$"
+    if curl -fsSL --retry 3 --connect-timeout 10 --max-time 60 -o "$sum_file" "${url}${suffix}" && [ -s "$sum_file" ]; then
+      IFS=' ' read -r sum _ < "$sum_file"
+      rm -f "$sum_file"
+      if [ -n "$sum" ]; then
+        printf '%s' "$sum"
+        return 0
+      fi
+    fi
+    rm -f "$sum_file"
+  done
+  [ -n "$fallback" ] && { printf '%s' "$fallback"; return 0; }
+  return 1
+}
+
+verify_sha256() {
+  local file="$1" expected="$2" label="$3" actual
+  [ -n "$expected" ] || { log "missing checksum for ${label}"; return 1; }
+  actual="$(sha256sum "$file")"
+  actual="${actual%% *}"
+  if [ "$actual" != "$expected" ]; then
+    log "checksum mismatch for ${label}: got ${actual} want ${expected}"
+    return 1
+  fi
+}
+
+download_verified() {
+  local url="$1" out="$2" checksum="$3" label="$4"
+  if ! curl -fL --retry 3 --connect-timeout 10 --max-time 600 -o "$out" "$url"; then
+    log "download failed: ${url}"
+    return 1
+  fi
+  verify_sha256 "$out" "$checksum" "$label"
+}
+
+install_if_changed() {
+  local src="$1" dst="$2" label="$3"
+  if [ -x "$dst" ] && cmp -s "$src" "$dst"; then
+    return 0
+  fi
+  install -m 0755 "$src" "${dst}.new.$$"
+  mv -f "${dst}.new.$$" "$dst"
+  log "updated ${label}"
+  return 1
+}
+
+extract_tarball() {
+  local tarball="$1" dir="$2"
+  rm -rf "$dir"
+  mkdir -p "$dir"
+  tar -xzf "$tarball" -C "$dir"
+}
+
+# Client: dfdaemon/dfget from the same GNU tarball as the bootstrap.
+client_root="dragonfly-client-${CLIENT_VERSION}-${CLIENT_ARCH}-unknown-linux-gnu"
+client_url="https://github.com/${CLIENT_RELEASE_REPO}/releases/download/${CLIENT_VERSION}/${client_root}.tar.gz"
+client_checksum="$(resolve_checksum "$client_url" "$CLIENT_SHA256")" \
+  || { log "no checksum available for client ${CLIENT_VERSION} ${HOST_ARCH}"; exit 1; }
+if ! download_verified "$client_url" "$tmp/client.tgz" "$client_checksum" "client ${CLIENT_VERSION}"; then
+  exit 1
+fi
+extract_tarball "$tmp/client.tgz" "$tmp/client"
+client_changed=0
+for binary in dfdaemon dfget; do
+  src="$tmp/client/${client_root}/${binary}"
+  [ -s "$src" ] || { log "client tarball is missing ${binary}"; exit 1; }
+  install_if_changed "$src" "${bin_dir}/${binary}" "client ${binary} ${CLIENT_VERSION}" || client_changed=1
+done
+
+# Nydus daemon binaries.
+nydus_url="https://github.com/${NYDUS_RELEASE_REPO}/releases/download/${NYDUS_VERSION}/nydus-static-${NYDUS_VERSION}-linux-${HOST_ARCH}.tgz"
+nydus_checksum="$(resolve_checksum "$nydus_url" "$NYDUS_SHA256")" \
+  || { log "no checksum available for nydus ${NYDUS_VERSION} ${HOST_ARCH}"; exit 1; }
+if ! download_verified "$nydus_url" "$tmp/nydus.tgz" "$nydus_checksum" "nydus ${NYDUS_VERSION}"; then
+  exit 1
+fi
+extract_tarball "$tmp/nydus.tgz" "$tmp/nydus"
+nydus_changed=0
+for binary in nydusd nydus-image nydus-overlayfs; do
+  src="$tmp/nydus/nydus-static/${binary}"
+  [ -s "$src" ] || { log "nydus tarball is missing ${binary}"; exit 1; }
+  install_if_changed "$src" "${bin_dir}/${binary}" "nydus ${binary} ${NYDUS_VERSION}" || nydus_changed=1
+done
+
+# Upstream snapshotter tarball with bin/containerd-nydus-grpc.
+snapshotter_asset="nydus-snapshotter-${NYDUS_SNAPSHOTTER_VERSION}-linux-${HOST_ARCH}.tar.gz"
+snapshotter_url="https://github.com/${NYDUS_SNAPSHOTTER_REPO}/releases/download/${NYDUS_SNAPSHOTTER_VERSION}/${snapshotter_asset}"
+snapshotter_checksum="$(resolve_checksum "$snapshotter_url" "$NYDUS_SNAPSHOTTER_SHA256")" \
+  || { log "no checksum available for nydus-snapshotter ${NYDUS_SNAPSHOTTER_VERSION} ${HOST_ARCH}"; exit 1; }
+if ! download_verified "$snapshotter_url" "$tmp/snapshotter.tgz" "$snapshotter_checksum" "nydus-snapshotter ${NYDUS_SNAPSHOTTER_VERSION}"; then
+  exit 1
+fi
+extract_tarball "$tmp/snapshotter.tgz" "$tmp/snapshotter"
+snapshotter_src="$tmp/snapshotter/bin/containerd-nydus-grpc"
+[ -s "$snapshotter_src" ] || { log "nydus-snapshotter tarball is missing bin/containerd-nydus-grpc"; exit 1; }
+if [ -n "$NYDUS_SNAPSHOTTER_BINARY_SHA256" ]; then
+  verify_sha256 "$snapshotter_src" "$NYDUS_SNAPSHOTTER_BINARY_SHA256" "nydus-snapshotter ${NYDUS_SNAPSHOTTER_VERSION} binary" || exit 1
+fi
+snapshotter_changed=0
+install_if_changed "$snapshotter_src" "${bin_dir}/containerd-nydus-grpc" "nydus-snapshotter ${NYDUS_SNAPSHOTTER_VERSION}" || snapshotter_changed=1
+
+# Re-evaluate the driver even when binaries did not change: a kernel upgrade can
+# make fscache usable (or unusable). Restart only when the selection or binaries
+# actually changed.
+config_changed=0
+if [ -x "$selector" ]; then
+  config_before=""
+  config_after=""
+  if [ -f /etc/nydus/config.toml ]; then
+    config_before="$(sha256sum /etc/nydus/config.toml | cut -d' ' -f1)"
+  fi
+  "$selector"
+  if [ -f /etc/nydus/config.toml ]; then
+    config_after="$(sha256sum /etc/nydus/config.toml | cut -d' ' -f1)"
+  fi
+  if [ "$config_before" != "$config_after" ]; then
+    config_changed=1
+  fi
+fi
+
+if [ "$nydus_changed" = 1 ] || [ "$snapshotter_changed" = 1 ] || [ "$config_changed" = 1 ]; then
+  systemctl restart nydus-snapshotter-bootstrap.service
+  systemctl is-active --quiet nydus-snapshotter-bootstrap.service || {
+    log "nydus-snapshotter-bootstrap.service is not active after restart"
+    exit 1
+  }
+  log "updated nydus/snapshotter and restarted the host snapshotter"
+else
+  log "nydus/snapshotter already current; fs_driver selection unchanged"
+fi
+
+if [ "$client_changed" = 1 ]; then
+  if systemctl is-active --quiet dfdaemon-bootstrap.service; then
+    systemctl restart dfdaemon-bootstrap.service
+    log "updated client binaries and restarted dfdaemon-bootstrap"
+  else
+    log "updated client binaries; dfdaemon-bootstrap is inactive"
+  fi
+fi

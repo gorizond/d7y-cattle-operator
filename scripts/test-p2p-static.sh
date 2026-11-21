@@ -120,6 +120,24 @@ while [ "$#" -gt 0 ]; do
   esac
 done
 case "$url" in
+  *cli-amd.tar.gz.sha256*|*cli-amd.tar.gz.sha256sum)
+    sha="$(sha256sum "${POPULATE_CLI_AMD:?}")"; sha="${sha%% *}"
+    printf '%s  cli-amd.tar.gz\n' "$sha" > "$out" ;;
+  *cli-arm.tar.gz.sha256*|*cli-arm.tar.gz.sha256sum)
+    sha="$(sha256sum "${POPULATE_CLI_ARM:?}")"; sha="${sha%% *}"
+    printf '%s  cli-arm.tar.gz\n' "$sha" > "$out" ;;
+  *nyd-amd.tgz.sha256*|*nyd-amd.tgz.sha256sum)
+    sha="$(sha256sum "${POPULATE_NYD_AMD:?}")"; sha="${sha%% *}"
+    printf '%s  nyd-amd.tgz\n' "$sha" > "$out" ;;
+  *nyd-arm.tgz.sha256*|*nyd-arm.tgz.sha256sum)
+    sha="$(sha256sum "${POPULATE_NYD_ARM:?}")"; sha="${sha%% *}"
+    printf '%s  nyd-arm.tgz\n' "$sha" > "$out" ;;
+  *nydus-snapshotter-v0.16.0-linux-amd64.tar.gz.sha256*|*nydus-snapshotter-v0.16.0-linux-amd64.tar.gz.sha256sum)
+    sha="$(sha256sum "${POPULATE_SNAPSHOTTER_AMD:?}")"; sha="${sha%% *}"
+    printf '%s  snapshotter\n' "$sha" > "$out" ;;
+  *nydus-snapshotter-v0.16.0-linux-arm64.tar.gz.sha256*|*nydus-snapshotter-v0.16.0-linux-arm64.tar.gz.sha256sum)
+    sha="$(sha256sum "${POPULATE_SNAPSHOTTER_ARM:?}")"; sha="${sha%% *}"
+    printf '%s  snapshotter\n' "$sha" > "$out" ;;
   *cli-amd.tar.gz) cp "${POPULATE_CLI_AMD:?}" "$out" ;;
   *cli-arm.tar.gz) cp "${POPULATE_CLI_ARM:?}" "$out" ;;
   *nyd-amd.tgz) cp "${POPULATE_NYD_AMD:?}" "$out" ;;

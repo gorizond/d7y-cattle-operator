@@ -35,6 +35,21 @@ var envKeys = []string{
 	"CLIENT_VERSION",
 	"NYDUS_VERSION",
 	"NYDUS_SNAPSHOTTER_VERSION",
+	"STATIC_CHART_REPO",
+	"STATIC_CHART_NAME",
+	"STATIC_CHART_VERSION",
+	"STATIC_RELEASE_NAME",
+	"CLIENT_RELEASE_REPO",
+	"NYDUS_RELEASE_REPO",
+	"NYDUS_SNAPSHOTTER_RELEASE_REPO",
+	"CLIENT_SHA256_AMD64",
+	"CLIENT_SHA256_ARM64",
+	"NYDUS_SHA256_AMD64",
+	"NYDUS_SHA256_ARM64",
+	"NYDUS_SNAPSHOTTER_SHA256_AMD64",
+	"NYDUS_SNAPSHOTTER_SHA256_ARM64",
+	"NYDUS_SNAPSHOTTER_BINARY_SHA256_AMD64",
+	"NYDUS_SNAPSHOTTER_BINARY_SHA256_ARM64",
 	"KUBECONFIG",
 }
 
@@ -86,6 +101,12 @@ func TestLoadDefaults(t *testing.T) {
 	}
 	if cfg.SnapshotterVersion != DefaultSnapshotterVersion {
 		t.Errorf("SnapshotterVersion = %q, want %q", cfg.SnapshotterVersion, DefaultSnapshotterVersion)
+	}
+	if cfg.StaticChartName != DefaultStaticChartName || cfg.StaticReleaseName != DefaultStaticReleaseName {
+		t.Errorf("static chart/release = %q/%q", cfg.StaticChartName, cfg.StaticReleaseName)
+	}
+	if cfg.ClientSHA256AMD64 != DefaultClientSHA256AMD64 || cfg.SnapshotterSHA256ARM64 != DefaultSnapshotterSHA256ARM64 {
+		t.Errorf("checksum defaults = %q/%q", cfg.ClientSHA256AMD64, cfg.SnapshotterSHA256ARM64)
 	}
 	if cfg.DragonflyChartRepo != DefaultDragonflyChartRepo {
 		t.Errorf("DragonflyChartRepo = %q, want %q", cfg.DragonflyChartRepo, DefaultDragonflyChartRepo)

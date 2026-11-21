@@ -44,6 +44,19 @@ download/extract space during init. On a slow first start this means fetching
 roughly 205 MiB before nginx becomes ready. Narrow the version/arch lists or
 set `static.sizeLimit` (for example `1Gi`) if that cost is unacceptable.
 
+## Operator-managed values
+
+In the integrated deployment the operator creates the `p2p-static` HelmOp and
+renders these values from config (`CLIENT_VERSION`, `NYDUS_VERSION`,
+`NYDUS_SNAPSHOTTER_VERSION`, release repositories, manager host/TLS Secret, and
+ingress class). The release is adopted with `takeOwnership=true`; no manual
+chart edits are needed. The standalone values below remain the defaults.
+
+Checksums are dynamic: the populate init container first fetches the release
+sidecar (`.sha256sum`/`.sha256`). Values `sha256`/`tarballSHA256` are fallback
+pins only, used when a release publishes no checksum asset (Dragonfly client
+v1.5.14). A mismatch fails the init container.
+
 ## Manager-host route
 
 The chart can serve the static assets on the manager host, using the manager's

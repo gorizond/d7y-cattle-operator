@@ -88,7 +88,41 @@ hostSync:
   chart:
     repo: https://gorizond.github.io/d7y-cattle-operator
     name: p2p-host-sync
-    version: 0.1.1
+    version: 0.1.2
+
+# Operator-managed p2p-static release on the manager-labeled cluster.
+static:
+  chart:
+    repo: https://gorizond.github.io/d7y-cattle-operator
+    name: p2p-static
+    version: 0.1.10
+  releaseName: p2p-static
+
+# GitHub release repositories and version fallbacks. Checksums are fallback
+# pins; release sidecars are preferred when available.
+releases:
+  client: dragonflyoss/client
+  nydus: dragonflyoss/nydus
+  snapshotter: containerd/nydus-snapshotter
+
+versions:
+  client: v1.5.14
+  nydus: v2.4.5
+  snapshotter: v0.16.0
+
+checksums:
+  client:
+    amd64: ba080e62f1626ab2fc2a5a0629a5cd912cc15099508820403108abbe2f75b1f7
+    arm64: 370ff792a1c6957a7244b770d6cd12792668e326b2282b3017fea2cbfa3510af
+  nydus:
+    amd64: 1ad7b793a1996577e462b0bf5c1a22e4450b9c04f7e9e99d4b274ccc92f19072
+    arm64: 85925af702d79fc3a8b9d501a5267ddc9f81449ff9fe94841845eb98eda84593
+  snapshotter:
+    amd64: 24e4ceaae9c87e396e71e89bd3eb074f2cc6a5a14b1a2081c8d890481857a0e4
+    arm64: 136e9c649a63c16b3d3322a15fcdf918e7dda9a4cbb043e2923451e87a8ba08f
+  snapshotterBinary:
+    amd64: ""
+    arm64: ""
 
 # Strict node-local containerd registry mirror for seed/data clusters.
 containerdMirror:

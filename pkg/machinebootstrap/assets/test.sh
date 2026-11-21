@@ -289,29 +289,40 @@ if [ -z "$timer_line" ] || [ -z "$restart_line" ] || [ "$timer_line" -ge "$resta
   exit 1
 fi
 assert_contains "${ROOT_ONE}/usr/local/bin/nydus-updater" 'nydus-overlayfs'
-assert_not_contains "${ROOT_ONE}/usr/local/bin/nydus-updater" 'containerd-nydus-grpc'
+assert_contains "${ROOT_ONE}/usr/local/bin/nydus-updater" 'containerd-nydus-grpc'
 assert_contains "${ROOT_ONE}/usr/local/bin/nydus-updater" 'systemctl restart nydus-snapshotter-bootstrap.service'
 assert_contains "${ROOT_ONE}/usr/local/bin/nydus-updater" '/usr/local/bin/nydus-fs-select'
 assert_contains "${ROOT_ONE}/usr/local/bin/nydus-updater" 'config_before'
-assert_contains "${ROOT_ONE}/usr/local/bin/nydus-updater" 'static store miss; trying GitHub release'
-assert_contains "${ROOT_ONE}/usr/local/bin/nydus-updater" 'nydus-static-%s-linux-amd64.tgz'
+assert_contains "${ROOT_ONE}/usr/local/bin/nydus-updater" 'CLIENT_VERSION'
+assert_contains "${ROOT_ONE}/usr/local/bin/nydus-updater" 'NYDUS_SNAPSHOTTER_BINARY_SHA256'
+assert_contains "${ROOT_ONE}/usr/local/bin/nydus-updater" 'nydus-snapshotter-${NYDUS_SNAPSHOTTER_VERSION}-linux-${HOST_ARCH}.tar.gz'
 assert_contains "${ROOT_ONE}/usr/local/bin/nydus-updater" 'checksum mismatch'
-assert_contains "${ROOT_ONE}/usr/local/bin/nydus-updater" 'NYDUS_GITHUB_SHA256 is required'
 assert_contains "${ROOT_ONE}/etc/nydus/updater.env" 'NYDUS_GITHUB_REPO=dragonflyoss/nydus'
 assert_contains "${ROOT_ONE}/etc/nydus/updater.env" 'NYDUS_GITHUB_SHA256=1ad7b793a1996577e462b0bf5c1a22e4450b9c04f7e9e99d4b274ccc92f19072'
 assert_contains "${ROOT_ONE}/etc/systemd/system/nydus-updater.timer" 'OnUnitActiveSec=24h'
 
-# --- nydus-updater GitHub fallback -----------------------------------------
+# --- nydus-updater updates client/nydus/snapshotter ------------------------
 UPDATER_ROOT="${WORK}/updater"
 UPDATER_BIN="${UPDATER_ROOT}/bin"
 UPDATER_INSTALL="${UPDATER_ROOT}/install"
-UPDATER_TARBALL="${UPDATER_ROOT}/nydus-static.tgz"
-mkdir -p "$UPDATER_BIN" "$UPDATER_INSTALL" "${UPDATER_ROOT}/src/nydus-static"
-for binary in nydusd nydus-image nydus-overlayfs; do
-  printf '#!/bin/sh\nexit 0\n' > "${UPDATER_ROOT}/src/nydus-static/${binary}"
+mkdir -p "$UPDATER_BIN" "$UPDATER_INSTALL" \
+  "${UPDATER_ROOT}/client/dragonfly-client-v1.5.14-x86_64-unknown-linux-gnu" \
+  "${UPDATER_ROOT}/nydus/nydus-static" \
+  "${UPDATER_ROOT}/snapshotter/bin"
+for binary in dfdaemon dfget; do
+  printf '#!/bin/sh\nexit 0\n' > "${UPDATER_ROOT}/client/dragonfly-client-v1.5.14-x86_64-unknown-linux-gnu/$binary"
 done
-tar -czf "$UPDATER_TARBALL" -C "${UPDATER_ROOT}/src" nydus-static
-UPDATER_SHA="$(sha256sum "$UPDATER_TARBALL" | cut -d' ' -f1)"
+for binary in nydusd nydus-image nydus-overlayfs; do
+  printf '#!/bin/sh\nexit 0\n' > "${UPDATER_ROOT}/nydus/nydus-static/$binary"
+done
+printf '#!/bin/sh\nexit 0\n' > "${UPDATER_ROOT}/snapshotter/bin/containerd-nydus-grpc"
+tar -czf "${UPDATER_ROOT}/client.tgz" -C "${UPDATER_ROOT}/client" dragonfly-client-v1.5.14-x86_64-unknown-linux-gnu
+tar -czf "${UPDATER_ROOT}/nydus.tgz" -C "${UPDATER_ROOT}/nydus" nydus-static
+tar -czf "${UPDATER_ROOT}/snapshotter.tgz" -C "${UPDATER_ROOT}/snapshotter" bin
+UPDATER_CLIENT_SHA="$(sha256sum "${UPDATER_ROOT}/client.tgz" | cut -d' ' -f1)"
+UPDATER_NYDUS_SHA="$(sha256sum "${UPDATER_ROOT}/nydus.tgz" | cut -d' ' -f1)"
+UPDATER_SNAP_SHA="$(sha256sum "${UPDATER_ROOT}/snapshotter.tgz" | cut -d' ' -f1)"
+UPDATER_SNAP_BIN_SHA="$(sha256sum "${UPDATER_ROOT}/snapshotter/bin/containerd-nydus-grpc" | cut -d' ' -f1)"
 cat > "${UPDATER_BIN}/curl" <<'UPDATERCURL'
 #!/usr/bin/env bash
 set -Eeuo pipefail
@@ -330,8 +341,10 @@ if [ -z "$out" ] || [ -z "$url" ]; then
   exit 2
 fi
 case "$url" in
-  http://static.example.test/*) exit 22 ;;
-  *nydus-static-v2.4.5-linux-amd64.tgz) cp "${UPDATER_TARBALL:?}" "$out" ;;
+  *.sha256*|*.sha256sum*) exit 22 ;;
+  *dragonfly-client-v1.5.14-x86_64-unknown-linux-gnu.tar.gz) cp "${UPDATER_CLIENT_TGZ:?}" "$out" ;;
+  *nydus-static-v2.4.5-linux-amd64.tgz) cp "${UPDATER_NYDUS_TGZ:?}" "$out" ;;
+  *nydus-snapshotter-v0.16.0-linux-amd64.tar.gz) cp "${UPDATER_SNAP_TGZ:?}" "$out" ;;
   *) echo "fake updater curl: unexpected URL ${url}" >&2; exit 22 ;;
 esac
 UPDATERCURL
@@ -342,40 +355,53 @@ UPDATERSYSTEMCTL
 chmod 0755 "${UPDATER_BIN}/curl" "${UPDATER_BIN}/systemctl"
 cat > "${UPDATER_ROOT}/updater.env" <<EOF
 STATIC_URL=http://static.example.test
+CLIENT_VERSION=v1.5.14
+CLIENT_RELEASE_REPO=dragonflyoss/client
+CLIENT_SHA256=${UPDATER_CLIENT_SHA}
 NYDUS_VERSION=v2.4.5
+NYDUS_RELEASE_REPO=dragonflyoss/nydus
 NYDUS_GITHUB_REPO=dragonflyoss/nydus
-NYDUS_GITHUB_SHA256=${UPDATER_SHA}
+NYDUS_SHA256=${UPDATER_NYDUS_SHA}
+NYDUS_GITHUB_SHA256=${UPDATER_NYDUS_SHA}
+NYDUS_SNAPSHOTTER_VERSION=v0.16.0
+NYDUS_SNAPSHOTTER_REPO=containerd/nydus-snapshotter
+NYDUS_SNAPSHOTTER_SHA256=${UPDATER_SNAP_SHA}
+NYDUS_SNAPSHOTTER_BINARY_SHA256=${UPDATER_SNAP_BIN_SHA}
 NYDUS_ALLOW_GITHUB=1
 EOF
 NYDUS_UPDATER_ENV="${UPDATER_ROOT}/updater.env" \
 NYDUS_UPDATER_BIN_DIR="$UPDATER_INSTALL" \
 NYDUS_UPDATER_SELECTOR="${UPDATER_ROOT}/no-selector" \
-UPDATER_TARBALL="$UPDATER_TARBALL" \
+UPDATER_CLIENT_TGZ="${UPDATER_ROOT}/client.tgz" \
+UPDATER_NYDUS_TGZ="${UPDATER_ROOT}/nydus.tgz" \
+UPDATER_SNAP_TGZ="${UPDATER_ROOT}/snapshotter.tgz" \
 PATH="${UPDATER_BIN}:${PATH}" \
   bash "${ROOT_ONE}/usr/local/bin/nydus-updater" > "${WORK}/updater.log" 2>&1
-assert_contains "${WORK}/updater.log" 'https://github.com/dragonflyoss/nydus/releases/download/v2.4.5/nydus-static-v2.4.5-linux-amd64.tgz'
-assert_contains "${WORK}/updater.log" 'using GitHub release v2.4.5'
-assert_contains "${WORK}/updater.log" 'static store miss for nydusd'
-for binary in nydusd nydus-image nydus-overlayfs; do
+assert_contains "${WORK}/updater.log" 'updated client dfdaemon v1.5.14'
+assert_contains "${WORK}/updater.log" 'updated nydus nydusd v2.4.5'
+assert_contains "${WORK}/updater.log" 'updated nydus-snapshotter v0.16.0'
+for binary in dfdaemon dfget nydusd nydus-image nydus-overlayfs containerd-nydus-grpc; do
   assert_file "${UPDATER_INSTALL}/${binary}"
 done
 
-# A checksum mismatch must fail before installing anything.
+# A checksum mismatch must fail before the bad artifact is installed.
 BAD_INSTALL="${UPDATER_ROOT}/install-bad"
 mkdir -p "$BAD_INSTALL"
-sed 's/^NYDUS_GITHUB_SHA256=.*/NYDUS_GITHUB_SHA256=deadbeef/' "${UPDATER_ROOT}/updater.env" > "${UPDATER_ROOT}/updater-bad.env"
+sed 's/^NYDUS_SNAPSHOTTER_SHA256=.*/NYDUS_SNAPSHOTTER_SHA256=deadbeef/' "${UPDATER_ROOT}/updater.env" > "${UPDATER_ROOT}/updater-bad.env"
 if NYDUS_UPDATER_ENV="${UPDATER_ROOT}/updater-bad.env" \
   NYDUS_UPDATER_BIN_DIR="$BAD_INSTALL" \
   NYDUS_UPDATER_SELECTOR="${UPDATER_ROOT}/no-selector" \
-  UPDATER_TARBALL="$UPDATER_TARBALL" \
+  UPDATER_CLIENT_TGZ="${UPDATER_ROOT}/client.tgz" \
+  UPDATER_NYDUS_TGZ="${UPDATER_ROOT}/nydus.tgz" \
+  UPDATER_SNAP_TGZ="${UPDATER_ROOT}/snapshotter.tgz" \
   PATH="${UPDATER_BIN}:${PATH}" \
   bash "${ROOT_ONE}/usr/local/bin/nydus-updater" > "${WORK}/updater-bad.log" 2>&1; then
   echo "p2p-static self-test: updater accepted a bad checksum" >&2
   exit 1
 fi
 assert_contains "${WORK}/updater-bad.log" 'checksum mismatch'
-if [ -e "${BAD_INSTALL}/nydusd" ]; then
-  echo "p2p-static self-test: updater installed a binary after a checksum mismatch" >&2
+if [ -e "${BAD_INSTALL}/containerd-nydus-grpc" ]; then
+  echo "p2p-static self-test: updater installed a bad snapshotter after checksum mismatch" >&2
   exit 1
 fi
 assert_contains "${ROOT_ONE}/etc/systemd/system/dfdaemon-bootstrap.service" 'Before=rke2-server.service rke2-agent.service'
@@ -485,9 +511,7 @@ assert_contains "$INSTALL" '370ff792a1c6957a7244b770d6cd12792668e326b2282b3017fe
 assert_contains "$INSTALL" '1ad7b793a1996577e462b0bf5c1a22e4450b9c04f7e9e99d4b274ccc92f19072'
 assert_contains "$INSTALL" '85925af702d79fc3a8b9d501a5267ddc9f81449ff9fe94841845eb98eda84593'
 assert_contains "$INSTALL" '24e4ceaae9c87e396e71e89bd3eb074f2cc6a5a14b1a2081c8d890481857a0e4'
-assert_contains "$INSTALL" '9bd24308ef51139310bf58927a97eec49567d0154606bc5774ad69d2ee492ff0'
 assert_contains "$INSTALL" '136e9c649a63c16b3d3322a15fcdf918e7dda9a4cbb043e2923451e87a8ba08f'
-assert_contains "$INSTALL" '399f7a5b800bb6d05c63bbb340e7fa1820b84609b882589a6a95dd8796d03859'
 assert_contains "$INSTALL" "'%s/download/%s/%s'"
 assert_contains "$INSTALL" "'%s/latest/download/%s'"
 assert_contains "$INSTALL" 'curl -fL'
@@ -626,8 +650,14 @@ if [ "${FAKE_CURL_FAIL_GITHUB:-0}" = "1" ] && [[ "$url" == https://github.com/* 
   exit 22
 fi
 case "$asset" in
-  *.sha256)
-    target="${asset%.sha256}"
+  *.sha256sum|*.sha256)
+    target="${asset%.sha256sum}"
+    target="${target%.sha256}"
+    if [ -n "${FAKE_CURL_FAIL_CHECKSUM_ASSETS:-}" ]; then
+      case " ${FAKE_CURL_FAIL_CHECKSUM_ASSETS} " in
+        *" ${target} "*) exit 22 ;;
+      esac
+    fi
     source="${CURL_ASSET_DIR:?}/${target}"
     if [ ! -f "$source" ]; then
       echo "fake curl: missing asset ${target}" >&2
@@ -696,6 +726,8 @@ if [ "$(stat -c '%a' "${ROOT_RELEASE}/usr/local/bin/containerd-nydus-grpc")" != 
   exit 1
 fi
 assert_contains "$CURL_LOG" 'http://static.example.test/snapshotter/v0.16.0/amd64/nydus-snapshotter-v0.16.0-linux-amd64.tar.gz'
+assert_contains "$CURL_LOG" 'nydus-static-v2.4.5-linux-amd64.tgz.sha256'
+assert_contains "$CURL_LOG" 'nydus-snapshotter-v0.16.0-linux-amd64.tar.gz.sha256'
 assert_contains "${WORK}/release.log" 'nydus tarball: using static store'
 
 ROOT_NO_ASSET="${WORK}/root-no-asset"
@@ -826,7 +858,9 @@ if [ -s "$DFGET_LOG" ]; then
 fi
 
 ROOT_BAD_DIGEST="${WORK}/root-bad-digest"
-if p2p_run "$ROOT_BAD_DIGEST" "$CFG" 0 ok NYDUS_SNAPSHOTTER_SHA256=deadbeef > "${WORK}/bad-digest.log" 2>&1; then
+if p2p_run "$ROOT_BAD_DIGEST" "$CFG" 0 ok NYDUS_SNAPSHOTTER_SHA256=deadbeef \
+  FAKE_CURL_FAIL_CHECKSUM_ASSETS="nydus-snapshotter-v0.16.0-linux-amd64.tar.gz" \
+  > "${WORK}/bad-digest.log" 2>&1; then
   echo "p2p-static self-test: checksum mismatch did not fail the installer" >&2
   exit 1
 fi
@@ -860,7 +894,7 @@ env TARGET_ARCH= P2P_ROOT="$ROOT_ARCH_AMD" SKIP_MODULES=1 SKIP_SYSTEMD=1 SKIP_PR
   "$RUNNER" "$INSTALL" "$CFG" > "${WORK}/arch-amd64.log" 2>&1
 assert_contains "${WORK}/arch-amd64.log" 'pins: client v1.5.14 ba080e62f1626ab2fc2a5a0629a5cd912cc15099508820403108abbe2f75b1f7'
 assert_contains "${WORK}/arch-amd64.log" 'nydus v2.4.5 1ad7b793a1996577e462b0bf5c1a22e4450b9c04f7e9e99d4b274ccc92f19072'
-assert_contains "${WORK}/arch-amd64.log" 'snapshotter v0.16.0 24e4ceaae9c87e396e71e89bd3eb074f2cc6a5a14b1a2081c8d890481857a0e4 (binary 9bd24308ef51139310bf58927a97eec49567d0154606bc5774ad69d2ee492ff0)'
+assert_contains "${WORK}/arch-amd64.log" 'snapshotter v0.16.0 24e4ceaae9c87e396e71e89bd3eb074f2cc6a5a14b1a2081c8d890481857a0e4 (binary unavailable)'
 assert_contains "$ARCH_AMD_CURL" 'http://static.example.test/client/v1.5.14/amd64/dfdaemon'
 assert_contains "$ARCH_AMD_CURL" 'http://static.example.test/nydus/v2.4.5/amd64/nydus-static.tgz'
 
@@ -872,7 +906,7 @@ env TARGET_ARCH= P2P_ROOT="$ROOT_ARCH_ARM_PINS" SKIP_DOWNLOAD=1 SKIP_MODULES=1 S
 assert_contains "${WORK}/arch-arm64-pins.log" 'host=arm64 client=aarch64 nydus=arm64 snapshotter=arm64'
 assert_contains "${WORK}/arch-arm64-pins.log" 'pins: client v1.5.14 370ff792a1c6957a7244b770d6cd12792668e326b2282b3017fea2cbfa3510af'
 assert_contains "${WORK}/arch-arm64-pins.log" 'nydus v2.4.5 85925af702d79fc3a8b9d501a5267ddc9f81449ff9fe94841845eb98eda84593'
-assert_contains "${WORK}/arch-arm64-pins.log" 'snapshotter v0.16.0 136e9c649a63c16b3d3322a15fcdf918e7dda9a4cbb043e2923451e87a8ba08f (binary 399f7a5b800bb6d05c63bbb340e7fa1820b84609b882589a6a95dd8796d03859)'
+assert_contains "${WORK}/arch-arm64-pins.log" 'snapshotter v0.16.0 136e9c649a63c16b3d3322a15fcdf918e7dda9a4cbb043e2923451e87a8ba08f (binary unavailable)'
 
 # Arm64 URL selection with the upstream arm64 snapshotter tarball. The
 # checksums are overridden only to accept the tiny test artifacts.

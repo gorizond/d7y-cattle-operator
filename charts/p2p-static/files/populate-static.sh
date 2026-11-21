@@ -29,6 +29,37 @@ fetch() {
     || die "download failed: ${url}"
 }
 
+# Prefer the release-provided checksum sidecar. A pinned fallback exists only
+# for a client release that publishes no checksum asset (v1.5.14).
+resolve_checksum() {
+  url="$1"
+  expected="$2"
+  kind="$3"
+  version="$4"
+  arch="$5"
+  for suffix in .sha256sum .sha256; do
+    sum_file="${tmp}/checksum.$$"
+    if curl -fsSL --retry 3 --connect-timeout 10 --max-time 60 -o "$sum_file" "${url}${suffix}" && [ -s "$sum_file" ]; then
+      sum="$(cut -d' ' -f1 < "$sum_file")"
+      rm -f "$sum_file"
+      if [ -n "$sum" ]; then
+        printf '%s' "$sum"
+        return 0
+      fi
+    fi
+    rm -f "$sum_file"
+  done
+  if [ -n "$expected" ]; then
+    printf '%s' "$expected"
+    return 0
+  fi
+  case "${kind}:${version}:${arch}" in
+    client:v1.5.14:amd64) printf '%s' 'ba080e62f1626ab2fc2a5a0629a5cd912cc15099508820403108abbe2f75b1f7' ;;
+    client:v1.5.14:arm64) printf '%s' '370ff792a1c6957a7244b770d6cd12792668e326b2282b3017fea2cbfa3510af' ;;
+    *) return 1 ;;
+  esac
+}
+
 verify() {
   file="$1"
   expected="$2"
@@ -85,7 +116,9 @@ while IFS='|' read -r kind version arch url sha root; do
         continue
       fi
       fetch "$url" "$tmp/client.tgz"
-      verify "$tmp/client.tgz" "$sha" "client $version/$arch"
+      resolved="$(resolve_checksum "$url" "$sha" client "$version" "$arch")" \
+        || die "no checksum available for client $version/$arch: ${url}"
+      verify "$tmp/client.tgz" "$resolved" "client $version/$arch"
       extract="$tmp/client-$version-$arch"
       mkdir -p "$extract"
       tar -xzf "$tmp/client.tgz" -C "$extract" \
@@ -114,7 +147,9 @@ while IFS='|' read -r kind version arch url sha root; do
       [ -s "$dest/nydus-static.tgz" ] || need=1
       if [ "$need" = 1 ]; then
         fetch "$url" "$tmp/nydus-$version-$arch.tgz"
-        verify "$tmp/nydus-$version-$arch.tgz" "$sha" "nydus $version/$arch"
+        resolved="$(resolve_checksum "$url" "$sha" nydus "$version" "$arch")" \
+          || die "no checksum available for nydus $version/$arch: ${url}"
+        verify "$tmp/nydus-$version-$arch.tgz" "$resolved" "nydus $version/$arch"
         extract="$tmp/nydus-extract-$version-$arch"
         mkdir -p "$extract"
         tar -xzf "$tmp/nydus-$version-$arch.tgz" -C "$extract" \
@@ -140,7 +175,9 @@ while IFS='|' read -r kind version arch url sha root; do
         log "snapshotter $version/$arch/$root already present"
       else
         fetch "$url" "$tmp/snapshotter-$version-$arch"
-        verify "$tmp/snapshotter-$version-$arch" "$sha" "snapshotter $version/$arch/$root"
+        resolved="$(resolve_checksum "$url" "$sha" snapshotter "$version" "$arch")" \
+          || die "no checksum available for snapshotter $version/$arch/$root: ${url}"
+        verify "$tmp/snapshotter-$version-$arch" "$resolved" "snapshotter $version/$arch/$root"
         install_file "$tmp/snapshotter-$version-$arch" "$dest/$root"
       fi
       if [ "$arch" = "$node_arch" ]; then

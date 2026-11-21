@@ -125,6 +125,20 @@ func TestReconcileCreatesSharedManager(t *testing.T) {
 	if store.has("fleet-default/c1-manager") {
 		t.Error("legacy per-cluster manager HelmOp still exists")
 	}
+	static := store.object("fleet-default/p2p-static")
+	if static == nil {
+		t.Fatal("shared p2p-static HelmOp was not created for the manager cluster")
+	}
+	staticValues := helmValues(t, static)
+	if got := valueAtPath(t, staticValues, "static", "populate", "client", "versions"); got == nil {
+		t.Errorf("p2p-static client versions = %v", got)
+	}
+	if got := valueAtPath(t, staticValues, "static", "populate", "snapshotter", "version"); got != "v0.16.0" {
+		t.Errorf("p2p-static snapshotter version = %v", got)
+	}
+	if got := valueAtPath(t, staticValues, "manager", "host"); got != "api.example.com" {
+		t.Errorf("p2p-static manager host = %v", got)
+	}
 	if !store.has("fleet-default/" + helmop.SharedKeyDBName()) {
 		t.Error("shared KeyDB HelmOp is missing")
 	}
