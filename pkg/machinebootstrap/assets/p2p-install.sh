@@ -345,7 +345,16 @@ TOML
   esac
 }
 
+start_host_timers() {
+  if [ "$REAL_ROOT" = "1" ] && [ "${SKIP_SYSTEMD:-0}" != "1" ] && command -v systemctl >/dev/null 2>&1; then
+    if [ -f "${SERVICE_DIR}/nydus-updater.timer" ] && [ -f "${SERVICE_DIR}/dfdaemon-bootstrap-switch.timer" ]; then
+      systemctl start nydus-updater.timer dfdaemon-bootstrap-switch.timer >/dev/null 2>&1 || true
+    fi
+  fi
+}
+
 fallback_direct() {
+  start_host_timers
   if [ -z "${SCHEDULER_IPS:-}" ]; then
     log "P2P unavailable: $*; scheduler IPs are empty, keeping the nydus containerd config"
     exit 1
@@ -353,7 +362,7 @@ fallback_direct() {
   log "P2P unavailable: $*; using direct registry so RKE2 can start"
   write_direct_template
   if [ "$REAL_ROOT" = "1" ] && [ "${SKIP_SYSTEMD:-0}" != "1" ] && command -v systemctl >/dev/null 2>&1; then
-    systemctl disable --now dfdaemon-bootstrap.service dfdaemon-bootstrap-boot.service dfdaemon-bootstrap-switch.timer nydus-snapshotter-bootstrap.service nydus-updater.timer >/dev/null 2>&1 || true
+    systemctl disable --now dfdaemon-bootstrap.service dfdaemon-bootstrap-boot.service nydus-snapshotter-bootstrap.service nydus-updater.timer >/dev/null 2>&1 || true
   fi
   log "existing certificate/config files, if any, were preserved; P2P services are not enabled"
   exit 0
@@ -968,9 +977,35 @@ DISTRO="rke2"
 if [ -d /var/lib/rancher/k3s ]; then
   DISTRO="k3s"
 fi
-CRICTL="${CRICTL:-/var/lib/rancher/${DISTRO}/bin/crictl}"
+CRICTL="${CRICTL:-}"
 # RKE2 and k3s both expose the containerd socket at /run/k3s.
 SOCKET="${CONTAINERD_SOCKET:-/run/k3s/containerd/containerd.sock}"
+
+resolve_crictl() {
+  local candidate
+  if [ -n "$CRICTL" ] && [ -x "$CRICTL" ]; then
+    return 0
+  fi
+  if command -v crictl >/dev/null 2>&1; then
+    CRICTL="$(command -v crictl)"
+    return 0
+  fi
+  for candidate in /usr/local/bin/crictl /var/lib/rancher/k3s/bin/crictl /var/lib/rancher/rke2/bin/crictl; do
+    if [ -x "$candidate" ]; then
+      CRICTL="$candidate"
+      return 0
+    fi
+  done
+  while IFS= read -r candidate; do
+    if [ -x "$candidate" ]; then
+      CRICTL="$candidate"
+      return 0
+    fi
+  done < <(ls -1dt /var/lib/rancher/k3s/data/*/bin/crictl 2>/dev/null || true)
+  CRICTL=""
+  command -v k3s >/dev/null 2>&1
+}
+resolve_crictl || true
 
 log() {
   printf 'dfdaemon-bootstrap-switch: %s\n' "$*" >&2
@@ -985,7 +1020,11 @@ bootstrap_active() {
 }
 
 crictl_cmd() {
-  timeout 10 "$CRICTL" --runtime-endpoint "unix://${SOCKET}" "$@"
+  if [ -n "$CRICTL" ]; then
+    timeout 10 "$CRICTL" --runtime-endpoint "unix://${SOCKET}" "$@"
+  else
+    timeout 10 k3s crictl --runtime-endpoint "unix://${SOCKET}" "$@"
+  fi
 }
 
 pod_has_running_container() {
@@ -994,7 +1033,14 @@ pod_has_running_container() {
 
 client_containers_running() {
   local pods pod
-  [ -x "$CRICTL" ] || return 1
+  if [ -z "$CRICTL" ] && ! command -v k3s >/dev/null 2>&1; then
+    return 1
+  fi
+
+  pods="$(crictl_cmd pods --namespace "$NAMESPACE" --label component=client -q 2>/dev/null || true)"
+  for pod in $pods; do
+    pod_has_running_container "$pod" && return 0
+  done
 
   pods="$(crictl_cmd pods --namespace "$NAMESPACE" --label app.kubernetes.io/name=client -q 2>/dev/null || true)"
   for pod in $pods; do
@@ -1252,17 +1298,17 @@ if [ "$REAL_ROOT" = "1" ] && [ "${SKIP_SYSTEMD:-0}" != "1" ]; then
   systemctl enable dfdaemon-bootstrap.service dfdaemon-bootstrap-boot.service nydus-snapshotter-bootstrap.service nydus-updater.timer dfdaemon-bootstrap-switch.timer || \
     fallback_direct "failed to enable bootstrap services"
   if [ -n "${SCHEDULER_IPS:-}" ]; then
-    systemctl restart dfdaemon-bootstrap.service nydus-snapshotter-bootstrap.service || \
-      fallback_direct "failed to start bootstrap services"
     systemctl start nydus-updater.timer dfdaemon-bootstrap-switch.timer || \
       fallback_direct "failed to start host timers"
+    systemctl restart dfdaemon-bootstrap.service nydus-snapshotter-bootstrap.service || \
+      fallback_direct "failed to start bootstrap services"
     sleep 2
     systemctl is-active --quiet dfdaemon-bootstrap.service || fallback_direct "dfdaemon bootstrap failed to start"
   else
+    systemctl start nydus-updater.timer dfdaemon-bootstrap-switch.timer || \
+      fallback_direct "failed to start host timers"
     systemctl restart nydus-snapshotter-bootstrap.service || \
       fallback_direct "failed to start nydus bootstrap service"
-    systemctl start nydus-updater.timer || \
-      fallback_direct "failed to start host timers"
     sleep 2
   fi
   systemctl is-active --quiet nydus-snapshotter-bootstrap.service || fallback_direct "nydus bootstrap failed to start"

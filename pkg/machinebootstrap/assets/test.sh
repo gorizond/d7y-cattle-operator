@@ -253,11 +253,31 @@ assert_file "${ROOT_ONE}/etc/systemd/system/dfdaemon-bootstrap-switch.timer"
 assert_contains "${ROOT_ONE}/etc/systemd/system/dfdaemon-bootstrap-boot.service" 'Wants=dfdaemon-bootstrap.service'
 assert_contains "${ROOT_ONE}/etc/systemd/system/dfdaemon-bootstrap-boot.service" 'Before=dfdaemon-bootstrap.service rke2-server.service rke2-agent.service'
 assert_contains "${ROOT_ONE}/etc/systemd/system/dfdaemon-bootstrap-switch.timer" 'OnUnitActiveSec=30s'
-assert_contains "${ROOT_ONE}/usr/local/bin/dfdaemon-bootstrap-switch" 'pods --namespace "$NAMESPACE" --label app.kubernetes.io/name=client'
+assert_contains "${ROOT_ONE}/usr/local/bin/dfdaemon-bootstrap-switch" 'pods --namespace "$NAMESPACE" --label component=client'
 assert_contains "${ROOT_ONE}/usr/local/bin/dfdaemon-bootstrap-switch" 'systemctl disable --now "$UNIT"'
 assert_contains "${ROOT_ONE}/usr/local/bin/dfdaemon-bootstrap-switch" 'systemctl enable --now "$UNIT"'
 assert_not_contains "${ROOT_ONE}/usr/local/bin/dfdaemon-bootstrap-switch" 'nydus'
+assert_contains "${ROOT_ONE}/usr/local/bin/dfdaemon-bootstrap-switch" 'command -v crictl'
+assert_contains "${ROOT_ONE}/usr/local/bin/dfdaemon-bootstrap-switch" '/usr/local/bin/crictl'
+assert_contains "${ROOT_ONE}/usr/local/bin/dfdaemon-bootstrap-switch" '/var/lib/rancher/k3s/data/*/bin/crictl'
+assert_contains "${ROOT_ONE}/usr/local/bin/dfdaemon-bootstrap-switch" 'k3s crictl'
 bash -n "${ROOT_ONE}/usr/local/bin/dfdaemon-bootstrap-switch"
+
+timer_starts="$(grep -Fc 'systemctl start nydus-updater.timer dfdaemon-bootstrap-switch.timer' "$INSTALL" || true)"
+if [ "$timer_starts" -lt 3 ]; then
+  echo "p2p-static self-test: switch timer start is missing from an IP branch or fallback" >&2
+  exit 1
+fi
+if ! grep -A1 -F 'fallback_direct() {' "$INSTALL" | grep -Fq 'start_host_timers'; then
+  echo "p2p-static self-test: fallback_direct does not start host timers" >&2
+  exit 1
+fi
+timer_line="$(grep -nF 'systemctl start nydus-updater.timer dfdaemon-bootstrap-switch.timer' "$INSTALL" | head -1 | cut -d: -f1)"
+restart_line="$(grep -nF 'systemctl restart dfdaemon-bootstrap.service' "$INSTALL" | head -1 | cut -d: -f1)"
+if [ -z "$timer_line" ] || [ -z "$restart_line" ] || [ "$timer_line" -ge "$restart_line" ]; then
+  echo "p2p-static self-test: switch timer start does not precede dfdaemon restart" >&2
+  exit 1
+fi
 assert_contains "${ROOT_ONE}/usr/local/bin/nydus-updater" 'nydus-overlayfs'
 assert_not_contains "${ROOT_ONE}/usr/local/bin/nydus-updater" 'containerd-nydus-grpc'
 assert_contains "${ROOT_ONE}/usr/local/bin/nydus-updater" 'systemctl restart nydus-snapshotter-bootstrap.service'
@@ -296,6 +316,7 @@ esac
 FAKESYSTEMCTL
 cat > "${WORK}/switch-bin/crictl" <<'FAKECRICTL'
 #!/bin/sh
+[ "${FAKE_CRICTL_EMPTY:-0}" = "1" ] && exit 0
 case "$*" in
   *" pods "*) printf 'pod1\n' ;;
   *" ps "*) printf 'ctr1\n' ;;
@@ -311,7 +332,7 @@ SWITCH_MARKER="${WORK}/switch-state/switched"
 rm -f "$SWITCH_ENABLED" "$SWITCH_ACTIVE" "$SWITCH_MARKER"
 PATH="${WORK}/switch-bin:${PATH}" \
   SYSTEMCTL_LOG="$SWITCH_LOG" SYSTEMCTL_ENABLED="$SWITCH_ENABLED" SYSTEMCTL_ACTIVE="$SWITCH_ACTIVE" \
-  BOOTSTRAP_SWITCH_MARKER="$SWITCH_MARKER" DFDAEMON_CLIENT_PORT=45999 CRICTL=/nonexistent \
+  BOOTSTRAP_SWITCH_MARKER="$SWITCH_MARKER" DFDAEMON_CLIENT_PORT=45999 CRICTL=/nonexistent FAKE_CRICTL_EMPTY=1 \
   bash "$SWITCH"
 assert_contains "$SWITCH_LOG" 'enable --now dfdaemon-bootstrap.service'
 assert_file "$SWITCH_ENABLED"
