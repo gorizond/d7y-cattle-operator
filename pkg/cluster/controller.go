@@ -28,7 +28,14 @@ import (
 	"github.com/gorizond/d7y-cattle-operator/pkg/registry"
 )
 
-const controllerName = "d7y-cattle-operator"
+const (
+	controllerName = "d7y-cattle-operator"
+	// clusterFinalizer holds a deleting Cluster until the operator has removed
+	// the per-seed scheduler Bundle and the scheduler Secret in the operator
+	// namespace. The Secret is in a different namespace from the Cluster, so
+	// Kubernetes ownerRef garbage collection cannot clean it up.
+	clusterFinalizer = "p2p.dragonfly.io/finalizer"
+)
 
 // eventStore is the subset of Wrangler's EventController used for Cluster events.
 type eventStore interface {
@@ -115,6 +122,9 @@ func (c *Controller) reconcile(key string, cluster *provv1.Cluster) (result *pro
 	if cluster == nil {
 		return nil, nil
 	}
+	if cluster.DeletionTimestamp != nil {
+		return c.reconcileDeletion(cluster)
+	}
 
 	status := c.newStatus(cluster)
 	defer func() {
@@ -139,6 +149,26 @@ func (c *Controller) reconcile(key string, cluster *provv1.Cluster) (result *pro
 		return cluster, nil
 	}
 	status.rolesResolved(true, roles.Manager, roles.Seed)
+
+	// Hold the Cluster until finalization can remove the operator-namespace
+	// scheduler Secret. The finalizer is only added to clusters the operator
+	// manages (the gate label is present above).
+	if !hasClusterFinalizer(cluster) {
+		updated := cluster.DeepCopy()
+		updated.Finalizers = append(updated.Finalizers, clusterFinalizer)
+		result, err := c.clusters.Update(updated)
+		if err != nil {
+			// A failed metadata write must not block the normal reconcile; the
+			// next pass retries the idempotent finalizer add.
+			slog.Warn("failed to add Cluster finalizer",
+				"cluster", cluster.Namespace+"/"+cluster.Name,
+				"error", err,
+			)
+		} else {
+			cluster = result
+			status.rebase(cluster)
+		}
+	}
 
 	var errs []error
 
@@ -526,6 +556,46 @@ func (c *Controller) deleteBundle(cluster *provv1.Cluster, name string) error {
 		return fmt.Errorf("delete Bundle %s/%s: %w", cluster.Namespace, name, err)
 	}
 	return nil
+}
+
+// reconcileDeletion runs the full cleanup while the Cluster has a
+// DeletionTimestamp, then removes the finalizer. A cleanup error keeps the
+// finalizer and returns to the caller, so Wrangler requeues with backoff; the
+// next pass retries the idempotent deletes instead of blocking in-process.
+func (c *Controller) reconcileDeletion(cluster *provv1.Cluster) (*provv1.Cluster, error) {
+	if !hasClusterFinalizer(cluster) {
+		return cluster, nil
+	}
+	if err := c.cleanupAll(cluster); err != nil {
+		c.event(cluster, corev1.EventTypeWarning, "FinalizerCleanupFailed", err.Error())
+		return cluster, err
+	}
+	updated := cluster.DeepCopy()
+	updated.Finalizers = removeClusterFinalizer(updated.Finalizers)
+	result, err := c.clusters.Update(updated)
+	if err != nil {
+		return cluster, fmt.Errorf("remove Cluster finalizer: %w", err)
+	}
+	return result, nil
+}
+
+func hasClusterFinalizer(cluster *provv1.Cluster) bool {
+	for _, finalizer := range cluster.Finalizers {
+		if finalizer == clusterFinalizer {
+			return true
+		}
+	}
+	return false
+}
+
+func removeClusterFinalizer(finalizers []string) []string {
+	result := make([]string, 0, len(finalizers))
+	for _, finalizer := range finalizers {
+		if finalizer != clusterFinalizer {
+			result = append(result, finalizer)
+		}
+	}
+	return result
 }
 
 func (c *Controller) cleanupAll(cluster *provv1.Cluster) error {

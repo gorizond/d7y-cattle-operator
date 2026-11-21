@@ -451,7 +451,8 @@ func (f *fakeHelmOpStore) Delete(_ context.Context, namespace, name string, _ me
 }
 
 type fakeSecretStore struct {
-	secrets map[string]*corev1.Secret
+	secrets   map[string]*corev1.Secret
+	deleteErr error
 }
 
 func newFakeSecretStore() *fakeSecretStore {
@@ -504,6 +505,9 @@ func (f *fakeSecretStore) List(namespace string, selector labels.Selector) ([]*c
 }
 
 func (f *fakeSecretStore) Delete(namespace, name string, _ *metav1.DeleteOptions) error {
+	if f.deleteErr != nil {
+		return f.deleteErr
+	}
 	key := namespace + "/" + name
 	if _, ok := f.secrets[key]; !ok {
 		return apierrors.NewNotFound(corev1.Resource("secrets"), name)

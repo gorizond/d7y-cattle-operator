@@ -505,8 +505,11 @@ yet:
   `nydus-image`, and `nydus-overlayfs` assets. It is the global CRI
   snapshotter. `enable_oci_tar` is not set (it is not a nydus field). A daily
   host timer runs `nydus-updater` to refresh the static assets and restart the
-  host unit only when something changed; the patched snapshotter is updated by
-  rerunning `p2p-install.sh`.
+  host unit only when something changed. The updater tries the static store
+  first and falls back to the pinned `dragonflyoss/nydus` GitHub release
+  tarball, verifying its SHA-256 before installing anything; a missing store
+  object no longer leaves the updater stuck on 404. The patched snapshotter is
+  updated by rerunning `p2p-install.sh`.
 - Host `dfdaemon-bootstrap` is the cold-start P2P client. A boot helper starts
   it before RKE2 even if the switch disabled it at the previous shutdown; a
   30s host timer detects the node's in-cluster `client` pod via `crictl` and
@@ -722,6 +725,27 @@ mTLS on the data path. Scheduler `server.tls`, manager gRPC/API TLS, and
 monitoring TLS are always retained. The bootstrap `p2p-install.sh` config keeps
 scheduler control TLS and leaves upload plaintext, matching the cluster default.
 
+### Cluster deletion finalizer
+
+Every gated Cluster (`d7y-operator-cattle: "true"`) gets the
+`p2p.dragonfly.io/finalizer` after the roles resolve. On deletion the operator
+runs the same idempotent cleanup path as a disabled gate: it removes the
+operator-managed HelmOps/Bundles and calls `deleteSchedulerPKI`, which removes
+`<cluster>-p2p-scheduler` from the Cluster namespace and the scheduler source
+Secret from the operator namespace. Only then is the finalizer removed and the
+Cluster allowed to disappear.
+
+The scheduler Secret is in the operator namespace while the Cluster is in the
+Cluster's namespace, so Kubernetes ownerRef garbage collection cannot remove
+it; the finalizer is the deletion hook. The operator does not add a
+cross-namespace ownerRef to the Secret. Cleanup deletes are NotFound-tolerant,
+so a retry after a partial pass is safe. If cleanup or the finalizer removal
+fails, the controller emits `FinalizerCleanupFailed`, keeps the finalizer, and
+returns the error so Wrangler requeues with backoff; it does not spin or drop
+the finalizer on a transient failure. Deletion does not write Cluster status.
+A failure to add the finalizer is logged and retried on the next reconcile
+without blocking the normal pass.
+
 ## Manager root credentials
 
 The manager credentials Secret (`managerApiCredentialsSecret`) is the source of
@@ -799,6 +823,17 @@ empty, the block carries the `SCHEDULER_CLUSTER_ID=0` placeholder and a
 `SchedulerClusterIDPlaceholder` warning until manager registration writes the
 real ID. See `pkg/machinebootstrap/README.md` for the embedded script and
 `charts/p2p-static/README.md` for the static chart values and risks.
+
+A `populate-static` init container makes the volume self-populating from pinned
+releases: the nydus `v2.4.5` static tarball is SHA-256 verified and its
+`nydusd`, `nydus-image`, `nydus-overlayfs`, and `nydus-fs-select` assets are
+written to both `/nydus/v2.4.5/` and `/bin/`. An existing `/bin/dfdaemon` is
+preserved; the pinned dragonfly-client `v1.5.14` tarball is used only when the
+volume has no dfdaemon. URLs, versions, checksums, retries, and the init image
+are values. If an asset download fails after retries, the init container fails
+instead of starting nginx with a directory that answers 404. The chart's
+`nydus-fs-select.sh` is a copy of the embedded operator asset and
+`scripts/test-p2p-static.sh` fails if the two drift.
 
 ## Known pilot risk: extras target names
 

@@ -290,7 +290,91 @@ assert_not_contains "${ROOT_ONE}/usr/local/bin/nydus-updater" 'containerd-nydus-
 assert_contains "${ROOT_ONE}/usr/local/bin/nydus-updater" 'systemctl restart nydus-snapshotter-bootstrap.service'
 assert_contains "${ROOT_ONE}/usr/local/bin/nydus-updater" '/usr/local/bin/nydus-fs-select'
 assert_contains "${ROOT_ONE}/usr/local/bin/nydus-updater" 'config_before'
+assert_contains "${ROOT_ONE}/usr/local/bin/nydus-updater" 'static store miss; trying GitHub release'
+assert_contains "${ROOT_ONE}/usr/local/bin/nydus-updater" 'nydus-static-%s-linux-amd64.tgz'
+assert_contains "${ROOT_ONE}/usr/local/bin/nydus-updater" 'checksum mismatch'
+assert_contains "${ROOT_ONE}/usr/local/bin/nydus-updater" 'NYDUS_GITHUB_SHA256 is required'
+assert_contains "${ROOT_ONE}/etc/nydus/updater.env" 'NYDUS_GITHUB_REPO=dragonflyoss/nydus'
+assert_contains "${ROOT_ONE}/etc/nydus/updater.env" 'NYDUS_GITHUB_SHA256=1ad7b793a1996577e462b0bf5c1a22e4450b9c04f7e9e99d4b274ccc92f19072'
 assert_contains "${ROOT_ONE}/etc/systemd/system/nydus-updater.timer" 'OnUnitActiveSec=24h'
+
+# --- nydus-updater GitHub fallback -----------------------------------------
+UPDATER_ROOT="${WORK}/updater"
+UPDATER_BIN="${UPDATER_ROOT}/bin"
+UPDATER_INSTALL="${UPDATER_ROOT}/install"
+UPDATER_TARBALL="${UPDATER_ROOT}/nydus-static.tgz"
+mkdir -p "$UPDATER_BIN" "$UPDATER_INSTALL" "${UPDATER_ROOT}/src/nydus-static"
+for binary in nydusd nydus-image nydus-overlayfs; do
+  printf '#!/bin/sh\nexit 0\n' > "${UPDATER_ROOT}/src/nydus-static/${binary}"
+done
+tar -czf "$UPDATER_TARBALL" -C "${UPDATER_ROOT}/src" nydus-static
+UPDATER_SHA="$(sha256sum "$UPDATER_TARBALL" | cut -d' ' -f1)"
+cat > "${UPDATER_BIN}/curl" <<'UPDATERCURL'
+#!/usr/bin/env bash
+set -Eeuo pipefail
+out=""
+url=""
+while [ "$#" -gt 0 ]; do
+  case "$1" in
+    -o) out="$2"; shift 2 ;;
+    --retry|--retry-delay|--connect-timeout|--max-time) shift 2 ;;
+    -*) shift ;;
+    *) url="$1"; shift ;;
+  esac
+done
+if [ -z "$out" ] || [ -z "$url" ]; then
+  echo "fake updater curl: missing -o or URL" >&2
+  exit 2
+fi
+case "$url" in
+  http://static.example.test/*) exit 22 ;;
+  *nydus-static-v2.4.5-linux-amd64.tgz) cp "${UPDATER_TARBALL:?}" "$out" ;;
+  *) echo "fake updater curl: unexpected URL ${url}" >&2; exit 22 ;;
+esac
+UPDATERCURL
+cat > "${UPDATER_BIN}/systemctl" <<'UPDATERSYSTEMCTL'
+#!/bin/sh
+exit 0
+UPDATERSYSTEMCTL
+chmod 0755 "${UPDATER_BIN}/curl" "${UPDATER_BIN}/systemctl"
+cat > "${UPDATER_ROOT}/updater.env" <<EOF
+STATIC_URL=http://static.example.test
+NYDUS_VERSION=v2.4.5
+NYDUS_GITHUB_REPO=dragonflyoss/nydus
+NYDUS_GITHUB_SHA256=${UPDATER_SHA}
+NYDUS_ALLOW_GITHUB=1
+EOF
+NYDUS_UPDATER_ENV="${UPDATER_ROOT}/updater.env" \
+NYDUS_UPDATER_BIN_DIR="$UPDATER_INSTALL" \
+NYDUS_UPDATER_SELECTOR="${UPDATER_ROOT}/no-selector" \
+UPDATER_TARBALL="$UPDATER_TARBALL" \
+PATH="${UPDATER_BIN}:${PATH}" \
+  bash "${ROOT_ONE}/usr/local/bin/nydus-updater" > "${WORK}/updater.log" 2>&1
+assert_contains "${WORK}/updater.log" 'https://github.com/dragonflyoss/nydus/releases/download/v2.4.5/nydus-static-v2.4.5-linux-amd64.tgz'
+assert_contains "${WORK}/updater.log" 'using GitHub release v2.4.5'
+assert_contains "${WORK}/updater.log" 'static store miss for nydusd'
+for binary in nydusd nydus-image nydus-overlayfs; do
+  assert_file "${UPDATER_INSTALL}/${binary}"
+done
+
+# A checksum mismatch must fail before installing anything.
+BAD_INSTALL="${UPDATER_ROOT}/install-bad"
+mkdir -p "$BAD_INSTALL"
+sed 's/^NYDUS_GITHUB_SHA256=.*/NYDUS_GITHUB_SHA256=deadbeef/' "${UPDATER_ROOT}/updater.env" > "${UPDATER_ROOT}/updater-bad.env"
+if NYDUS_UPDATER_ENV="${UPDATER_ROOT}/updater-bad.env" \
+  NYDUS_UPDATER_BIN_DIR="$BAD_INSTALL" \
+  NYDUS_UPDATER_SELECTOR="${UPDATER_ROOT}/no-selector" \
+  UPDATER_TARBALL="$UPDATER_TARBALL" \
+  PATH="${UPDATER_BIN}:${PATH}" \
+  bash "${ROOT_ONE}/usr/local/bin/nydus-updater" > "${WORK}/updater-bad.log" 2>&1; then
+  echo "p2p-static self-test: updater accepted a bad checksum" >&2
+  exit 1
+fi
+assert_contains "${WORK}/updater-bad.log" 'checksum mismatch'
+if [ -e "${BAD_INSTALL}/nydusd" ]; then
+  echo "p2p-static self-test: updater installed a binary after a checksum mismatch" >&2
+  exit 1
+fi
 assert_contains "${ROOT_ONE}/etc/systemd/system/dfdaemon-bootstrap.service" 'Before=rke2-server.service rke2-agent.service'
 assert_contains "${ROOT_ONE}/etc/systemd/system/nydus-snapshotter-bootstrap.service" 'Before=rke2-server.service rke2-agent.service'
 assert_contains "${ROOT_ONE}/etc/systemd/system/nydus-snapshotter-bootstrap.service" 'ExecStartPre=/usr/local/bin/nydus-fs-select'
