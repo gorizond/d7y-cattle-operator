@@ -469,18 +469,15 @@ else
   rm -f "${ROOT}${NYDUS_DIR}/mirrors.enabled"
 fi
 
-# P2P data upload is intentionally plaintext here; only the scheduler control
-# connection keeps TLS. The operator's p2p-data-tls annotation does not apply
-# to this pre-cluster bootstrap config.
+# P2P data upload is intentionally plaintext here. Scheduler control uses
+# client mTLS with caCert/cert/key directly under scheduler, matching
+# dfdaemon 1.5.14 and the in-cluster client config. The operator's
+# p2p-data-tls annotation does not apply to this pre-cluster bootstrap config.
 write_file "${ROOT}${DFGET_CONFIG}" 0644 <<EOF
 scheduler:
-  tls:
-    caCert: "$CERT_DIR/ca.crt"
-    cert: "$CERT_DIR/tls.crt"
-    key: "$CERT_DIR/tls.key"
-    tlsVerify: true
-    tlsPolicy: "force"
-    autoIssueCert: false
+  caCert: "$CERT_DIR/ca.crt"
+  cert: "$CERT_DIR/tls.crt"
+  key: "$CERT_DIR/tls.key"
 host:
   schedulerClusterID: $SCHEDULER_CLUSTER_ID
 EOF
