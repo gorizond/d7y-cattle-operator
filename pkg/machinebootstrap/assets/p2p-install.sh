@@ -43,26 +43,17 @@ nydus-overlayfs"
 # /usr/local/bin/containerd-nydus-grpc path and run by the same unit.
 NYDUS_SNAPSHOTTER_REPO="${NYDUS_SNAPSHOTTER_REPO:-gorizond/nydus-snapshotter}"
 NYDUS_SNAPSHOTTER_VERSION="${NYDUS_SNAPSHOTTER_VERSION:-v0.16.0-p2p.2}"
-NYDUS_SNAPSHOTTER_ASSET="${NYDUS_SNAPSHOTTER_ASSET:-nydus-snapshotter-linux-amd64}"
 NYDUS_SNAPSHOTTER_BINARY="containerd-nydus-grpc"
 # Optional official Nydus release fallback for the daemon binaries when the
 # static store is not populated. The tarball contains nydusd, nydus-image, and
 # nydus-overlayfs.
 NYDUS_ALLOW_GITHUB="${NYDUS_ALLOW_GITHUB:-1}"
 NYDUS_GITHUB_REPO="${NYDUS_GITHUB_REPO:-dragonflyoss/nydus}"
-# SHA256 of the pinned nydus-static tarball. Required for the GitHub fallback;
-# change it together with NYDUS_VERSION when moving to another release.
-NYDUS_GITHUB_SHA256="${NYDUS_GITHUB_SHA256:-1ad7b793a1996577e462b0bf5c1a22e4450b9c04f7e9e99d4b274ccc92f19072}"
 # Direct Dragonfly client tarball for dfdaemon/dfget. The first delivery must
 # stay direct: dfget cannot use dfdaemon before dfdaemon exists.
 DRAGONFLY_CLIENT_REPO="${DRAGONFLY_CLIENT_REPO:-dragonflyoss/client}"
-DRAGONFLY_CLIENT_VERSION="${DRAGONFLY_CLIENT_VERSION:-v1.5.14}"
-DRAGONFLY_CLIENT_ARCH="${DRAGONFLY_CLIENT_ARCH:-x86_64}"
+DRAGONFLY_CLIENT_VERSION="${DRAGONFLY_CLIENT_VERSION:-${CLIENT_VERSION:-v1.5.14}}"
 DRAGONFLY_CLIENT_LIBC="${DRAGONFLY_CLIENT_LIBC:-gnu}"
-DRAGONFLY_CLIENT_ROOT="${DRAGONFLY_CLIENT_ROOT:-dragonfly-client-${DRAGONFLY_CLIENT_VERSION}-${DRAGONFLY_CLIENT_ARCH}-unknown-linux-${DRAGONFLY_CLIENT_LIBC}}"
-DRAGONFLY_CLIENT_ASSET="${DRAGONFLY_CLIENT_ASSET:-${DRAGONFLY_CLIENT_ROOT}.tar.gz}"
-DRAGONFLY_CLIENT_URL="${DRAGONFLY_CLIENT_URL:-https://github.com/${DRAGONFLY_CLIENT_REPO}/releases/download/${DRAGONFLY_CLIENT_VERSION}/${DRAGONFLY_CLIENT_ASSET}}"
-DRAGONFLY_CLIENT_SHA256="${DRAGONFLY_CLIENT_SHA256:-ba080e62f1626ab2fc2a5a0629a5cd912cc15099508820403108abbe2f75b1f7}"
 DRAGONFLY_CLIENT_BINARIES="dfdaemon
 dfget"
 # Optional HTTPS mirror path for nydus blobs, for example
@@ -119,6 +110,53 @@ write_file() {
   fi
 }
 
+# Match the RKE2/k3s node architecture instead of assuming amd64. armv7/armhf
+# are called out explicitly because neither the Rust client nor the nydus
+# static release publishes an armv7 asset.
+TARGET_ARCH="${TARGET_ARCH:-$(uname -m)}"
+case "$TARGET_ARCH" in
+  x86_64|amd64)
+    HOST_ARCH="amd64"
+    DRAGONFLY_CLIENT_ARCH_DEFAULT="x86_64"
+    NYDUS_ARCH="amd64"
+    ;;
+  aarch64|arm64)
+    HOST_ARCH="arm64"
+    DRAGONFLY_CLIENT_ARCH_DEFAULT="aarch64"
+    NYDUS_ARCH="arm64"
+    ;;
+  armv7l|armhf|armv6l)
+    die "unsupported architecture ${TARGET_ARCH}: no armv7/armhf Dragonfly client or nydus assets; supported architectures are x86_64/amd64 and aarch64/arm64"
+    ;;
+  *)
+    die "unsupported architecture ${TARGET_ARCH}: supported architectures are x86_64/amd64 and aarch64/arm64"
+    ;;
+esac
+DRAGONFLY_CLIENT_ARCH="${DRAGONFLY_CLIENT_ARCH:-${DRAGONFLY_CLIENT_ARCH_DEFAULT}}"
+DRAGONFLY_CLIENT_ROOT="${DRAGONFLY_CLIENT_ROOT:-dragonfly-client-${DRAGONFLY_CLIENT_VERSION}-${DRAGONFLY_CLIENT_ARCH}-unknown-linux-${DRAGONFLY_CLIENT_LIBC}}"
+DRAGONFLY_CLIENT_ASSET="${DRAGONFLY_CLIENT_ASSET:-${DRAGONFLY_CLIENT_ROOT}.tar.gz}"
+DRAGONFLY_CLIENT_URL="${DRAGONFLY_CLIENT_URL:-https://github.com/${DRAGONFLY_CLIENT_REPO}/releases/download/${DRAGONFLY_CLIENT_VERSION}/${DRAGONFLY_CLIENT_ASSET}}"
+NYDUS_SNAPSHOTTER_ARCH="$HOST_ARCH"
+NYDUS_SNAPSHOTTER_ASSET="${NYDUS_SNAPSHOTTER_ASSET:-nydus-snapshotter-linux-${NYDUS_SNAPSHOTTER_ARCH}}"
+
+# Per-architecture SHA-256 pins. The snapshotter fork currently publishes an
+# amd64 asset only; arm64 keeps the client/nydus pins and reports the missing
+# snapshotter asset instead of silently installing an amd64 binary.
+case "$HOST_ARCH" in
+  amd64)
+    : "${DRAGONFLY_CLIENT_SHA256:=ba080e62f1626ab2fc2a5a0629a5cd912cc15099508820403108abbe2f75b1f7}"
+    : "${NYDUS_GITHUB_SHA256:=1ad7b793a1996577e462b0bf5c1a22e4450b9c04f7e9e99d4b274ccc92f19072}"
+    : "${NYDUS_SNAPSHOTTER_SHA256:=8f4f68f306ba391cd294cdcb273267732cb82f4ae466564013204198dd003b0b}"
+    ;;
+  arm64)
+    : "${DRAGONFLY_CLIENT_SHA256:=370ff792a1c6957a7244b770d6cd12792668e326b2282b3017fea2cbfa3510af}"
+    : "${NYDUS_GITHUB_SHA256:=85925af702d79fc3a8b9d501a5267ddc9f81449ff9fe94841845eb98eda84593}"
+    ;;
+esac
+
+log "target ${TARGET_ARCH}: host=${HOST_ARCH} client=${DRAGONFLY_CLIENT_ARCH} nydus=${NYDUS_ARCH} snapshotter=${NYDUS_SNAPSHOTTER_ARCH}"
+log "pins: client ${DRAGONFLY_CLIENT_VERSION} ${DRAGONFLY_CLIENT_SHA256}, nydus ${NYDUS_VERSION} ${NYDUS_GITHUB_SHA256}, snapshotter ${NYDUS_SNAPSHOTTER_VERSION} ${NYDUS_SNAPSHOTTER_SHA256:-unavailable}"
+
 detect_containerd_major() {
   local candidate version
   candidate="${ROOT}/var/lib/rancher/${DISTRO}/bin/containerd"
@@ -164,9 +202,9 @@ verify_sha256() {
 nydus_github_tarball_url() {
   local base="https://github.com/${NYDUS_GITHUB_REPO}/releases"
   if [ "$NYDUS_VERSION" = "latest" ]; then
-    printf '%s/latest/download/nydus-static-latest-linux-amd64.tgz' "$base"
+    printf '%s/latest/download/nydus-static-latest-linux-%s.tgz' "$base" "$NYDUS_ARCH"
   else
-    printf '%s/download/%s/nydus-static-%s-linux-amd64.tgz' "$base" "$NYDUS_VERSION" "$NYDUS_VERSION"
+    printf '%s/download/%s/nydus-static-%s-linux-%s.tgz' "$base" "$NYDUS_VERSION" "$NYDUS_VERSION" "$NYDUS_ARCH"
   fi
 }
 
@@ -204,10 +242,13 @@ install_direct_client_binary() {
   local name out url
   name="$1"
   out="$2"
-  for url in "${STATIC_URL%/}/bin/${name}" "${STATIC_URL%/}/nydus/${NYDUS_VERSION}/${name}"; do
+  for url in \
+    "${STATIC_URL%/}/client/${DRAGONFLY_CLIENT_VERSION}/${HOST_ARCH}/${name}" \
+    "${STATIC_URL%/}/bin/${name}" \
+    "${STATIC_URL%/}/nydus/${NYDUS_VERSION}/${name}"; do
     if curl -fsSL --retry 3 --connect-timeout 10 --max-time 300 -o "$out" "$url" && [ -s "$out" ]; then
       chmod 0755 "$out"
-      log "direct client ${name}: using static store"
+      log "direct client ${name}: using static store ${url}"
       return 0
     fi
   done
@@ -346,7 +387,10 @@ download_nydus_tarball() {
     log "nydus P2P tarball failed checksum verification; discarding"
     rm -f "$out"
   fi
-  for candidate in "${STATIC_URL%/}/nydus/${NYDUS_VERSION}/nydus-static.tgz" "${STATIC_URL%/}/bin/nydus-static.tgz"; do
+  for candidate in \
+    "${STATIC_URL%/}/nydus/${NYDUS_VERSION}/${HOST_ARCH}/nydus-static.tgz" \
+    "${STATIC_URL%/}/nydus/${NYDUS_VERSION}/nydus-static.tgz" \
+    "${STATIC_URL%/}/bin/nydus-static.tgz"; do
     if curl -fsSL --retry 3 --connect-timeout 10 --max-time 300 -o "$out" "$candidate" && [ -s "$out" ]; then
       if verify_sha256 "$out" "$NYDUS_GITHUB_SHA256" "nydus ${NYDUS_VERSION} (static store)"; then
         log "nydus tarball: using static store ${candidate}"
@@ -410,7 +454,10 @@ nydus_snapshotter_release_url() {
 fetch_nydus_snapshotter_checksum() {
   local out="$1" url candidate
   url="$(nydus_snapshotter_release_url)"
-  for candidate in "${url}.sha256" "${STATIC_URL%/}/bin/${NYDUS_SNAPSHOTTER_ASSET}.sha256"; do
+  for candidate in \
+    "${STATIC_URL%/}/snapshotter/${NYDUS_SNAPSHOTTER_VERSION}/${HOST_ARCH}/${NYDUS_SNAPSHOTTER_ASSET}.sha256" \
+    "${url}.sha256" \
+    "${STATIC_URL%/}/bin/${NYDUS_SNAPSHOTTER_ASSET}.sha256"; do
     if curl -fsSL --retry 3 --connect-timeout 10 --max-time 300 -o "$out" "$candidate" && [ -s "$out" ]; then
       log "nydus-snapshotter checksum: using ${candidate}"
       return 0
@@ -428,15 +475,19 @@ install_nydus_snapshotter_asset() {
   url="$(nydus_snapshotter_release_url)"
   checksum="${out}.sha256"
   rm -f "$out" "$checksum"
-  if ! fetch_nydus_snapshotter_checksum "$checksum"; then
-    log "nydus-snapshotter checksum is unavailable: ${url}.sha256"
-    return 1
-  fi
-  IFS=' ' read -r expected _ < "$checksum"
+  expected="${NYDUS_SNAPSHOTTER_SHA256:-}"
   if [ -z "$expected" ]; then
-    rm -f "$checksum"
-    log "nydus-snapshotter checksum is empty"
-    return 1
+    log "no pinned nydus-snapshotter asset for ${HOST_ARCH} (${NYDUS_SNAPSHOTTER_REPO} ${NYDUS_SNAPSHOTTER_VERSION}); trying release checksum"
+    if ! fetch_nydus_snapshotter_checksum "$checksum"; then
+      log "nydus-snapshotter checksum is unavailable: ${url}.sha256"
+      return 1
+    fi
+    IFS=' ' read -r expected _ < "$checksum"
+    if [ -z "$expected" ]; then
+      rm -f "$checksum"
+      log "nydus-snapshotter checksum is empty"
+      return 1
+    fi
   fi
   if [ "$p2p_ready" = "1" ] && p2p_fetch "$url" "$out" "$expected"; then
     if verify_sha256 "$out" "$expected" "nydus-snapshotter (P2P)"; then
@@ -447,7 +498,10 @@ install_nydus_snapshotter_asset() {
     log "nydus P2P snapshotter failed checksum verification; discarding"
     rm -f "$out"
   fi
-  for candidate in "${STATIC_URL%/}/bin/${NYDUS_SNAPSHOTTER_ASSET}" "$url"; do
+  for candidate in \
+    "${STATIC_URL%/}/snapshotter/${NYDUS_SNAPSHOTTER_VERSION}/${HOST_ARCH}/${NYDUS_SNAPSHOTTER_ASSET}" \
+    "${STATIC_URL%/}/bin/${NYDUS_SNAPSHOTTER_ASSET}" \
+    "$url"; do
     if curl -fsSL --retry 3 --connect-timeout 10 --max-time 300 -o "$out" "$candidate" && [ -s "$out" ]; then
       if verify_sha256 "$out" "$expected" "nydus-snapshotter"; then
         log "nydus-snapshotter: using ${candidate}"
@@ -612,13 +666,6 @@ fallback_direct() {
   exit 0
 }
 
-# The patched release currently publishes an amd64 asset only. Fall back to
-# the direct registry so a non-amd64 node can still start RKE2.
-NYDUS_SNAPSHOTTER_ARCH="${NYDUS_SNAPSHOTTER_ARCH:-$(uname -m)}"
-case "$NYDUS_SNAPSHOTTER_ARCH" in
-  amd64|x86_64) ;;
-  *) fallback_direct "nydus-snapshotter has no ${NYDUS_SNAPSHOTTER_ARCH} release asset" ;;
-esac
 
 tcp_check() {
   local host port

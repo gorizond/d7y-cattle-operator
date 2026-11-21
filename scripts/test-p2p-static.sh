@@ -33,10 +33,17 @@ grep -q 'name: populate-static' "$tmp/p2p-static.yaml" || fail "p2p-static is mi
 grep -q 'nydus-static-v2.4.5-linux-amd64.tgz' "$tmp/p2p-static.yaml" || fail "p2p-static is missing the pinned nydus tarball URL"
 grep -q '1ad7b793a1996577e462b0bf5c1a22e4450b9c04f7e9e99d4b274ccc92f19072' "$tmp/p2p-static.yaml" || fail "p2p-static is missing the pinned nydus checksum"
 grep -q 'nydus-fs-select.sh' "$tmp/p2p-static.yaml" || fail "p2p-static is missing the nydus-fs-select asset"
-grep -q 'DFGET_BINARY' "$tmp/p2p-static.yaml" || fail "p2p-static is missing the dfget populate input"
 grep -q 'nydus-static.tgz' "$tmp/p2p-static.yaml" || fail "p2p-static is missing the nydus tarball mirror"
-grep -q 'dragonfly-client-v1.5.14-x86_64-unknown-linux-gnu.tar.gz' "$tmp/p2p-static.yaml" || fail "p2p-static must use the GNU client build to match the host"
-grep -q 'ba080e62f1626ab2fc2a5a0629a5cd912cc15099508820403108abbe2f75b1f7' "$tmp/p2p-static.yaml" || fail "p2p-static GNU client checksum is not asserted"
+grep -q 'dragonfly-client-v1.5.14-x86_64-unknown-linux-gnu.tar.gz' "$tmp/p2p-static.yaml" || fail "p2p-static must use the amd64 GNU client build"
+grep -q 'ba080e62f1626ab2fc2a5a0629a5cd912cc15099508820403108abbe2f75b1f7' "$tmp/p2p-static.yaml" || fail "p2p-static amd64 GNU client checksum is not asserted"
+grep -q 'dragonfly-client-v1.5.14-aarch64-unknown-linux-gnu.tar.gz' "$tmp/p2p-static.yaml" || fail "p2p-static must include the arm64 GNU client build"
+grep -q '370ff792a1c6957a7244b770d6cd12792668e326b2282b3017fea2cbfa3510af' "$tmp/p2p-static.yaml" || fail "p2p-static arm64 client checksum is not asserted"
+grep -q 'nydus-static-v2.4.5-linux-arm64.tgz' "$tmp/p2p-static.yaml" || fail "p2p-static is missing the arm64 nydus tarball"
+grep -q '85925af702d79fc3a8b9d501a5267ddc9f81449ff9fe94841845eb98eda84593' "$tmp/p2p-static.yaml" || fail "p2p-static arm64 nydus checksum is not asserted"
+grep -q 'nydus-snapshotter-linux-amd64' "$tmp/p2p-static.yaml" || fail "p2p-static is missing the snapshotter mirror"
+grep -q '8f4f68f306ba391cd294cdcb273267732cb82f4ae466564013204198dd003b0b' "$tmp/p2p-static.yaml" || fail "p2p-static snapshotter checksum is not asserted"
+grep -q 'client|v1.5.14|arm64|' "$tmp/p2p-static.yaml" || fail "p2p-static populate plan is missing the arm64 client layout"
+grep -q 'nydus|v2.4.5|arm64|' "$tmp/p2p-static.yaml" || fail "p2p-static populate plan is missing the arm64 nydus layout"
 grep -q 'location /nydus/' "$tmp/p2p-static.yaml" || fail "p2p-static is missing the versioned nydus asset route"
 grep -q 'location /bin/' "$tmp/p2p-static.yaml" || fail "p2p-static is missing the /bin asset route"
 grep -q 'listen 80;' "$tmp/p2p-static.yaml" || fail "p2p-static nginx must listen on port 80"
@@ -55,27 +62,44 @@ if grep -q 'p2p-install.sh' "$tmp/p2p-static-manager.yaml"; then
   fail "p2p-static manager route must not include p2p-install.sh"
 fi
 
-# Exercise the populate script with a fake downloader: nydus assets land in
-# both layouts, while an existing dfdaemon is preserved.
+# Exercise the populate script with a fake downloader: versioned/arch layouts
+# for both architectures, legacy /bin from the node arch, existing dfdaemon kept.
 populate="$chart/files/populate-static.sh"
 static_dir="$tmp/static"
 populate_bin="$tmp/populate-bin"
-populate_src="$tmp/populate-src/nydus-static"
-populate_tgz="$tmp/populate-nydus.tgz"
-populate_client_src="$tmp/populate-client/dragonfly-client-v1.5.14-x86_64-unknown-linux-gnu"
-populate_client_tgz="$tmp/populate-client.tgz"
-mkdir -p "$static_dir/bin" "$populate_bin" "$populate_src" "$populate_client_src"
+populate_plan="$tmp/populate-plan.txt"
+cli_amd_src="$tmp/cli-amd/dragonfly-client-v1.5.14-x86_64-unknown-linux-gnu"
+cli_arm_src="$tmp/cli-arm/dragonfly-client-v1.5.14-aarch64-unknown-linux-gnu"
+nyd_amd_src="$tmp/nyd-amd/nydus-static"
+nyd_arm_src="$tmp/nyd-arm/nydus-static"
+mkdir -p "$static_dir/bin" "$populate_bin" "$cli_amd_src" "$cli_arm_src" "$nyd_amd_src" "$nyd_arm_src"
 printf 'existing-dfdaemon\n' > "$static_dir/bin/dfdaemon"
 for binary in nydusd nydus-image nydus-overlayfs; do
-  printf '#!/bin/sh\nexit 0\n' > "$populate_src/$binary"
+  printf 'amd64-%s\n' "$binary" > "$nyd_amd_src/$binary"
+  printf 'arm64-%s\n' "$binary" > "$nyd_arm_src/$binary"
 done
 for binary in dfdaemon dfget; do
-  printf '#!/bin/sh\nexit 0\n' > "$populate_client_src/$binary"
+  printf 'amd64-%s\n' "$binary" > "$cli_amd_src/$binary"
+  printf 'arm64-%s\n' "$binary" > "$cli_arm_src/$binary"
 done
-tar -czf "$populate_tgz" -C "$tmp/populate-src" nydus-static
-tar -czf "$populate_client_tgz" -C "$tmp/populate-client" dragonfly-client-v1.5.14-x86_64-unknown-linux-gnu
-populate_sha="$(sha256sum "$populate_tgz" | cut -d' ' -f1)"
-populate_client_sha="$(sha256sum "$populate_client_tgz" | cut -d' ' -f1)"
+tar -czf "$tmp/cli-amd.tar.gz" -C "$tmp/cli-amd" dragonfly-client-v1.5.14-x86_64-unknown-linux-gnu
+tar -czf "$tmp/cli-arm.tar.gz" -C "$tmp/cli-arm" dragonfly-client-v1.5.14-aarch64-unknown-linux-gnu
+tar -czf "$tmp/nyd-amd.tgz" -C "$tmp/nyd-amd" nydus-static
+tar -czf "$tmp/nyd-arm.tgz" -C "$tmp/nyd-arm" nydus-static
+printf '#!/bin/sh\nexit 0\n' > "$tmp/snapshotter"
+sha_cli_amd="$(sha256sum "$tmp/cli-amd.tar.gz" | cut -d' ' -f1)"
+sha_cli_arm="$(sha256sum "$tmp/cli-arm.tar.gz" | cut -d' ' -f1)"
+sha_nyd_amd="$(sha256sum "$tmp/nyd-amd.tgz" | cut -d' ' -f1)"
+sha_nyd_arm="$(sha256sum "$tmp/nyd-arm.tgz" | cut -d' ' -f1)"
+sha_snap="$(sha256sum "$tmp/snapshotter" | cut -d' ' -f1)"
+cat > "$populate_plan" <<EOF
+client|v1.5.14|amd64|https://example.test/cli-amd.tar.gz|${sha_cli_amd}|dragonfly-client-v1.5.14-x86_64-unknown-linux-gnu
+client|v1.5.14|arm64|https://example.test/cli-arm.tar.gz|${sha_cli_arm}|dragonfly-client-v1.5.14-aarch64-unknown-linux-gnu
+compat-client|v1.5.14
+nydus|v2.4.5|amd64|https://example.test/nyd-amd.tgz|${sha_nyd_amd}|nydus-static
+nydus|v2.4.5|arm64|https://example.test/nyd-arm.tgz|${sha_nyd_arm}|nydus-static
+snapshotter|v0.16.0-p2p.2|amd64|https://example.test/snapshotter|${sha_snap}|nydus-snapshotter-linux-amd64
+EOF
 cat > "$populate_bin/curl" <<'POPULATECURL'
 #!/bin/sh
 out=""
@@ -88,31 +112,55 @@ while [ "$#" -gt 0 ]; do
   esac
 done
 case "$url" in
-  *client*.tar.gz) cp "${POPULATE_CLIENT_TARBALL:?}" "$out" ;;
-  *) cp "${POPULATE_TARBALL:?}" "$out" ;;
+  *cli-amd.tar.gz) cp "${POPULATE_CLI_AMD:?}" "$out" ;;
+  *cli-arm.tar.gz) cp "${POPULATE_CLI_ARM:?}" "$out" ;;
+  *nyd-amd.tgz) cp "${POPULATE_NYD_AMD:?}" "$out" ;;
+  *nyd-arm.tgz) cp "${POPULATE_NYD_ARM:?}" "$out" ;;
+  *snapshotter) cp "${POPULATE_SNAPSHOTTER:?}" "$out" ;;
+  *) exit 22 ;;
 esac
 POPULATECURL
 chmod 0755 "$populate_bin/curl"
 STATIC_DIR="$static_dir" SELECTOR_SRC="$chart/files/nydus-fs-select.sh" \
-  DOWNLOAD_RETRIES=1 SELECTOR_ENABLED=1 \
-  NYDUS_VERSION=v2.4.5 NYDUS_BINARIES="nydusd nydus-image nydus-overlayfs" \
-  NYDUS_TARBALL_URL=https://example.test/nydus.tgz NYDUS_TARBALL_SHA256="$populate_sha" \
-  NYDUS_TARBALL_ROOT=nydus-static \
-  DFDAEMON_ENABLED=1 DFDAEMON_VERSION=1.5.14 \
-  DFDAEMON_TARBALL_URL=https://example.test/dragonfly-client-v1.5.14-x86_64-unknown-linux-gnu.tar.gz \
-  DFDAEMON_TARBALL_SHA256="$populate_client_sha" \
-  DFDAEMON_TARBALL_ROOT=dragonfly-client-v1.5.14-x86_64-unknown-linux-gnu \
-  DFDAEMON_BINARY=dfdaemon DFGET_BINARY=dfget \
-  POPULATE_TARBALL="$populate_tgz" POPULATE_CLIENT_TARBALL="$populate_client_tgz" \
+  POPULATE_PLAN="$populate_plan" DOWNLOAD_RETRIES=1 SELECTOR_ENABLED=1 TARGET_ARCH=x86_64 \
+  NYDUS_BINARIES="nydusd nydus-image nydus-overlayfs" \
+  POPULATE_CLI_AMD="$tmp/cli-amd.tar.gz" POPULATE_CLI_ARM="$tmp/cli-arm.tar.gz" \
+  POPULATE_NYD_AMD="$tmp/nyd-amd.tgz" POPULATE_NYD_ARM="$tmp/nyd-arm.tgz" \
+  POPULATE_SNAPSHOTTER="$tmp/snapshotter" \
   PATH="$populate_bin:$PATH" \
   sh "$populate" >"$tmp/populate.log" 2>&1
-for binary in nydusd nydus-image nydus-overlayfs nydus-fs-select; do
-  [ -s "$static_dir/nydus/v2.4.5/$binary" ] || fail "populate-static did not create nydus/v2.4.5/$binary"
-  [ -s "$static_dir/bin/$binary" ] || fail "populate-static did not create bin/$binary"
+for arch in amd64 arm64; do
+  for binary in dfdaemon dfget; do
+    [ -s "$static_dir/client/v1.5.14/$arch/$binary" ] || fail "populate-static did not create client/v1.5.14/$arch/$binary"
+  done
+  for binary in nydusd nydus-image nydus-overlayfs; do
+    [ -s "$static_dir/nydus/v2.4.5/$arch/$binary" ] || fail "populate-static did not create nydus/v2.4.5/$arch/$binary"
+  done
+  [ -s "$static_dir/nydus/v2.4.5/$arch/nydus-static.tgz" ] || fail "populate-static did not mirror nydus/v2.4.5/$arch/nydus-static.tgz"
 done
+[ -s "$static_dir/snapshotter/v0.16.0-p2p.2/amd64/nydus-snapshotter-linux-amd64" ] || fail "populate-static did not mirror the amd64 snapshotter"
+for binary in dfget nydusd nydus-image nydus-overlayfs nydus-fs-select nydus-snapshotter-linux-amd64; do
+  [ -s "$static_dir/bin/$binary" ] || fail "populate-static did not create the /bin compatibility $binary"
+done
+[ -s "$static_dir/nydus/v2.4.5/nydusd" ] || fail "populate-static did not create the legacy nydus/v2.4.5/nydusd"
+[ -s "$static_dir/nydus/v2.4.5/nydus-static.tgz" ] || fail "populate-static did not create the legacy nydus/v2.4.5/nydus-static.tgz"
 grep -q 'preserving existing' "$tmp/populate.log" || fail "populate-static did not preserve the existing dfdaemon"
 [ "$(cat "$static_dir/bin/dfdaemon")" = "existing-dfdaemon" ] || fail "populate-static overwrote the existing dfdaemon"
-[ -s "$static_dir/bin/dfget" ] || fail "populate-static did not create bin/dfget"
-[ -s "$static_dir/nydus/v2.4.5/nydus-static.tgz" ] || fail "populate-static did not mirror nydus-static.tgz"
+[ "$(cat "$static_dir/bin/nydusd")" = "amd64-nydusd" ] || fail "populate-static did not fill /bin from the amd64 layout"
+
+# A second run on an arm64 node uses the arm64 compatibility layout.
+static_dir_arm="$tmp/static-arm"
+mkdir -p "$static_dir_arm"
+STATIC_DIR="$static_dir_arm" SELECTOR_SRC="$chart/files/nydus-fs-select.sh" \
+  POPULATE_PLAN="$populate_plan" DOWNLOAD_RETRIES=1 SELECTOR_ENABLED=1 TARGET_ARCH=aarch64 \
+  NYDUS_BINARIES="nydusd nydus-image nydus-overlayfs" \
+  POPULATE_CLI_AMD="$tmp/cli-amd.tar.gz" POPULATE_CLI_ARM="$tmp/cli-arm.tar.gz" \
+  POPULATE_NYD_AMD="$tmp/nyd-amd.tgz" POPULATE_NYD_ARM="$tmp/nyd-arm.tgz" \
+  POPULATE_SNAPSHOTTER="$tmp/snapshotter" \
+  PATH="$populate_bin:$PATH" \
+  sh "$populate" >"$tmp/populate-arm.log" 2>&1
+[ "$(cat "$static_dir_arm/bin/dfdaemon")" = "arm64-dfdaemon" ] || fail "populate-static did not fill /bin from the arm64 layout"
+[ "$(cat "$static_dir_arm/bin/nydusd")" = "arm64-nydusd" ] || fail "populate-static did not fill /bin nydusd from the arm64 layout"
+[ -s "$static_dir_arm/client/v1.5.14/arm64/dfget" ] || fail "populate-static did not create the arm64 client layout"
 
 echo "p2p-static render checks passed"

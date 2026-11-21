@@ -31,6 +31,9 @@ const (
 	DefaultHostSyncChartRepo             = "https://gorizond.github.io/d7y-cattle-operator"
 	DefaultHostSyncChartName             = "p2p-host-sync"
 	DefaultHostSyncChartVersion          = "0.1.1"
+	DefaultClientVersion                 = "v1.5.14"
+	DefaultNydusVersion                  = "v2.4.5"
+	DefaultSnapshotterVersion            = "v0.16.0-p2p.2"
 	DefaultExtrasIngressController       = "nginx"
 	DefaultExtrasIngressClassName        = ""
 	DefaultExtrasIngressGRPCEnabled      = true
@@ -66,6 +69,9 @@ type Config struct {
 	HostSyncChartRepo           string
 	HostSyncChartName           string
 	HostSyncChartVersion        string
+	ClientVersion               string
+	NydusVersion                string
+	SnapshotterVersion          string
 	ExtrasIngressController     string
 	ExtrasIngressClassName      string
 	ExtrasIngressGRPCEnabled    bool
@@ -125,6 +131,9 @@ func Load(args []string) (*Config, error) {
 	fs.StringVar(&cfg.HostSyncChartRepo, "host-sync-chart-repo", envOr("HOST_SYNC_CHART_REPO", DefaultHostSyncChartRepo), "Helm repository URL of the p2p-host-sync chart")
 	fs.StringVar(&cfg.HostSyncChartName, "host-sync-chart-name", envOr("HOST_SYNC_CHART_NAME", DefaultHostSyncChartName), "p2p-host-sync chart name")
 	fs.StringVar(&cfg.HostSyncChartVersion, "host-sync-chart-version", envOr("HOST_SYNC_CHART_VERSION", DefaultHostSyncChartVersion), "p2p-host-sync chart version")
+	fs.StringVar(&cfg.ClientVersion, "client-version", envOr("CLIENT_VERSION", DefaultClientVersion), "Dragonfly client release used by the host bootstrap")
+	fs.StringVar(&cfg.NydusVersion, "nydus-version", envOr("NYDUS_VERSION", DefaultNydusVersion), "nydus static release used by the host bootstrap")
+	fs.StringVar(&cfg.SnapshotterVersion, "nydus-snapshotter-version", envOr("NYDUS_SNAPSHOTTER_VERSION", DefaultSnapshotterVersion), "patched nydus-snapshotter release used by the host bootstrap")
 	fs.StringVar(&cfg.ExtrasIngressController, "extras-ingress-controller", envOr("EXTRAS_INGRESS_CONTROLLER", DefaultExtrasIngressController), "extras Ingress controller: nginx or traefik")
 	fs.StringVar(&cfg.ExtrasIngressClassName, "extras-ingress-class-name", envOr("EXTRAS_INGRESS_CLASS_NAME", DefaultExtrasIngressClassName), "extras Ingress class name (empty uses the cluster default)")
 	fs.BoolVar(&cfg.ExtrasIngressGRPCEnabled, "extras-ingress-grpc-enabled", defaultGRPCEnabled, "render the extras gRPC Ingress")
@@ -171,6 +180,20 @@ func (c *Config) Validate() error {
 		add("--nginx-static-url is required")
 	} else if err := validateURL(c.NginxStaticURL, "http", "https"); err != nil {
 		add("--nginx-static-url: %v", err)
+	}
+	for _, version := range []struct {
+		name  string
+		value string
+	}{
+		{"--client-version", c.ClientVersion},
+		{"--nydus-version", c.NydusVersion},
+		{"--nydus-snapshotter-version", c.SnapshotterVersion},
+	} {
+		if version.value == "" {
+			add("%s is required", version.name)
+		} else if !chartVersionPattern.MatchString(version.value) {
+			add("%s: %q is not a release version", version.name, version.value)
+		}
 	}
 	if c.NydusMirrorURL != "" {
 		if err := validateNydusMirrorURL(c.NydusMirrorURL); err != nil {

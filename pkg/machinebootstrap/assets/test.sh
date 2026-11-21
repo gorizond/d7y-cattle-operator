@@ -3,6 +3,8 @@ set -Eeuo pipefail
 
 HERE="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 INSTALL="${HERE}/p2p-install.sh"
+# Keep the staging tests on amd64; architecture tests below override this.
+export TARGET_ARCH=amd64
 
 if [ ! -f "$INSTALL" ]; then
   echo "p2p-static self-test: missing ${INSTALL}" >&2
@@ -469,9 +471,17 @@ assert_contains "$INSTALL" 'SCHEDULER_PORT=8002'
 assert_contains "$INSTALL" 'NYDUS_VERSION="${NYDUS_VERSION:-v2.4.5}"'
 assert_contains "$INSTALL" 'NYDUS_SNAPSHOTTER_REPO="${NYDUS_SNAPSHOTTER_REPO:-gorizond/nydus-snapshotter}"'
 assert_contains "$INSTALL" 'NYDUS_SNAPSHOTTER_VERSION="${NYDUS_SNAPSHOTTER_VERSION:-v0.16.0-p2p.2}"'
-assert_contains "$INSTALL" 'NYDUS_SNAPSHOTTER_ASSET="${NYDUS_SNAPSHOTTER_ASSET:-nydus-snapshotter-linux-amd64}"'
+assert_contains "$INSTALL" 'NYDUS_SNAPSHOTTER_ASSET="${NYDUS_SNAPSHOTTER_ASSET:-nydus-snapshotter-linux-${NYDUS_SNAPSHOTTER_ARCH}}"'
 assert_contains "$INSTALL" 'DRAGONFLY_CLIENT_LIBC="${DRAGONFLY_CLIENT_LIBC:-gnu}"'
-assert_contains "$INSTALL" 'DRAGONFLY_CLIENT_SHA256="${DRAGONFLY_CLIENT_SHA256:-ba080e62f1626ab2fc2a5a0629a5cd912cc15099508820403108abbe2f75b1f7}"'
+assert_contains "$INSTALL" 'TARGET_ARCH="${TARGET_ARCH:-$(uname -m)}"'
+assert_contains "$INSTALL" 'x86_64|amd64)'
+assert_contains "$INSTALL" 'aarch64|arm64)'
+assert_contains "$INSTALL" 'armv7l|armhf|armv6l)'
+assert_contains "$INSTALL" 'ba080e62f1626ab2fc2a5a0629a5cd912cc15099508820403108abbe2f75b1f7'
+assert_contains "$INSTALL" '370ff792a1c6957a7244b770d6cd12792668e326b2282b3017fea2cbfa3510af'
+assert_contains "$INSTALL" '1ad7b793a1996577e462b0bf5c1a22e4450b9c04f7e9e99d4b274ccc92f19072'
+assert_contains "$INSTALL" '85925af702d79fc3a8b9d501a5267ddc9f81449ff9fe94841845eb98eda84593'
+assert_contains "$INSTALL" '8f4f68f306ba391cd294cdcb273267732cb82f4ae466564013204198dd003b0b'
 assert_contains "$INSTALL" "'%s/download/%s/%s'"
 assert_contains "$INSTALL" "'%s/latest/download/%s'"
 assert_contains "$INSTALL" 'curl -fL'
@@ -648,11 +658,12 @@ RELEASE_NYDUS_SHA="$(sha256sum "$RELEASE_NYDUS_TGZ" | cut -d' ' -f1)"
 cp "$RELEASE_NYDUS_TGZ" "${CURL_ASSET_DIR}/nydus-static.tgz"
 cp "$RELEASE_NYDUS_TGZ" "${CURL_ASSET_DIR}/nydus-static-v2.4.5-linux-amd64.tgz"
 printf '#!/bin/sh\nexit 0\n' > "${CURL_ASSET_DIR}/nydus-snapshotter-linux-amd64"
+RELEASE_SNAP_SHA="$(sha256sum "${CURL_ASSET_DIR}/nydus-snapshotter-linux-amd64" | cut -d' ' -f1)"
 
 ROOT_RELEASE="${WORK}/root-release"
 P2P_ROOT="$ROOT_RELEASE" SKIP_MODULES=1 SKIP_SYSTEMD=1 SKIP_PREFLIGHT=1 CONTAINERD_MAJOR=1 \
   NYDUS_SNAPSHOTTER_VERSION=v9.9.9 NYDUS_SNAPSHOTTER_REPO=example-org/example-repo \
-  NYDUS_GITHUB_SHA256="$RELEASE_NYDUS_SHA" P2P_ASSETS=0 \
+  NYDUS_GITHUB_SHA256="$RELEASE_NYDUS_SHA" NYDUS_SNAPSHOTTER_SHA256="$RELEASE_SNAP_SHA" P2P_ASSETS=0 \
   PATH="${FAKE_BIN}:${PATH}" CURL_LOG="$CURL_LOG" CURL_ASSET_DIR="$CURL_ASSET_DIR" \
   "$RUNNER" "$INSTALL" "$CFG" > "${WORK}/release.log" 2>&1
 
@@ -663,13 +674,13 @@ if [ "$(stat -c '%a' "${ROOT_RELEASE}/usr/local/bin/containerd-nydus-grpc")" != 
   echo "p2p-static self-test: snapshotter is not mode 0755" >&2
   exit 1
 fi
-assert_contains "$CURL_LOG" 'https://github.com/example-org/example-repo/releases/download/v9.9.9/nydus-snapshotter-linux-amd64.sha256'
+assert_contains "$CURL_LOG" 'http://static.example.test/snapshotter/v9.9.9/amd64/nydus-snapshotter-linux-amd64'
 assert_contains "${WORK}/release.log" 'nydus tarball: using static store'
 
 ROOT_NO_ASSET="${WORK}/root-no-asset"
 P2P_ROOT="$ROOT_NO_ASSET" SKIP_MODULES=1 SKIP_SYSTEMD=1 SKIP_PREFLIGHT=1 CONTAINERD_MAJOR=1 \
   NYDUS_SNAPSHOTTER_VERSION=v9.9.9 NYDUS_SNAPSHOTTER_REPO=example-org/example-repo \
-  NYDUS_GITHUB_SHA256="$RELEASE_NYDUS_SHA" P2P_ASSETS=0 \
+  NYDUS_GITHUB_SHA256="$RELEASE_NYDUS_SHA" NYDUS_SNAPSHOTTER_SHA256="$RELEASE_SNAP_SHA" P2P_ASSETS=0 \
   FAKE_CURL_FAIL_ASSET=nydus-snapshotter-linux-amd64 \
   PATH="${FAKE_BIN}:${PATH}" CURL_LOG="${WORK}/curl-fail.log" CURL_ASSET_DIR="$CURL_ASSET_DIR" \
   "$RUNNER" "$INSTALL" "$CFG" > "${WORK}/no-asset.log" 2>&1
@@ -721,6 +732,7 @@ case "$url" in
 esac
 FAKEDFGET
 chmod 0755 "${FAKE_BIN}/dfget"
+FAKE_SNAPSHOTTER_SHA="$(sha256sum "${CURL_ASSET_DIR}/nydus-snapshotter-linux-amd64" | cut -d' ' -f1)"
 
 DFGET_LOG="${WORK}/dfget.log"
 p2p_run() {
@@ -729,7 +741,8 @@ p2p_run() {
   : > "$DFGET_LOG"
   env P2P_ROOT="$root" SKIP_MODULES=1 SKIP_SYSTEMD=1 SKIP_PREFLIGHT=1 CONTAINERD_MAJOR=1 \
     NYDUS_SNAPSHOTTER_VERSION=v9.9.9 NYDUS_SNAPSHOTTER_REPO=example-org/example-repo \
-    NYDUS_GITHUB_SHA256="$RELEASE_NYDUS_SHA" P2P_ASSETS="$p2p" FAKE_DFGET_MODE="$mode" \
+    NYDUS_GITHUB_SHA256="$RELEASE_NYDUS_SHA" NYDUS_SNAPSHOTTER_SHA256="$FAKE_SNAPSHOTTER_SHA" \
+    P2P_ASSETS="$p2p" FAKE_DFGET_MODE="$mode" \
     DFGET_BIN="${FAKE_BIN}/dfget" DFGET_LOG="$DFGET_LOG" \
     FAKE_NYDUS_TARBALL="$RELEASE_NYDUS_TGZ" FAKE_SNAPSHOTTER="${CURL_ASSET_DIR}/nydus-snapshotter-linux-amd64" \
     PATH="${FAKE_BIN}:${PATH}" CURL_LOG="$CURL_LOG" CURL_ASSET_DIR="$CURL_ASSET_DIR" \
@@ -789,7 +802,7 @@ if [ -s "$DFGET_LOG" ]; then
 fi
 
 ROOT_BAD_DIGEST="${WORK}/root-bad-digest"
-if p2p_run "$ROOT_BAD_DIGEST" "$CFG" 0 ok FAKE_CURL_BAD_SHA256=1 > "${WORK}/bad-digest.log" 2>&1; then
+if p2p_run "$ROOT_BAD_DIGEST" "$CFG" 0 ok NYDUS_SNAPSHOTTER_SHA256=deadbeef > "${WORK}/bad-digest.log" 2>&1; then
   echo "p2p-static self-test: checksum mismatch did not fail the installer" >&2
   exit 1
 fi
@@ -798,6 +811,77 @@ if [ -f "${ROOT_BAD_DIGEST}/usr/local/bin/containerd-nydus-grpc" ]; then
   echo "p2p-static self-test: snapshotter was installed after a checksum mismatch" >&2
   exit 1
 fi
+
+# --- architecture selection -------------------------------------------------
+make_uname() {
+  local dir="$1" machine="$2"
+  mkdir -p "$dir"
+  printf '#!/bin/sh\necho %s\n' "$machine" > "$dir/uname"
+  chmod 0755 "$dir/uname"
+}
+
+ARCH_AMD_BIN="${WORK}/arch-amd64-bin"
+ARCH_ARM_BIN="${WORK}/arch-arm64-bin"
+ARCH_V7_BIN="${WORK}/arch-armv7-bin"
+make_uname "$ARCH_AMD_BIN" x86_64
+make_uname "$ARCH_ARM_BIN" aarch64
+make_uname "$ARCH_V7_BIN" armv7l
+
+ROOT_ARCH_AMD="${WORK}/root-arch-amd64"
+ARCH_AMD_CURL="${WORK}/curl-arch-amd64.log"
+: > "$ARCH_AMD_CURL"
+env TARGET_ARCH= P2P_ROOT="$ROOT_ARCH_AMD" SKIP_MODULES=1 SKIP_SYSTEMD=1 SKIP_PREFLIGHT=1 CONTAINERD_MAJOR=1 \
+  NYDUS_ALLOW_GITHUB=0 P2P_ASSETS=0 FAKE_CURL_FAIL_STATIC_ASSETS=nydus-static.tgz \
+  PATH="$ARCH_AMD_BIN:$FAKE_BIN:$PATH" CURL_LOG="$ARCH_AMD_CURL" CURL_ASSET_DIR="$CURL_ASSET_DIR" \
+  "$RUNNER" "$INSTALL" "$CFG" > "${WORK}/arch-amd64.log" 2>&1
+assert_contains "${WORK}/arch-amd64.log" 'pins: client v1.5.14 ba080e62f1626ab2fc2a5a0629a5cd912cc15099508820403108abbe2f75b1f7'
+assert_contains "${WORK}/arch-amd64.log" 'nydus v2.4.5 1ad7b793a1996577e462b0bf5c1a22e4450b9c04f7e9e99d4b274ccc92f19072'
+assert_contains "${WORK}/arch-amd64.log" 'snapshotter v0.16.0-p2p.2 8f4f68f306ba391cd294cdcb273267732cb82f4ae466564013204198dd003b0b'
+assert_contains "$ARCH_AMD_CURL" 'http://static.example.test/client/v1.5.14/amd64/dfdaemon'
+assert_contains "$ARCH_AMD_CURL" 'http://static.example.test/nydus/v2.4.5/amd64/nydus-static.tgz'
+
+# Arm64 pin selection without downloads.
+ROOT_ARCH_ARM_PINS="${WORK}/root-arch-arm64-pins"
+env TARGET_ARCH= P2P_ROOT="$ROOT_ARCH_ARM_PINS" SKIP_DOWNLOAD=1 SKIP_MODULES=1 SKIP_SYSTEMD=1 SKIP_PREFLIGHT=1 CONTAINERD_MAJOR=1 \
+  PATH="$ARCH_ARM_BIN:$FAKE_BIN:$PATH" \
+  "$RUNNER" "$INSTALL" "$CFG" > "${WORK}/arch-arm64-pins.log" 2>&1
+assert_contains "${WORK}/arch-arm64-pins.log" 'host=arm64 client=aarch64 nydus=arm64 snapshotter=arm64'
+assert_contains "${WORK}/arch-arm64-pins.log" 'pins: client v1.5.14 370ff792a1c6957a7244b770d6cd12792668e326b2282b3017fea2cbfa3510af'
+assert_contains "${WORK}/arch-arm64-pins.log" 'nydus v2.4.5 85925af702d79fc3a8b9d501a5267ddc9f81449ff9fe94841845eb98eda84593'
+assert_contains "${WORK}/arch-arm64-pins.log" 'snapshotter v0.16.0-p2p.2 unavailable'
+
+# Arm64 URL selection plus the explicit missing-snapshotter fallback. The
+# nydus checksum is overridden only to accept the tiny test tarball.
+ROOT_ARCH_ARM="${WORK}/root-arch-arm64"
+ARCH_ARM_CURL="${WORK}/curl-arch-arm64.log"
+: > "$ARCH_ARM_CURL"
+env TARGET_ARCH= P2P_ROOT="$ROOT_ARCH_ARM" SKIP_MODULES=1 SKIP_SYSTEMD=1 SKIP_PREFLIGHT=1 CONTAINERD_MAJOR=1 \
+  NYDUS_GITHUB_SHA256="$RELEASE_NYDUS_SHA" NYDUS_ALLOW_GITHUB=0 P2P_ASSETS=0 \
+  PATH="$ARCH_ARM_BIN:$FAKE_BIN:$PATH" CURL_LOG="$ARCH_ARM_CURL" CURL_ASSET_DIR="$CURL_ASSET_DIR" \
+  "$RUNNER" "$INSTALL" "$CFG" > "${WORK}/arch-arm64.log" 2>&1
+assert_contains "${WORK}/arch-arm64.log" 'no pinned nydus-snapshotter asset for arm64'
+assert_contains "$ARCH_ARM_CURL" 'http://static.example.test/client/v1.5.14/arm64/dfdaemon'
+assert_contains "$ARCH_ARM_CURL" 'http://static.example.test/nydus/v2.4.5/arm64/nydus-static.tgz'
+if grep -q '/amd64/' "$ARCH_ARM_CURL"; then
+  echo "p2p-static self-test: arm64 run fetched an amd64 asset" >&2
+  exit 1
+fi
+
+ROOT_ARCH_V7="${WORK}/root-arch-armv7"
+if env TARGET_ARCH= P2P_ROOT="$ROOT_ARCH_V7" SKIP_DOWNLOAD=1 SKIP_MODULES=1 SKIP_SYSTEMD=1 SKIP_PREFLIGHT=1 CONTAINERD_MAJOR=1 \
+  PATH="$ARCH_V7_BIN:$FAKE_BIN:$PATH" \
+  "$RUNNER" "$INSTALL" "$CFG" > "${WORK}/arch-armv7.log" 2>&1; then
+  echo "p2p-static self-test: armv7l architecture did not fail" >&2
+  exit 1
+fi
+assert_contains "${WORK}/arch-armv7.log" 'unsupported architecture armv7l'
+assert_contains "${WORK}/arch-armv7.log" 'no armv7/armhf Dragonfly client or nydus assets'
+
+ROOT_ARCH_OVERRIDE="${WORK}/root-arch-override"
+env TARGET_ARCH=arm64 P2P_ROOT="$ROOT_ARCH_OVERRIDE" SKIP_DOWNLOAD=1 SKIP_MODULES=1 SKIP_SYSTEMD=1 SKIP_PREFLIGHT=1 CONTAINERD_MAJOR=1 \
+  PATH="$ARCH_AMD_BIN:$FAKE_BIN:$PATH" \
+  "$RUNNER" "$INSTALL" "$CFG" > "${WORK}/arch-override.log" 2>&1
+assert_contains "${WORK}/arch-override.log" 'target arm64: host=arm64 client=aarch64 nydus=arm64 snapshotter=arm64'
 
 MODPROBE_OK="${WORK}/modprobe-ok"
 SYSTEMCTL_FAKE="${WORK}/systemctl"

@@ -16,11 +16,14 @@ func TestBuildInstallEnvCarriesDistroAndSchedulerIPs(t *testing.T) {
 		corev1.TLSPrivateKeyKey: []byte("key"),
 	}}
 	cfg := InstallConfig{
-		ManagerGRPCDomain: "manager.example.com",
-		ManagerGRPCPort:   443,
-		StaticURL:         "https://static.example.com",
-		SchedulerDomain:   "example.com",
-		ClusterIDFallback: "c-m-fallback",
+		ManagerGRPCDomain:  "manager.example.com",
+		ManagerGRPCPort:    443,
+		StaticURL:          "https://static.example.com",
+		SchedulerDomain:    "example.com",
+		ClusterIDFallback:  "c-m-fallback",
+		ClientVersion:      "v1.5.14",
+		NydusVersion:       "v2.4.5",
+		SnapshotterVersion: "v0.16.0-p2p.2",
 	}
 	for _, tc := range []struct {
 		version string
@@ -46,6 +49,9 @@ func TestBuildInstallEnvCarriesDistroAndSchedulerIPs(t *testing.T) {
 			"P2P_DISTRO=" + tc.distro,
 			"SCHEDULER_IPS=203.0.113.10,203.0.113.11",
 			"SCHEDULER_HOST=d7y-scheduler.c-m-test.example.com",
+			"CLIENT_VERSION=v1.5.14",
+			"NYDUS_VERSION=v2.4.5",
+			"NYDUS_SNAPSHOTTER_VERSION=v0.16.0-p2p.2",
 		} {
 			if !strings.Contains(env, want) {
 				t.Errorf("BuildInstallEnv(%q) missing %q: %q", tc.version, want, env)

@@ -122,14 +122,17 @@ func run() error {
 		VPAEnabled:               vpaEnabled,
 	})
 	machinebootstrap.Register(ctx, secretController, machineController, clusterController, eventController, machinebootstrap.Options{
-		OperatorNamespace: cfg.Namespace,
-		MTLSSecretName:    cfg.MTLSSecretName,
-		ManagerGRPCDomain: cfg.ManagerGRPCDomain,
-		ManagerGRPCPort:   cfg.ManagerGRPCPort,
-		StaticURL:         cfg.NginxStaticURL,
-		NydusMirrorURL:    cfg.NydusMirrorURL,
-		SchedulerDomain:   cfg.P2PDomain,
-		ClusterIDFallback: cfg.ClusterIDFallback,
+		OperatorNamespace:  cfg.Namespace,
+		MTLSSecretName:     cfg.MTLSSecretName,
+		ManagerGRPCDomain:  cfg.ManagerGRPCDomain,
+		ManagerGRPCPort:    cfg.ManagerGRPCPort,
+		StaticURL:          cfg.NginxStaticURL,
+		NydusMirrorURL:     cfg.NydusMirrorURL,
+		SchedulerDomain:    cfg.P2PDomain,
+		ClusterIDFallback:  cfg.ClusterIDFallback,
+		ClientVersion:      cfg.ClientVersion,
+		NydusVersion:       cfg.NydusVersion,
+		SnapshotterVersion: cfg.SnapshotterVersion,
 	})
 
 	if err := start.All(ctx, 1, coreFactory, provisioningFactory, capiFactory); err != nil {

@@ -39,13 +39,21 @@ annotation by the time their bootstrap Secret is rendered.
 
 ## P2P bootstrap asset delivery
 
-The first delivery is deliberately direct. `p2p-install.sh` installs both
-`dfdaemon` and `dfget` from the static store (`/bin/dfdaemon`, `/bin/dfget`) or
-the pinned `dragonflyoss/client` `v1.5.14` GNU tarball
-(`dragonfly-client-v1.5.14-x86_64-unknown-linux-gnu.tar.gz`, SHA-256
-`ba080e62…b1f7`), verifying its SHA-256. Its `dfdaemon` is the 42.1 MB GNU build
-(SHA-256 `e0d03d4759…bf85`) used by the host; the musl tarball is a different
-binary even though both report build `1.5.14 (8887c145f)`. Using
+The first delivery is deliberately direct. `p2p-install.sh` detects the node
+architecture like RKE2/k3s: `uname -m` `x86_64`/`amd64` maps to the Rust
+`x86_64` target and nydus `amd64`; `aarch64`/`arm64` maps to `aarch64` and
+nydus `arm64`; `TARGET_ARCH` overrides detection. `armv7l`/`armhf`/`armv6l`
+fail clearly because no client/nydus armv7 assets exist. It then installs both
+`dfdaemon` and `dfget` from the static store
+(`/client/<version>/<arch>/`, then legacy `/bin/`) or the pinned
+`dragonflyoss/client` `v1.5.14` GNU tarball for the detected arch, verifying
+its SHA-256. The amd64 GNU tarball is
+`dragonfly-client-v1.5.14-x86_64-unknown-linux-gnu.tar.gz`, SHA-256
+`ba080e62…b1f7`; its `dfdaemon` is the 42.1 MB GNU build (SHA-256
+`e0d03d4759…bf85`). The arm64 GNU tarball is
+`dragonfly-client-v1.5.14-aarch64-unknown-linux-gnu.tar.gz`, SHA-256
+`370ff792…10af`. Both GNU and musl binaries report `1.5.14 (8887c145f)`, so the
+artifact hash is the discriminator. Using
 dfget for dfdaemon itself would be the chicken-and-egg case and is never done.
 
 After that, if `SCHEDULER_IPS` is non-empty, `/usr/local/bin/dfget` exists,
@@ -57,14 +65,22 @@ service and switches the remaining downloads to direct.
 `dfget --scheduling-policy always --endpoint /var/run/dragonfly/dfdaemon.sock
 --timeout 10m [--digest sha256:<sum>] <url> -O <tmp>` fetches the pinned nydus
 tarball (`nydus-static-v2.4.5-linux-amd64.tgz`) and the patched snapshotter.
-The nydus order is P2P, static-store tarball
-(`/nydus/<version>/nydus-static.tgz`), GitHub release. The snapshotter order is
-checksum fetch, P2P with digest, static store, GitHub release. Every nydus
-tarball and snapshotter is SHA-256 verified; a mismatch is discarded and never
-installed. A final direct checksum mismatch is fatal.
+The static-store and P2P URLs carry version+arch:
+`/nydus/<version>/<arch>/nydus-static.tgz` and
+`/snapshotter/<version>/<arch>/<asset>`. The nydus order is P2P, static-store
+tarball, GitHub release; the snapshotter order is the pinned per-arch checksum,
+P2P with digest, static store, GitHub release. Every nydus tarball and
+snapshotter is SHA-256 verified; a mismatch is discarded and never installed.
+A final direct checksum mismatch is fatal. The snapshotter fork publishes only
+an amd64 asset, so arm64 reports the missing asset and takes the fail-open
+path instead of installing an amd64 snapshotter.
 
-`P2P_ASSETS=0` disables the early dfdaemon/P2P path entirely; the variable is a
-plain env entry, so it can be added to the bootstrap payload for rollback.
+The client, nydus, and snapshotter versions come from the bootstrap payload
+(`CLIENT_VERSION`, `NYDUS_VERSION`, `NYDUS_SNAPSHOTTER_VERSION`; defaults
+`v1.5.14`, `v2.4.5`, `v0.16.0-p2p.2`). The p2p-static chart values must be kept
+in sync manually. `P2P_ASSETS=0` disables the early dfdaemon/P2P path entirely;
+the variable is a plain env entry, so it can be added to the bootstrap payload
+for rollback.
 Concurrent boots are safe: each node downloads to its own temp directory and
 installs atomically, while the scheduler/dfdaemon deduplicate P2P blobs; there
 is no shared host lock. The host dfdaemon bootstrap switch still disables the

@@ -1,16 +1,19 @@
 #!/bin/sh
 # Populate the p2p-static volume from pinned release artifacts.
 #
-# The nginx container serves this volume read-only. Nydus assets are always
-# written atomically to both the versioned (/nydus/<version>/) and legacy
-# (/bin/) layouts so old and new host scripts find them. An existing
-# /bin/dfdaemon is preserved: the live volume already carries it, and the chart
-# only fills it in when the volume is fresh.
+# Versioned/architecture layouts are authoritative:
+#   /client/<version>/<arch>/{dfdaemon,dfget}
+#   /nydus/<version>/<arch>/{nydusd,nydus-image,nydus-overlayfs,nydus-static.tgz}
+#   /snapshotter/<version>/<arch>/<asset>
+# The legacy /bin and /nydus/<version> compatibility paths are filled from the
+# node architecture only when absent. The chart uses emptyDir, never a PVC.
 set -eu
 
 static_dir="${STATIC_DIR:-/usr/share/nginx/static}"
 selector_src="${SELECTOR_SRC:-/scripts/nydus-fs-select.sh}"
+plan="${POPULATE_PLAN:-/scripts/populate-plan.txt}"
 retries="${DOWNLOAD_RETRIES:-5}"
+nydus_binaries="${NYDUS_BINARIES:-nydusd nydus-image nydus-overlayfs}"
 tmp="$(mktemp -d)"
 trap 'rm -rf "$tmp"' EXIT
 
@@ -51,66 +54,157 @@ install_file() {
   install_file_mode "$1" "$2" 0755
 }
 
-need_nydus=0
-for binary in $NYDUS_BINARIES; do
-  if [ ! -s "$static_dir/nydus/$NYDUS_VERSION/$binary" ] || [ ! -s "$static_dir/bin/$binary" ]; then
-    need_nydus=1
-  fi
-done
-if [ ! -s "$static_dir/nydus/$NYDUS_VERSION/nydus-static.tgz" ]; then
-  need_nydus=1
-fi
+node_arch=""
+case "${TARGET_ARCH:-$(uname -m)}" in
+  x86_64|amd64) node_arch=amd64 ;;
+  aarch64|arm64) node_arch=arm64 ;;
+  armv7l|armhf|armv6l)
+    log "unsupported node architecture ${TARGET_ARCH:-$(uname -m)}: populating versioned layouts only"
+    ;;
+  *)
+    log "unsupported node architecture ${TARGET_ARCH:-$(uname -m)}: populating versioned layouts only"
+    ;;
+esac
 
-if [ "$need_nydus" = 1 ]; then
-  fetch "$NYDUS_TARBALL_URL" "$tmp/nydus.tgz"
-  verify "$tmp/nydus.tgz" "$NYDUS_TARBALL_SHA256" "nydus $NYDUS_VERSION"
-  mkdir -p "$tmp/nydus"
-  tar -xzf "$tmp/nydus.tgz" -C "$tmp/nydus" \
-    || die "invalid nydus tarball: ${NYDUS_TARBALL_URL}"
-  for binary in $NYDUS_BINARIES; do
-    src="$tmp/nydus/$NYDUS_TARBALL_ROOT/$binary"
-    [ -s "$src" ] || die "nydus tarball is missing ${binary}"
-    install_file "$src" "$static_dir/nydus/$NYDUS_VERSION/$binary"
-    install_file "$src" "$static_dir/bin/$binary"
-  done
-  # Mirror the pinned tarball so the host installer can fetch it through the
-  # static store when P2P is unavailable.
-  install_file_mode "$tmp/nydus.tgz" "$static_dir/nydus/$NYDUS_VERSION/nydus-static.tgz" 0644
-else
-  log "nydus $NYDUS_VERSION assets already present"
-fi
+[ -s "$plan" ] || die "missing populate plan: ${plan}"
 
-if [ "${SELECTOR_ENABLED:-1}" = "1" ]; then
-  [ -s "$selector_src" ] || die "missing nydus-fs-select script: ${selector_src}"
-  install_file "$selector_src" "$static_dir/nydus/$NYDUS_VERSION/nydus-fs-select"
-  install_file "$selector_src" "$static_dir/bin/nydus-fs-select"
-fi
+compat_client=""
+nydus_version=""
+snapshotter_version=""
+snapshotter_asset=""
+snapshotter_arch=""
 
-if [ "${DFDAEMON_ENABLED:-1}" = "1" ]; then
-  need_client=0
-  for binary in "$DFDAEMON_BINARY" "${DFGET_BINARY:-dfget}"; do
-    if [ ! -s "$static_dir/bin/$binary" ]; then
-      need_client=1
-    fi
-  done
-  if [ "$need_client" = 0 ]; then
-    log "preserving existing ${static_dir}/bin/dfdaemon and ${static_dir}/bin/${DFGET_BINARY:-dfget}"
-  else
-    fetch "$DFDAEMON_TARBALL_URL" "$tmp/client.tgz"
-    verify "$tmp/client.tgz" "$DFDAEMON_TARBALL_SHA256" "dragonfly-client $DFDAEMON_VERSION"
-    mkdir -p "$tmp/client"
-    tar -xzf "$tmp/client.tgz" -C "$tmp/client" \
-      || die "invalid Dragonfly client tarball: ${DFDAEMON_TARBALL_URL}"
-    for binary in "$DFDAEMON_BINARY" "${DFGET_BINARY:-dfget}"; do
+while IFS='|' read -r kind version arch url sha root; do
+  [ -n "${kind:-}" ] || continue
+  case "$kind" in
+    client)
+      [ -n "$version" ] && [ -n "$arch" ] || die "invalid client plan line: ${kind}|${version}|${arch}"
+      dest="$static_dir/client/$version/$arch"
+      if [ -s "$dest/dfdaemon" ] && [ -s "$dest/dfget" ]; then
+        log "client $version/$arch already present"
+        continue
+      fi
+      fetch "$url" "$tmp/client.tgz"
+      verify "$tmp/client.tgz" "$sha" "client $version/$arch"
+      extract="$tmp/client-$version-$arch"
+      mkdir -p "$extract"
+      tar -xzf "$tmp/client.tgz" -C "$extract" \
+        || die "invalid client tarball: ${url}"
+      for binary in dfdaemon dfget; do
+        if [ -s "$dest/$binary" ]; then
+          log "preserving existing $dest/$binary"
+          continue
+        fi
+        src="$extract/$root/$binary"
+        [ -s "$src" ] || die "client tarball is missing ${binary} for $version/$arch"
+        install_file "$src" "$dest/$binary"
+      done
+      ;;
+    compat-client)
+      compat_client="$version"
+      ;;
+    nydus)
+      [ -n "$version" ] && [ -n "$arch" ] || die "invalid nydus plan line: ${kind}|${version}|${arch}"
+      nydus_version="$version"
+      dest="$static_dir/nydus/$version/$arch"
+      need=0
+      for binary in $nydus_binaries; do
+        [ -s "$dest/$binary" ] || need=1
+      done
+      [ -s "$dest/nydus-static.tgz" ] || need=1
+      if [ "$need" = 1 ]; then
+        fetch "$url" "$tmp/nydus-$version-$arch.tgz"
+        verify "$tmp/nydus-$version-$arch.tgz" "$sha" "nydus $version/$arch"
+        extract="$tmp/nydus-extract-$version-$arch"
+        mkdir -p "$extract"
+        tar -xzf "$tmp/nydus-$version-$arch.tgz" -C "$extract" \
+          || die "invalid nydus tarball: ${url}"
+        for binary in $nydus_binaries; do
+          if [ -s "$dest/$binary" ]; then
+            log "preserving existing $dest/$binary"
+            continue
+          fi
+          src="$extract/$root/$binary"
+          [ -s "$src" ] || die "nydus tarball is missing ${binary} for $version/$arch"
+          install_file "$src" "$dest/$binary"
+        done
+        install_file_mode "$tmp/nydus-$version-$arch.tgz" "$dest/nydus-static.tgz" 0644
+      else
+        log "nydus $version/$arch already present"
+      fi
+      ;;
+    snapshotter)
+      [ -n "$version" ] && [ -n "$arch" ] && [ -n "$root" ] || die "invalid snapshotter plan line: ${kind}|${version}|${arch}"
+      dest="$static_dir/snapshotter/$version/$arch"
+      if [ -s "$dest/$root" ]; then
+        log "snapshotter $version/$arch/$root already present"
+      else
+        fetch "$url" "$tmp/snapshotter-$version-$arch"
+        verify "$tmp/snapshotter-$version-$arch" "$sha" "snapshotter $version/$arch/$root"
+        install_file "$tmp/snapshotter-$version-$arch" "$dest/$root"
+      fi
+      if [ "$arch" = "$node_arch" ]; then
+        snapshotter_version="$version"
+        snapshotter_asset="$root"
+        snapshotter_arch="$arch"
+      fi
+      ;;
+    *)
+      die "unknown populate plan kind: ${kind}"
+      ;;
+  esac
+done < "$plan"
+
+# Legacy compatibility layouts. Never overwrite an existing /bin binary.
+if [ -n "$node_arch" ]; then
+  if [ -n "$compat_client" ]; then
+    for binary in dfdaemon dfget; do
       if [ -s "$static_dir/bin/$binary" ]; then
         log "preserving existing ${static_dir}/bin/$binary"
         continue
       fi
-      src="$tmp/client/$DFDAEMON_TARBALL_ROOT/$binary"
-      [ -s "$src" ] || die "Dragonfly client tarball is missing ${binary}"
-      install_file "$src" "$static_dir/bin/$binary"
+      src="$static_dir/client/$compat_client/$node_arch/$binary"
+      if [ -s "$src" ]; then
+        install_file "$src" "$static_dir/bin/$binary"
+      else
+        log "compat client $compat_client/$node_arch/$binary is not populated"
+      fi
     done
+  fi
+
+  if [ -n "$nydus_version" ]; then
+    for binary in $nydus_binaries; do
+      src="$static_dir/nydus/$nydus_version/$node_arch/$binary"
+      if [ -s "$static_dir/bin/$binary" ]; then
+        log "preserving existing ${static_dir}/bin/$binary"
+      elif [ -s "$src" ]; then
+        install_file "$src" "$static_dir/bin/$binary"
+      fi
+      if [ ! -s "$static_dir/nydus/$nydus_version/$binary" ] && [ -s "$src" ]; then
+        install_file "$src" "$static_dir/nydus/$nydus_version/$binary"
+      fi
+    done
+    if [ ! -s "$static_dir/nydus/$nydus_version/nydus-static.tgz" ]; then
+      src="$static_dir/nydus/$nydus_version/$node_arch/nydus-static.tgz"
+      [ -s "$src" ] && install_file_mode "$src" "$static_dir/nydus/$nydus_version/nydus-static.tgz" 0644
+    fi
+  fi
+
+  if [ "${SELECTOR_ENABLED:-1}" = "1" ]; then
+    [ -s "$selector_src" ] || die "missing nydus-fs-select script: ${selector_src}"
+    if [ -n "$nydus_version" ]; then
+      install_file "$selector_src" "$static_dir/nydus/$nydus_version/$node_arch/nydus-fs-select"
+      install_file "$selector_src" "$static_dir/nydus/$nydus_version/nydus-fs-select"
+    fi
+    install_file "$selector_src" "$static_dir/bin/nydus-fs-select"
+  fi
+
+  if [ -n "$snapshotter_version" ] && [ -n "$snapshotter_asset" ]; then
+    if [ ! -s "$static_dir/bin/$snapshotter_asset" ]; then
+      src="$static_dir/snapshotter/$snapshotter_version/$snapshotter_arch/$snapshotter_asset"
+      [ -s "$src" ] && install_file "$src" "$static_dir/bin/$snapshotter_asset"
+    fi
   fi
 fi
 
-log "static assets ready in ${static_dir}"
+log "static assets ready in ${static_dir} for node architecture ${node_arch:-unknown}"

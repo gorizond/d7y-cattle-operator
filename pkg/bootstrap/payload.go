@@ -17,6 +17,9 @@ type Payload struct {
 	NydusMirrorURL     string
 	SchedulerHost      string
 	SchedulerClusterID string
+	ClientVersion      string
+	NydusVersion       string
+	SnapshotterVersion string
 	CACert             []byte
 	ClientCert         []byte
 	ClientKey          []byte
@@ -91,6 +94,15 @@ func Env(p Payload) (string, error) {
 	}
 	fmt.Fprintf(&builder, "SCHEDULER_HOST=%s\n", host)
 	fmt.Fprintf(&builder, "SCHEDULER_CLUSTER_ID=%d\n", id)
+	if version := strings.TrimSpace(p.ClientVersion); version != "" {
+		fmt.Fprintf(&builder, "CLIENT_VERSION=%s\n", version)
+	}
+	if version := strings.TrimSpace(p.NydusVersion); version != "" {
+		fmt.Fprintf(&builder, "NYDUS_VERSION=%s\n", version)
+	}
+	if version := strings.TrimSpace(p.SnapshotterVersion); version != "" {
+		fmt.Fprintf(&builder, "NYDUS_SNAPSHOTTER_VERSION=%s\n", version)
+	}
 	fmt.Fprintf(&builder, "CA_CRT_B64=%s\n", base64.StdEncoding.EncodeToString(p.CACert))
 	fmt.Fprintf(&builder, "CLIENT_CRT_B64=%s\n", base64.StdEncoding.EncodeToString(p.ClientCert))
 	fmt.Fprintf(&builder, "CLIENT_KEY_B64=%s\n", base64.StdEncoding.EncodeToString(p.ClientKey))

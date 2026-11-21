@@ -42,15 +42,18 @@ const (
 
 // Options carries the operator configuration used to build the p2p line.
 type Options struct {
-	OperatorNamespace string
-	MTLSSecretName    string
-	ManagerGRPCDomain string
-	ManagerGRPCPort   int
-	StaticURL         string
-	SmartProxyURL     string
-	NydusMirrorURL    string
-	SchedulerDomain   string
-	ClusterIDFallback string
+	OperatorNamespace  string
+	MTLSSecretName     string
+	ManagerGRPCDomain  string
+	ManagerGRPCPort    int
+	StaticURL          string
+	SmartProxyURL      string
+	NydusMirrorURL     string
+	SchedulerDomain    string
+	ClusterIDFallback  string
+	ClientVersion      string
+	NydusVersion       string
+	SnapshotterVersion string
 }
 
 type secretUpdater interface {
@@ -246,18 +249,22 @@ func (c *Controller) reconcile(key string, secret *corev1.Secret) (*corev1.Secre
 		return secret, err
 	}
 	clientRevision := pki.SecretRevision(mtls.Data)
-	inputsRevision := bootstrapInputsFingerprint(cluster, clientRevision)
+	inputsRevision := bootstrapInputsFingerprint(cluster, clientRevision,
+		c.opts.ClientVersion, c.opts.NydusVersion, c.opts.SnapshotterVersion)
 	if strings.Contains(value, bootstrap.Marker) && secret.Annotations[bootstrap.BootstrapInputsAnnotation] == inputsRevision {
 		return secret, nil
 	}
 	env, err := bootstrap.BuildInstallEnv(cluster, mtls, "", bootstrap.InstallConfig{
-		ManagerGRPCDomain: c.opts.ManagerGRPCDomain,
-		ManagerGRPCPort:   c.opts.ManagerGRPCPort,
-		StaticURL:         c.opts.StaticURL,
-		SmartProxyURL:     c.opts.SmartProxyURL,
-		NydusMirrorURL:    c.opts.NydusMirrorURL,
-		SchedulerDomain:   c.opts.SchedulerDomain,
-		ClusterIDFallback: c.opts.ClusterIDFallback,
+		ManagerGRPCDomain:  c.opts.ManagerGRPCDomain,
+		ManagerGRPCPort:    c.opts.ManagerGRPCPort,
+		StaticURL:          c.opts.StaticURL,
+		SmartProxyURL:      c.opts.SmartProxyURL,
+		NydusMirrorURL:     c.opts.NydusMirrorURL,
+		SchedulerDomain:    c.opts.SchedulerDomain,
+		ClusterIDFallback:  c.opts.ClusterIDFallback,
+		ClientVersion:      c.opts.ClientVersion,
+		NydusVersion:       c.opts.NydusVersion,
+		SnapshotterVersion: c.opts.SnapshotterVersion,
 	})
 	if err != nil {
 		c.event(machine, cluster, secret, corev1.EventTypeWarning, "PayloadBuildFailed", err.Error())
@@ -294,14 +301,15 @@ func (c *Controller) reconcile(key string, secret *corev1.Secret) (*corev1.Secre
 	return result, nil
 }
 
-func bootstrapInputsFingerprint(cluster *provv1.Cluster, clientRevision string) string {
+func bootstrapInputsFingerprint(cluster *provv1.Cluster, clientRevision, clientVersion, nydusVersion, snapshotterVersion string) string {
 	ips := ""
 	schedulerID := ""
 	if cluster != nil {
 		ips = strings.TrimSpace(cluster.Annotations[bootstrap.SchedulerIPsAnnotation])
 		schedulerID = strings.TrimSpace(cluster.Annotations[bootstrap.SchedulerClusterIDAnnotation])
 	}
-	sum := sha256.Sum256([]byte(clientRevision + "\x00" + ips + "\x00" + schedulerID + "\x00" + bootstrap.Distro(cluster)))
+	sum := sha256.Sum256([]byte(clientRevision + "\x00" + ips + "\x00" + schedulerID + "\x00" + bootstrap.Distro(cluster) +
+		"\x00" + clientVersion + "\x00" + nydusVersion + "\x00" + snapshotterVersion))
 	return hex.EncodeToString(sum[:])
 }
 

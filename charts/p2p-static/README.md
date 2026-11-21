@@ -19,18 +19,32 @@ helm install p2p-static charts/p2p-static \
 that survives for the pod lifetime; an existing claim survives pod restarts.
 `static.sizeLimit` optionally caps the `emptyDir`.
 
-The static volume is self-populating: a `populate-static` init container
-downloads the pinned nydus v2.4.5 static tarball, verifies its SHA-256, and
-writes `nydusd`, `nydus-image`, `nydus-overlayfs`, and `nydus-fs-select` to both
-`/nydus/<version>/` and `/bin/`. It also mirrors the verified tarball at
-`/nydus/<version>/nydus-static.tgz` for the host installer's static-store
-fallback. From the pinned dragonfly-client v1.5.14 tarball it fills
-`/bin/dfdaemon` and `/bin/dfget` only when each file is absent; an existing
-`dfdaemon` (the live poligon volume) is never overwritten. Downloads retry with
-backoff and fail the init container instead of starting nginx with incomplete
-assets. All artifact URLs, versions, checksums, and the init image are
+The static volume is self-populating: a `populate-static` init container reads
+`static.populate.client.versions`, `static.populate.nydus.arches`, and
+`static.populate.snapshotter.arches`, verifies every SHA-256, and writes:
+
+- `/client/<version>/<arch>/{dfdaemon,dfget}`
+- `/nydus/<version>/<arch>/{nydusd,nydus-image,nydus-overlayfs,nydus-static.tgz}`
+- `/snapshotter/<version>/<arch>/<snapshotter-asset>`
+
+Legacy compatibility paths (`/bin/dfdaemon`, `/bin/dfget`,
+`/bin/nydusd`, `/nydus/<version>/...`, `/bin/<snapshotter-asset>`) are filled
+from the **node architecture only** when absent. An existing `/bin/dfdaemon`
+(the live poligon volume) is never overwritten. Downloads retry with backoff
+and fail the init container instead of starting nginx with incomplete assets.
+All artifact URLs, versions, checksums, arches, and the init image are
 overridable under `static.populate`; `static.populate.enabled=false` restores
 the old externally-populated behavior.
+
+There is no PVC. The chart uses `emptyDir`, so everything is re-downloaded
+after pod recreation. Defaults include amd64 and arm64 for client and nydus and
+amd64 for the snapshotter; that is roughly 550 MiB after population (the /bin compatibility copies add ~150 MiB) plus
+transient download/extract space during init. On a slow first start this means
+fetching roughly 185 MiB before nginx becomes ready. Narrow the version/arch
+lists or set `static.sizeLimit` (for example `1Gi`) if that cost is
+unacceptable. `static.populate.snapshotter.arches` intentionally has no arm64
+entry: the patched fork publishes amd64 only, and the host installer fails
+clearly rather than mixing an amd64 snapshotter into arm64.
 
 ## Manager-host route
 

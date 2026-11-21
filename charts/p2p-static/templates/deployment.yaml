@@ -34,6 +34,8 @@ spec:
             runAsUser: 0
           command: ["/bin/sh", "/scripts/populate-static.sh"]
           env:
+            - name: POPULATE_PLAN
+              value: /scripts/populate-plan.txt
             - name: STATIC_DIR
               value: /usr/share/nginx/static
             - name: SELECTOR_SRC
@@ -42,30 +44,8 @@ spec:
               value: {{ .Values.static.populate.retries | quote }}
             - name: SELECTOR_ENABLED
               value: {{ ternary "1" "0" .Values.static.populate.selector.enabled | quote }}
-            - name: NYDUS_VERSION
-              value: {{ .Values.static.populate.nydus.version | quote }}
             - name: NYDUS_BINARIES
               value: {{ join " " .Values.static.populate.nydus.binaries | quote }}
-            - name: NYDUS_TARBALL_URL
-              value: {{ .Values.static.populate.nydus.tarballURL | quote }}
-            - name: NYDUS_TARBALL_SHA256
-              value: {{ .Values.static.populate.nydus.tarballSHA256 | quote }}
-            - name: NYDUS_TARBALL_ROOT
-              value: {{ .Values.static.populate.nydus.tarballRoot | quote }}
-            - name: DFDAEMON_ENABLED
-              value: {{ ternary "1" "0" .Values.static.populate.dfdaemon.enabled | quote }}
-            - name: DFDAEMON_VERSION
-              value: {{ .Values.static.populate.dfdaemon.version | quote }}
-            - name: DFDAEMON_TARBALL_URL
-              value: {{ .Values.static.populate.dfdaemon.tarballURL | quote }}
-            - name: DFDAEMON_TARBALL_SHA256
-              value: {{ .Values.static.populate.dfdaemon.tarballSHA256 | quote }}
-            - name: DFDAEMON_TARBALL_ROOT
-              value: {{ .Values.static.populate.dfdaemon.tarballRoot | quote }}
-            - name: DFDAEMON_BINARY
-              value: {{ .Values.static.populate.dfdaemon.binary | quote }}
-            - name: DFGET_BINARY
-              value: {{ .Values.static.populate.dfdaemon.dfget | quote }}
           volumeMounts:
             - name: static
               mountPath: /usr/share/nginx/static

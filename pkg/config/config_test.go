@@ -32,6 +32,9 @@ var envKeys = []string{
 	"POD_NAMESPACE",
 	"NGINX_STATIC_URL",
 	"NYDUS_MIRROR_URL",
+	"CLIENT_VERSION",
+	"NYDUS_VERSION",
+	"NYDUS_SNAPSHOTTER_VERSION",
 	"KUBECONFIG",
 }
 
@@ -74,6 +77,15 @@ func TestLoadDefaults(t *testing.T) {
 	}
 	if cfg.MTLSSecretName != DefaultMTLSSecretName {
 		t.Errorf("MTLSSecretName = %q, want %q", cfg.MTLSSecretName, DefaultMTLSSecretName)
+	}
+	if cfg.ClientVersion != DefaultClientVersion {
+		t.Errorf("ClientVersion = %q, want %q", cfg.ClientVersion, DefaultClientVersion)
+	}
+	if cfg.NydusVersion != DefaultNydusVersion {
+		t.Errorf("NydusVersion = %q, want %q", cfg.NydusVersion, DefaultNydusVersion)
+	}
+	if cfg.SnapshotterVersion != DefaultSnapshotterVersion {
+		t.Errorf("SnapshotterVersion = %q, want %q", cfg.SnapshotterVersion, DefaultSnapshotterVersion)
 	}
 	if cfg.DragonflyChartRepo != DefaultDragonflyChartRepo {
 		t.Errorf("DragonflyChartRepo = %q, want %q", cfg.DragonflyChartRepo, DefaultDragonflyChartRepo)
@@ -231,6 +243,9 @@ func TestLoadEnvOverride(t *testing.T) {
 	t.Setenv("EXTRAS_TRAEFIK_SERVERS_TRANSPORT_ENABLED", "false")
 	t.Setenv("POD_NAMESPACE", "env-namespace")
 	t.Setenv("NGINX_STATIC_URL", "http://static.env.example.com")
+	t.Setenv("CLIENT_VERSION", "v1.5.15")
+	t.Setenv("NYDUS_VERSION", "v2.4.6")
+	t.Setenv("NYDUS_SNAPSHOTTER_VERSION", "v0.16.0-p2p.3")
 	t.Setenv("KUBECONFIG", "/tmp/kubeconfig")
 
 	cfg, err := Load(nil)
@@ -310,6 +325,9 @@ func TestLoadEnvOverride(t *testing.T) {
 	}
 	if cfg.Namespace != "env-namespace" {
 		t.Errorf("Namespace = %q", cfg.Namespace)
+	}
+	if cfg.ClientVersion != "v1.5.15" || cfg.NydusVersion != "v2.4.6" || cfg.SnapshotterVersion != "v0.16.0-p2p.3" {
+		t.Errorf("versions = %q/%q/%q", cfg.ClientVersion, cfg.NydusVersion, cfg.SnapshotterVersion)
 	}
 
 	if cfg.Kubeconfig != "/tmp/kubeconfig" {
