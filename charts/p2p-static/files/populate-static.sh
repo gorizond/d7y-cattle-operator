@@ -37,6 +37,12 @@ resolve_checksum() {
   kind="$3"
   version="$4"
   arch="$5"
+  # Dragonfly client releases publish no checksum/signature sidecar. Use the
+  # operator-provided checksum directly instead of probing predictable 404s.
+  if [ "$kind" = "client" ] && [ -n "$expected" ]; then
+    printf '%s' "$expected"
+    return 0
+  fi
   for suffix in .sha256sum .sha256; do
     sum_file="${tmp}/checksum.$$"
     if curl -fsSL --retry 3 --connect-timeout 10 --max-time 60 -o "$sum_file" "${url}${suffix}" && [ -s "$sum_file" ]; then

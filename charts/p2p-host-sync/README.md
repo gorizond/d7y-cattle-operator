@@ -13,8 +13,11 @@ It writes from its ConfigMap to the host:
 The DaemonSet runs with `hostPID: true` and, once per revision, triggers
 `nydus-updater.service` through
 `nsenter -t 1 -m -u -i -n -p -- systemctl start nydus-updater.service`.
-The updater fetches release checksum sidecars first, updates the client
-(`dfdaemon`, `dfget`), nydus binaries, and upstream
+`STATIC_URL` is rendered from operator config and the updater tries the
+static store first: versioned client binaries, versioned/compat nydus and
+snapshotter tarballs; it falls back to GitHub when `STATIC_URL` is empty or an
+artifact is absent. It fetches release checksum sidecars before installing,
+updates the client (`dfdaemon`, `dfget`), nydus binaries, and upstream
 `containerd-nydus-grpc`, and restarts the snapshotter only when a binary or the
 fs driver changed. It restarts `dfdaemon-bootstrap` only when client binaries
 changed and that service is active. Host-sync never restarts the snapshotter or

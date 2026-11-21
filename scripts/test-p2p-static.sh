@@ -50,6 +50,8 @@ fi
 grep -q 'client|v1.5.14|arm64|' "$tmp/p2p-static.yaml" || fail "p2p-static populate plan is missing the arm64 client layout"
 grep -q 'nydus|v2.4.5|arm64|' "$tmp/p2p-static.yaml" || fail "p2p-static populate plan is missing the arm64 nydus layout"
 grep -q 'location /nydus/' "$tmp/p2p-static.yaml" || fail "p2p-static is missing the versioned nydus asset route"
+grep -q 'location /client/' "$tmp/p2p-static.yaml" || fail "p2p-static is missing the versioned client asset route"
+grep -q 'location /snapshotter/' "$tmp/p2p-static.yaml" || fail "p2p-static is missing the versioned snapshotter asset route"
 grep -q 'location /bin/' "$tmp/p2p-static.yaml" || fail "p2p-static is missing the /bin asset route"
 grep -q 'listen 80;' "$tmp/p2p-static.yaml" || fail "p2p-static nginx must listen on port 80"
 grep -q 'listen \[::\]:80;' "$tmp/p2p-static.yaml" || fail "p2p-static nginx must listen on IPv6 localhost too"
@@ -63,6 +65,8 @@ helm template p2p-static "$chart" --namespace dragonfly-system \
 grep -q 'kind: IngressRoute' "$tmp/p2p-static-manager.yaml" || fail "p2p-static manager IngressRoute missing"
 grep -q 'PathPrefix(`/bin`)' "$tmp/p2p-static-manager.yaml" || fail "p2p-static /bin path missing"
 grep -q 'PathPrefix(`/nydus`)' "$tmp/p2p-static-manager.yaml" || fail "p2p-static /nydus path missing"
+grep -q 'PathPrefix(`/client`)' "$tmp/p2p-static-manager.yaml" || fail "p2p-static /client path missing"
+grep -q 'PathPrefix(`/snapshotter`)' "$tmp/p2p-static-manager.yaml" || fail "p2p-static /snapshotter path missing"
 if grep -q 'p2p-install.sh' "$tmp/p2p-static-manager.yaml"; then
   fail "p2p-static manager route must not include p2p-install.sh"
 fi
@@ -119,6 +123,9 @@ while [ "$#" -gt 0 ]; do
     *) url="$1"; shift ;;
   esac
 done
+if [ -n "${POPULATE_CURL_LOG:-}" ]; then
+  printf '%s\n' "$url" >> "$POPULATE_CURL_LOG"
+fi
 case "$url" in
   *cli-amd.tar.gz.sha256*|*cli-amd.tar.gz.sha256sum)
     sha="$(sha256sum "${POPULATE_CLI_AMD:?}")"; sha="${sha%% *}"
@@ -155,6 +162,7 @@ STATIC_DIR="$static_dir" SELECTOR_SRC="$chart/files/nydus-fs-select.sh" \
   POPULATE_NYD_AMD="$tmp/nyd-amd.tgz" POPULATE_NYD_ARM="$tmp/nyd-arm.tgz" \
   POPULATE_SNAPSHOTTER_AMD="$tmp/nydus-snapshotter-v0.16.0-linux-amd64.tar.gz" \
   POPULATE_SNAPSHOTTER_ARM="$tmp/nydus-snapshotter-v0.16.0-linux-arm64.tar.gz" \
+  POPULATE_CURL_LOG="$tmp/populate-curl.log" \
   PATH="$populate_bin:$PATH" \
   sh "$populate" >"$tmp/populate.log" 2>&1
 for arch in amd64 arm64; do
@@ -174,6 +182,10 @@ done
 [ -s "$static_dir/nydus/v2.4.5/nydusd" ] || fail "populate-static did not create the legacy nydus/v2.4.5/nydusd"
 [ -s "$static_dir/nydus/v2.4.5/nydus-static.tgz" ] || fail "populate-static did not create the legacy nydus/v2.4.5/nydus-static.tgz"
 grep -q 'preserving existing' "$tmp/populate.log" || fail "populate-static did not preserve the existing dfdaemon"
+if grep -q 'cli-amd.tar.gz.sha256' "$tmp/populate-curl.log"; then
+  fail "populate-static probed a nonexistent client checksum sidecar"
+fi
+grep -q 'nyd-amd.tgz.sha256' "$tmp/populate-curl.log" || fail "populate-static did not fetch the nydus checksum sidecar"
 [ "$(cat "$static_dir/bin/dfdaemon")" = "existing-dfdaemon" ] || fail "populate-static overwrote the existing dfdaemon"
 [ "$(cat "$static_dir/bin/nydusd")" = "amd64-nydusd" ] || fail "populate-static did not fill /bin from the amd64 layout"
 

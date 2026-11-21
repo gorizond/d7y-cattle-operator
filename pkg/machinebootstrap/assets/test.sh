@@ -340,6 +340,17 @@ if [ -z "$out" ] || [ -z "$url" ]; then
   echo "fake updater curl: missing -o or URL" >&2
   exit 2
 fi
+if [ -n "${UPDATER_STATIC_DIR:-}" ] && [[ "$url" == http://static.example.test/* ]]; then
+  rel="${url#http://static.example.test/}"
+  if [ -f "${UPDATER_STATIC_DIR}/${rel}" ]; then
+    cp "${UPDATER_STATIC_DIR}/${rel}" "$out"
+    exit 0
+  fi
+  exit 22
+fi
+if [ "${FAKE_CURL_FAIL_GITHUB:-0}" = "1" ] && [[ "$url" == https://github.com/* ]]; then
+  exit 22
+fi
 case "$url" in
   *.sha256*|*.sha256sum*) exit 22 ;;
   *dragonfly-client-v1.5.14-x86_64-unknown-linux-gnu.tar.gz) cp "${UPDATER_CLIENT_TGZ:?}" "$out" ;;
@@ -384,7 +395,50 @@ for binary in dfdaemon dfget nydusd nydus-image nydus-overlayfs containerd-nydus
   assert_file "${UPDATER_INSTALL}/${binary}"
 done
 
+# Static store first: versioned client binaries and nydus/snapshotter tarballs.
+UPDATER_STATIC="${UPDATER_ROOT}/static-store"
+mkdir -p "$UPDATER_STATIC/client/v1.5.14/amd64" \
+  "$UPDATER_STATIC/nydus/v2.4.5/amd64" \
+  "$UPDATER_STATIC/snapshotter/v0.16.0/amd64"
+cp "${UPDATER_ROOT}/client/dragonfly-client-v1.5.14-x86_64-unknown-linux-gnu/dfdaemon" "$UPDATER_STATIC/client/v1.5.14/amd64/dfdaemon"
+cp "${UPDATER_ROOT}/client/dragonfly-client-v1.5.14-x86_64-unknown-linux-gnu/dfget" "$UPDATER_STATIC/client/v1.5.14/amd64/dfget"
+cp "${UPDATER_ROOT}/nydus.tgz" "$UPDATER_STATIC/nydus/v2.4.5/amd64/nydus-static.tgz"
+cp "${UPDATER_ROOT}/snapshotter.tgz" "$UPDATER_STATIC/snapshotter/v0.16.0/amd64/nydus-snapshotter-v0.16.0-linux-amd64.tar.gz"
+STATIC_INSTALL="${UPDATER_ROOT}/install-static"
+mkdir -p "$STATIC_INSTALL"
+NYDUS_UPDATER_ENV="${UPDATER_ROOT}/updater.env" \
+NYDUS_UPDATER_BIN_DIR="$STATIC_INSTALL" \
+NYDUS_UPDATER_SELECTOR="${UPDATER_ROOT}/no-selector" \
+UPDATER_STATIC_DIR="$UPDATER_STATIC" FAKE_CURL_FAIL_GITHUB=1 \
+UPDATER_CLIENT_TGZ="${UPDATER_ROOT}/client.tgz" \
+UPDATER_NYDUS_TGZ="${UPDATER_ROOT}/nydus.tgz" \
+UPDATER_SNAP_TGZ="${UPDATER_ROOT}/snapshotter.tgz" \
+PATH="${UPDATER_BIN}:${PATH}" \
+  bash "${ROOT_ONE}/usr/local/bin/nydus-updater" > "${WORK}/updater-static.log" 2>&1
+assert_contains "${WORK}/updater-static.log" 'using static store'
+for binary in dfdaemon dfget nydusd nydus-image nydus-overlayfs containerd-nydus-grpc; do
+  assert_file "${STATIC_INSTALL}/${binary}"
+done
+
+# Empty STATIC_URL skips the static store and uses GitHub.
+EMPTY_STATIC_INSTALL="${UPDATER_ROOT}/install-empty-static"
+mkdir -p "$EMPTY_STATIC_INSTALL"
+sed 's|^STATIC_URL=.*|STATIC_URL=|' "${UPDATER_ROOT}/updater.env" > "${UPDATER_ROOT}/updater-empty-static.env"
+NYDUS_UPDATER_ENV="${UPDATER_ROOT}/updater-empty-static.env" \
+NYDUS_UPDATER_BIN_DIR="$EMPTY_STATIC_INSTALL" \
+NYDUS_UPDATER_SELECTOR="${UPDATER_ROOT}/no-selector" \
+UPDATER_CLIENT_TGZ="${UPDATER_ROOT}/client.tgz" \
+UPDATER_NYDUS_TGZ="${UPDATER_ROOT}/nydus.tgz" \
+UPDATER_SNAP_TGZ="${UPDATER_ROOT}/snapshotter.tgz" \
+PATH="${UPDATER_BIN}:${PATH}" \
+  bash "${ROOT_ONE}/usr/local/bin/nydus-updater" > "${WORK}/updater-empty-static.log" 2>&1
+assert_contains "${WORK}/updater-empty-static.log" 'using GitHub release'
+for binary in dfdaemon dfget nydusd containerd-nydus-grpc; do
+  assert_file "${EMPTY_STATIC_INSTALL}/${binary}"
+done
+
 # A checksum mismatch must fail before the bad artifact is installed.
+
 BAD_INSTALL="${UPDATER_ROOT}/install-bad"
 mkdir -p "$BAD_INSTALL"
 sed 's/^NYDUS_SNAPSHOTTER_SHA256=.*/NYDUS_SNAPSHOTTER_SHA256=deadbeef/' "${UPDATER_ROOT}/updater.env" > "${UPDATER_ROOT}/updater-bad.env"
@@ -511,7 +565,9 @@ assert_contains "$INSTALL" '370ff792a1c6957a7244b770d6cd12792668e326b2282b3017fe
 assert_contains "$INSTALL" '1ad7b793a1996577e462b0bf5c1a22e4450b9c04f7e9e99d4b274ccc92f19072'
 assert_contains "$INSTALL" '85925af702d79fc3a8b9d501a5267ddc9f81449ff9fe94841845eb98eda84593'
 assert_contains "$INSTALL" '24e4ceaae9c87e396e71e89bd3eb074f2cc6a5a14b1a2081c8d890481857a0e4'
+assert_contains "$INSTALL" '9bd24308ef51139310bf58927a97eec49567d0154606bc5774ad69d2ee492ff0'
 assert_contains "$INSTALL" '136e9c649a63c16b3d3322a15fcdf918e7dda9a4cbb043e2923451e87a8ba08f'
+assert_contains "$INSTALL" '399f7a5b800bb6d05c63bbb340e7fa1820b84609b882589a6a95dd8796d03859'
 assert_contains "$INSTALL" "'%s/download/%s/%s'"
 assert_contains "$INSTALL" "'%s/latest/download/%s'"
 assert_contains "$INSTALL" 'curl -fL'
@@ -894,7 +950,7 @@ env TARGET_ARCH= P2P_ROOT="$ROOT_ARCH_AMD" SKIP_MODULES=1 SKIP_SYSTEMD=1 SKIP_PR
   "$RUNNER" "$INSTALL" "$CFG" > "${WORK}/arch-amd64.log" 2>&1
 assert_contains "${WORK}/arch-amd64.log" 'pins: client v1.5.14 ba080e62f1626ab2fc2a5a0629a5cd912cc15099508820403108abbe2f75b1f7'
 assert_contains "${WORK}/arch-amd64.log" 'nydus v2.4.5 1ad7b793a1996577e462b0bf5c1a22e4450b9c04f7e9e99d4b274ccc92f19072'
-assert_contains "${WORK}/arch-amd64.log" 'snapshotter v0.16.0 24e4ceaae9c87e396e71e89bd3eb074f2cc6a5a14b1a2081c8d890481857a0e4 (binary unavailable)'
+assert_contains "${WORK}/arch-amd64.log" 'snapshotter v0.16.0 24e4ceaae9c87e396e71e89bd3eb074f2cc6a5a14b1a2081c8d890481857a0e4 (binary 9bd24308ef51139310bf58927a97eec49567d0154606bc5774ad69d2ee492ff0)'
 assert_contains "$ARCH_AMD_CURL" 'http://static.example.test/client/v1.5.14/amd64/dfdaemon'
 assert_contains "$ARCH_AMD_CURL" 'http://static.example.test/nydus/v2.4.5/amd64/nydus-static.tgz'
 
@@ -906,7 +962,7 @@ env TARGET_ARCH= P2P_ROOT="$ROOT_ARCH_ARM_PINS" SKIP_DOWNLOAD=1 SKIP_MODULES=1 S
 assert_contains "${WORK}/arch-arm64-pins.log" 'host=arm64 client=aarch64 nydus=arm64 snapshotter=arm64'
 assert_contains "${WORK}/arch-arm64-pins.log" 'pins: client v1.5.14 370ff792a1c6957a7244b770d6cd12792668e326b2282b3017fea2cbfa3510af'
 assert_contains "${WORK}/arch-arm64-pins.log" 'nydus v2.4.5 85925af702d79fc3a8b9d501a5267ddc9f81449ff9fe94841845eb98eda84593'
-assert_contains "${WORK}/arch-arm64-pins.log" 'snapshotter v0.16.0 136e9c649a63c16b3d3322a15fcdf918e7dda9a4cbb043e2923451e87a8ba08f (binary unavailable)'
+assert_contains "${WORK}/arch-arm64-pins.log" 'snapshotter v0.16.0 136e9c649a63c16b3d3322a15fcdf918e7dda9a4cbb043e2923451e87a8ba08f (binary 399f7a5b800bb6d05c63bbb340e7fa1820b84609b882589a6a95dd8796d03859)'
 
 # Arm64 URL selection with the upstream arm64 snapshotter tarball. The
 # checksums are overridden only to accept the tiny test artifacts.

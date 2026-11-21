@@ -149,13 +149,13 @@ case "$HOST_ARCH" in
     : "${CLIENT_SHA256:=${CLIENT_SHA256_AMD64:-}}"
     : "${NYDUS_SHA256:=${NYDUS_SHA256_AMD64:-}}"
     : "${NYDUS_SNAPSHOTTER_SHA256:=${NYDUS_SNAPSHOTTER_SHA256_AMD64:-}}"
-    : "${NYDUS_SNAPSHOTTER_BINARY_SHA256:=${NYDUS_SNAPSHOTTER_BINARY_SHA256_AMD64:-}}"
+    : "${NYDUS_SNAPSHOTTER_BINARY_SHA256:=${NYDUS_SNAPSHOTTER_BINARY_SHA256_AMD64:-9bd24308ef51139310bf58927a97eec49567d0154606bc5774ad69d2ee492ff0}}"
     ;;
   arm64)
     : "${CLIENT_SHA256:=${CLIENT_SHA256_ARM64:-}}"
     : "${NYDUS_SHA256:=${NYDUS_SHA256_ARM64:-}}"
     : "${NYDUS_SNAPSHOTTER_SHA256:=${NYDUS_SNAPSHOTTER_SHA256_ARM64:-}}"
-    : "${NYDUS_SNAPSHOTTER_BINARY_SHA256:=${NYDUS_SNAPSHOTTER_BINARY_SHA256_ARM64:-}}"
+    : "${NYDUS_SNAPSHOTTER_BINARY_SHA256:=${NYDUS_SNAPSHOTTER_BINARY_SHA256_ARM64:-399f7a5b800bb6d05c63bbb340e7fa1820b84609b882589a6a95dd8796d03859}}"
     ;;
 esac
 if [ -n "${CLIENT_SHA256:-}" ]; then
@@ -233,6 +233,15 @@ resolve_checksum() {
   local url fallback suffix sum_file sum
   url="$1"
   fallback="${2:-}"
+  # Dragonfly client releases publish no checksum sidecar; skip the 404 probes.
+  case "$url" in
+    *dragonfly-client*)
+      if [ -n "$fallback" ]; then
+        printf '%s' "$fallback"
+        return 0
+      fi
+      ;;
+  esac
   for suffix in .sha256sum .sha256; do
     sum_file="${TMP}/checksum.$$"
     if curl -fsSL --retry 3 --connect-timeout 10 --max-time 60 -o "$sum_file" "${url}${suffix}" && [ -s "$sum_file" ]; then
@@ -1597,6 +1606,14 @@ esac
 # Release-provided checksum first; the configured pin is only a fallback.
 resolve_checksum() {
   local url="$1" fallback="${2:-}" suffix sum_file sum
+  case "$url" in
+    *dragonfly-client*)
+      if [ -n "$fallback" ]; then
+        printf '%s' "$fallback"
+        return 0
+      fi
+      ;;
+  esac
   for suffix in .sha256sum .sha256; do
     sum_file="${tmp}/checksum.$$"
     if curl -fsSL --retry 3 --connect-timeout 10 --max-time 60 -o "$sum_file" "${url}${suffix}" && [ -s "$sum_file" ]; then
@@ -1651,46 +1668,105 @@ extract_tarball() {
   tar -xzf "$tarball" -C "$dir"
 }
 
-# Client: dfdaemon/dfget from the same GNU tarball as the bootstrap.
+# Client: prefer versioned static-store binaries, then the GitHub tarball.
 client_root="dragonfly-client-${CLIENT_VERSION}-${CLIENT_ARCH}-unknown-linux-gnu"
 client_url="https://github.com/${CLIENT_RELEASE_REPO}/releases/download/${CLIENT_VERSION}/${client_root}.tar.gz"
-client_checksum="$(resolve_checksum "$client_url" "$CLIENT_SHA256")" \
-  || { log "no checksum available for client ${CLIENT_VERSION} ${HOST_ARCH}"; exit 1; }
-if ! download_verified "$client_url" "$tmp/client.tgz" "$client_checksum" "client ${CLIENT_VERSION}"; then
-  exit 1
-fi
-extract_tarball "$tmp/client.tgz" "$tmp/client"
 client_changed=0
-for binary in dfdaemon dfget; do
-  src="$tmp/client/${client_root}/${binary}"
-  [ -s "$src" ] || { log "client tarball is missing ${binary}"; exit 1; }
-  install_if_changed "$src" "${bin_dir}/${binary}" "client ${binary} ${CLIENT_VERSION}" || client_changed=1
-done
+client_static=0
+if [ -n "${STATIC_URL:-}" ]; then
+  client_static=1
+  for binary in dfdaemon dfget; do
+    if ! curl -fsSL --retry 3 --connect-timeout 10 --max-time 600 \
+      -o "$tmp/static-${binary}" "${STATIC_URL%/}/client/${CLIENT_VERSION}/${HOST_ARCH}/${binary}"; then
+      client_static=0
+      break
+    fi
+  done
+fi
+if [ "$client_static" = 1 ]; then
+  for binary in dfdaemon dfget; do
+    install_if_changed "$tmp/static-${binary}" "${bin_dir}/${binary}" "client ${binary} ${CLIENT_VERSION}" || client_changed=1
+  done
+  log "client ${CLIENT_VERSION} using static store"
+else
+  client_checksum="$(resolve_checksum "$client_url" "$CLIENT_SHA256")" \
+    || { log "no checksum available for client ${CLIENT_VERSION} ${HOST_ARCH}"; exit 1; }
+  if ! download_verified "$client_url" "$tmp/client.tgz" "$client_checksum" "client ${CLIENT_VERSION}"; then
+    exit 1
+  fi
+  extract_tarball "$tmp/client.tgz" "$tmp/client"
+  for binary in dfdaemon dfget; do
+    src="$tmp/client/${client_root}/${binary}"
+    [ -s "$src" ] || { log "client tarball is missing ${binary}"; exit 1; }
+    install_if_changed "$src" "${bin_dir}/${binary}" "client ${binary} ${CLIENT_VERSION}" || client_changed=1
+  done
+  log "client ${CLIENT_VERSION} using GitHub release"
+fi
 
-# Nydus daemon binaries.
+# Nydus daemon binaries: versioned static tarball, compat tarballs, GitHub.
 nydus_url="https://github.com/${NYDUS_RELEASE_REPO}/releases/download/${NYDUS_VERSION}/nydus-static-${NYDUS_VERSION}-linux-${HOST_ARCH}.tgz"
 nydus_checksum="$(resolve_checksum "$nydus_url" "$NYDUS_SHA256")" \
   || { log "no checksum available for nydus ${NYDUS_VERSION} ${HOST_ARCH}"; exit 1; }
-if ! download_verified "$nydus_url" "$tmp/nydus.tgz" "$nydus_checksum" "nydus ${NYDUS_VERSION}"; then
-  exit 1
+nydus_tarball=""
+nydus_source=""
+if [ -n "${STATIC_URL:-}" ]; then
+  for path in \
+    "/nydus/${NYDUS_VERSION}/${HOST_ARCH}/nydus-static.tgz" \
+    "/nydus/${NYDUS_VERSION}/nydus-static.tgz" \
+    "/bin/nydus-static.tgz"; do
+    if curl -fsSL --retry 3 --connect-timeout 10 --max-time 600 -o "$tmp/nydus.tgz" "${STATIC_URL%/}${path}"; then
+      nydus_tarball="$tmp/nydus.tgz"
+      nydus_source="static store ${path}"
+      break
+    fi
+  done
 fi
-extract_tarball "$tmp/nydus.tgz" "$tmp/nydus"
+if [ -z "$nydus_tarball" ]; then
+  if ! download_verified "$nydus_url" "$tmp/nydus.tgz" "$nydus_checksum" "nydus ${NYDUS_VERSION}"; then
+    exit 1
+  fi
+  nydus_tarball="$tmp/nydus.tgz"
+  nydus_source="GitHub release"
+else
+  verify_sha256 "$nydus_tarball" "$nydus_checksum" "nydus ${NYDUS_VERSION} (static)" || exit 1
+fi
+extract_tarball "$nydus_tarball" "$tmp/nydus"
 nydus_changed=0
 for binary in nydusd nydus-image nydus-overlayfs; do
   src="$tmp/nydus/nydus-static/${binary}"
   [ -s "$src" ] || { log "nydus tarball is missing ${binary}"; exit 1; }
   install_if_changed "$src" "${bin_dir}/${binary}" "nydus ${binary} ${NYDUS_VERSION}" || nydus_changed=1
 done
+log "nydus ${NYDUS_VERSION} using ${nydus_source}"
 
-# Upstream snapshotter tarball with bin/containerd-nydus-grpc.
+# Upstream snapshotter tarball: versioned static, compat /bin, GitHub.
 snapshotter_asset="nydus-snapshotter-${NYDUS_SNAPSHOTTER_VERSION}-linux-${HOST_ARCH}.tar.gz"
 snapshotter_url="https://github.com/${NYDUS_SNAPSHOTTER_REPO}/releases/download/${NYDUS_SNAPSHOTTER_VERSION}/${snapshotter_asset}"
 snapshotter_checksum="$(resolve_checksum "$snapshotter_url" "$NYDUS_SNAPSHOTTER_SHA256")" \
   || { log "no checksum available for nydus-snapshotter ${NYDUS_SNAPSHOTTER_VERSION} ${HOST_ARCH}"; exit 1; }
-if ! download_verified "$snapshotter_url" "$tmp/snapshotter.tgz" "$snapshotter_checksum" "nydus-snapshotter ${NYDUS_SNAPSHOTTER_VERSION}"; then
-  exit 1
+snapshotter_tarball=""
+snapshotter_source=""
+if [ -n "${STATIC_URL:-}" ]; then
+  for path in \
+    "/snapshotter/${NYDUS_SNAPSHOTTER_VERSION}/${HOST_ARCH}/${snapshotter_asset}" \
+    "/bin/${snapshotter_asset}"; do
+    if curl -fsSL --retry 3 --connect-timeout 10 --max-time 600 -o "$tmp/snapshotter.tgz" "${STATIC_URL%/}${path}"; then
+      snapshotter_tarball="$tmp/snapshotter.tgz"
+      snapshotter_source="static store ${path}"
+      break
+    fi
+  done
 fi
-extract_tarball "$tmp/snapshotter.tgz" "$tmp/snapshotter"
+if [ -z "$snapshotter_tarball" ]; then
+  if ! download_verified "$snapshotter_url" "$tmp/snapshotter.tgz" "$snapshotter_checksum" "nydus-snapshotter ${NYDUS_SNAPSHOTTER_VERSION}"; then
+    exit 1
+  fi
+  snapshotter_tarball="$tmp/snapshotter.tgz"
+  snapshotter_source="GitHub release"
+else
+  verify_sha256 "$snapshotter_tarball" "$snapshotter_checksum" "nydus-snapshotter ${NYDUS_SNAPSHOTTER_VERSION} (static)" || exit 1
+fi
+extract_tarball "$snapshotter_tarball" "$tmp/snapshotter"
 snapshotter_src="$tmp/snapshotter/bin/containerd-nydus-grpc"
 [ -s "$snapshotter_src" ] || { log "nydus-snapshotter tarball is missing bin/containerd-nydus-grpc"; exit 1; }
 if [ -n "$NYDUS_SNAPSHOTTER_BINARY_SHA256" ]; then
@@ -1698,6 +1774,7 @@ if [ -n "$NYDUS_SNAPSHOTTER_BINARY_SHA256" ]; then
 fi
 snapshotter_changed=0
 install_if_changed "$snapshotter_src" "${bin_dir}/containerd-nydus-grpc" "nydus-snapshotter ${NYDUS_SNAPSHOTTER_VERSION}" || snapshotter_changed=1
+log "nydus-snapshotter ${NYDUS_SNAPSHOTTER_VERSION} using ${snapshotter_source}"
 
 # Re-evaluate the driver even when binaries did not change: a kernel upgrade can
 # make fscache usable (or unusable). Restart only when the selection or binaries

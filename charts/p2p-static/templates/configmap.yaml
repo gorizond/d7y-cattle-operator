@@ -32,6 +32,16 @@ data:
             autoindex off;
         }
 
+        location /client/ {
+            try_files $uri =404;
+            autoindex off;
+        }
+
+        location /snapshotter/ {
+            try_files $uri =404;
+            autoindex off;
+        }
+
         location / {
             return 404;
         }
