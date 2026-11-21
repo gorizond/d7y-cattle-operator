@@ -35,6 +35,8 @@ grep -q '1ad7b793a1996577e462b0bf5c1a22e4450b9c04f7e9e99d4b274ccc92f19072' "$tmp
 grep -q 'nydus-fs-select.sh' "$tmp/p2p-static.yaml" || fail "p2p-static is missing the nydus-fs-select asset"
 grep -q 'DFGET_BINARY' "$tmp/p2p-static.yaml" || fail "p2p-static is missing the dfget populate input"
 grep -q 'nydus-static.tgz' "$tmp/p2p-static.yaml" || fail "p2p-static is missing the nydus tarball mirror"
+grep -q 'dragonfly-client-v1.5.14-x86_64-unknown-linux-gnu.tar.gz' "$tmp/p2p-static.yaml" || fail "p2p-static must use the GNU client build to match the host"
+grep -q 'ba080e62f1626ab2fc2a5a0629a5cd912cc15099508820403108abbe2f75b1f7' "$tmp/p2p-static.yaml" || fail "p2p-static GNU client checksum is not asserted"
 grep -q 'location /nydus/' "$tmp/p2p-static.yaml" || fail "p2p-static is missing the versioned nydus asset route"
 grep -q 'location /bin/' "$tmp/p2p-static.yaml" || fail "p2p-static is missing the /bin asset route"
 grep -q 'listen 80;' "$tmp/p2p-static.yaml" || fail "p2p-static nginx must listen on port 80"
@@ -60,7 +62,7 @@ static_dir="$tmp/static"
 populate_bin="$tmp/populate-bin"
 populate_src="$tmp/populate-src/nydus-static"
 populate_tgz="$tmp/populate-nydus.tgz"
-populate_client_src="$tmp/populate-client/dragonfly-client-v1.5.14-x86_64-unknown-linux-musl"
+populate_client_src="$tmp/populate-client/dragonfly-client-v1.5.14-x86_64-unknown-linux-gnu"
 populate_client_tgz="$tmp/populate-client.tgz"
 mkdir -p "$static_dir/bin" "$populate_bin" "$populate_src" "$populate_client_src"
 printf 'existing-dfdaemon\n' > "$static_dir/bin/dfdaemon"
@@ -71,7 +73,7 @@ for binary in dfdaemon dfget; do
   printf '#!/bin/sh\nexit 0\n' > "$populate_client_src/$binary"
 done
 tar -czf "$populate_tgz" -C "$tmp/populate-src" nydus-static
-tar -czf "$populate_client_tgz" -C "$tmp/populate-client" dragonfly-client-v1.5.14-x86_64-unknown-linux-musl
+tar -czf "$populate_client_tgz" -C "$tmp/populate-client" dragonfly-client-v1.5.14-x86_64-unknown-linux-gnu
 populate_sha="$(sha256sum "$populate_tgz" | cut -d' ' -f1)"
 populate_client_sha="$(sha256sum "$populate_client_tgz" | cut -d' ' -f1)"
 cat > "$populate_bin/curl" <<'POPULATECURL'
@@ -97,9 +99,9 @@ STATIC_DIR="$static_dir" SELECTOR_SRC="$chart/files/nydus-fs-select.sh" \
   NYDUS_TARBALL_URL=https://example.test/nydus.tgz NYDUS_TARBALL_SHA256="$populate_sha" \
   NYDUS_TARBALL_ROOT=nydus-static \
   DFDAEMON_ENABLED=1 DFDAEMON_VERSION=1.5.14 \
-  DFDAEMON_TARBALL_URL=https://example.test/dragonfly-client-v1.5.14-x86_64-unknown-linux-musl.tar.gz \
+  DFDAEMON_TARBALL_URL=https://example.test/dragonfly-client-v1.5.14-x86_64-unknown-linux-gnu.tar.gz \
   DFDAEMON_TARBALL_SHA256="$populate_client_sha" \
-  DFDAEMON_TARBALL_ROOT=dragonfly-client-v1.5.14-x86_64-unknown-linux-musl \
+  DFDAEMON_TARBALL_ROOT=dragonfly-client-v1.5.14-x86_64-unknown-linux-gnu \
   DFDAEMON_BINARY=dfdaemon DFGET_BINARY=dfget \
   POPULATE_TARBALL="$populate_tgz" POPULATE_CLIENT_TARBALL="$populate_client_tgz" \
   PATH="$populate_bin:$PATH" \

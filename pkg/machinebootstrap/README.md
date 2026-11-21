@@ -41,7 +41,11 @@ annotation by the time their bootstrap Secret is rendered.
 
 The first delivery is deliberately direct. `p2p-install.sh` installs both
 `dfdaemon` and `dfget` from the static store (`/bin/dfdaemon`, `/bin/dfget`) or
-the pinned `dragonflyoss/client` `v1.5.14` tarball, verifying its SHA-256. Using
+the pinned `dragonflyoss/client` `v1.5.14` GNU tarball
+(`dragonfly-client-v1.5.14-x86_64-unknown-linux-gnu.tar.gz`, SHA-256
+`ba080e62…b1f7`), verifying its SHA-256. Its `dfdaemon` is the 42.1 MB GNU build
+(SHA-256 `e0d03d4759…bf85`) used by the host; the musl tarball is a different
+binary even though both report build `1.5.14 (8887c145f)`. Using
 dfget for dfdaemon itself would be the chicken-and-egg case and is never done.
 
 After that, if `SCHEDULER_IPS` is non-empty, `/usr/local/bin/dfget` exists,

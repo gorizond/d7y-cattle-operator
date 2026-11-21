@@ -59,9 +59,9 @@ static:
     dfdaemon:
       enabled: true
       version: 1.5.14
-      tarballURL: https://github.com/dragonflyoss/client/releases/download/v1.5.14/dragonfly-client-v1.5.14-x86_64-unknown-linux-musl.tar.gz
-      tarballSHA256: d514da77d57dd77e02ac903a0072e921aa19350bbef273f5be36ae41b235653a
-      tarballRoot: dragonfly-client-v1.5.14-x86_64-unknown-linux-musl
+      tarballURL: https://github.com/dragonflyoss/client/releases/download/v1.5.14/dragonfly-client-v1.5.14-x86_64-unknown-linux-gnu.tar.gz
+      tarballSHA256: ba080e62f1626ab2fc2a5a0629a5cd912cc15099508820403108abbe2f75b1f7
+      tarballRoot: dragonfly-client-v1.5.14-x86_64-unknown-linux-gnu
       binary: dfdaemon
       dfget: dfget
     selector:

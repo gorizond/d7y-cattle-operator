@@ -868,8 +868,12 @@ releases: the nydus `v2.4.5` static tarball is SHA-256 verified, its
 `nydusd`, `nydus-image`, `nydus-overlayfs`, and `nydus-fs-select` assets are
 written to both `/nydus/v2.4.5/` and `/bin/`, and the tarball itself is mirrored
 at `/nydus/v2.4.5/nydus-static.tgz`. An existing `/bin/dfdaemon` is preserved;
-the pinned dragonfly-client `v1.5.14` tarball fills `/bin/dfdaemon` and
-`/bin/dfget` only when they are missing. The mirrored tarball and `/bin/dfget`
+the pinned dragonfly-client `v1.5.14` GNU tarball
+(`dragonfly-client-v1.5.14-x86_64-unknown-linux-gnu.tar.gz`, SHA-256
+`ba080e62…b1f7`) fills `/bin/dfdaemon` and `/bin/dfget` only when they are
+missing. Its `dfdaemon` is the 42.1 MB GNU build with SHA-256
+`e0d03d4759…bf85`, matching the host bootstrap; the musl artifact is a different
+binary even though both report `1.5.14 (8887c145f)`. The mirrored tarball and `/bin/dfget`
 are what let the host installer use P2P or the static store without relying on
 GitHub. URLs, versions, checksums, retries, and the init image
 are values. If an asset download fails after retries, the init container fails

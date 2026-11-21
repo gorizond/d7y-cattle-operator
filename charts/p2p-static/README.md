@@ -56,12 +56,17 @@ and forwards to the `p2p-static` Service. The manager REST API keeps its own
 The chart populates the static volume from pinned upstream releases; it does
 not vendor binaries. Defaults are nydus `v2.4.5`
 (`nydus-static-v2.4.5-linux-amd64.tgz`) and dragonfly-client `v1.5.14`
-(`dragonfly-client-v1.5.14-x86_64-unknown-linux-musl.tar.gz`). Both tarballs
-are SHA-256 verified before extraction. `/nydus/<version>/` is preferred by the
+(`dragonfly-client-v1.5.14-x86_64-unknown-linux-gnu.tar.gz`, SHA-256
+`ba080e62f1626ab2fc2a5a0629a5cd912cc15099508820403108abbe2f75b1f7`). This is
+the GNU build used by the host bootstrap: its `dfdaemon` is 42.1 MB with SHA-256
+`e0d03d4759310e49cc1eba05341d2d4acf678f4926f2c37d9a4127ea1b94bf85`; both the
+GNU and musl binaries report the same `1.5.14 (8887c145f)` build string, so the
+artifact hash, not the version banner, is the discriminator. Both tarballs are
+SHA-256 verified before extraction. `/nydus/<version>/` is preferred by the
 host updater and the installer's tarball fallback; `/bin/` is the legacy
 fallback and carries `dfget` for the P2P asset path. An existing
 `/bin/dfdaemon` or `/bin/dfget` is preserved; the chart only fills missing
-files. The patched nydus-snapshotter release is not served by this chart; the
+files from the GNU client tarball. The patched nydus-snapshotter release is not served by this chart; the
 embedded installer fetches it through P2P, then the static store, then its
 GitHub release, and verifies its `.sha256` asset. The embedded operator script
 checks executability of host binaries, not signatures, and `nydus-fs-select`

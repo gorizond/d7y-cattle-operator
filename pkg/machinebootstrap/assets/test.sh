@@ -470,6 +470,8 @@ assert_contains "$INSTALL" 'NYDUS_VERSION="${NYDUS_VERSION:-v2.4.5}"'
 assert_contains "$INSTALL" 'NYDUS_SNAPSHOTTER_REPO="${NYDUS_SNAPSHOTTER_REPO:-gorizond/nydus-snapshotter}"'
 assert_contains "$INSTALL" 'NYDUS_SNAPSHOTTER_VERSION="${NYDUS_SNAPSHOTTER_VERSION:-v0.16.0-p2p.2}"'
 assert_contains "$INSTALL" 'NYDUS_SNAPSHOTTER_ASSET="${NYDUS_SNAPSHOTTER_ASSET:-nydus-snapshotter-linux-amd64}"'
+assert_contains "$INSTALL" 'DRAGONFLY_CLIENT_LIBC="${DRAGONFLY_CLIENT_LIBC:-gnu}"'
+assert_contains "$INSTALL" 'DRAGONFLY_CLIENT_SHA256="${DRAGONFLY_CLIENT_SHA256:-ba080e62f1626ab2fc2a5a0629a5cd912cc15099508820403108abbe2f75b1f7}"'
 assert_contains "$INSTALL" "'%s/download/%s/%s'"
 assert_contains "$INSTALL" "'%s/latest/download/%s'"
 assert_contains "$INSTALL" 'curl -fL'
