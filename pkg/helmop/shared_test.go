@@ -292,6 +292,54 @@ func TestClientSecretHasSingleOwner(t *testing.T) {
 	}
 }
 
+// TestHelmOpDependencyGraphIsAcyclic builds the shared and per-cluster HelmOps
+// and verifies that spec.dependsOn edges form no cycle. BundleRef selectors are
+// external cert Bundles and are ignored here.
+func TestHelmOpDependencyGraphIsAcyclic(t *testing.T) {
+	c := sharedTestCluster()
+	graph := map[string][]string{}
+	for _, op := range []*fleetv1alpha1.HelmOp{
+		SharedKeyDB(c), SharedManager(c), SharedControl(c), SharedData(c),
+		SharedExtras(c, ExtrasOptions{}), SharedMirror(c), HostSync(c),
+		KeyDB(c), Manager(c), Control(c), Data(c),
+		Extras(c, ExtrasOptions{IngressEnabled: true}), Mirror(c),
+	} {
+		graph[op.Name] = nil
+		for _, ref := range op.Spec.DependsOn {
+			if ref.Name != "" {
+				graph[op.Name] = append(graph[op.Name], ref.Name)
+			}
+		}
+	}
+	const (
+		visiting = iota + 1
+		done
+	)
+	state := map[string]int{}
+	var visit func(string) bool
+	visit = func(node string) bool {
+		switch state[node] {
+		case visiting:
+			return false
+		case done:
+			return true
+		}
+		state[node] = visiting
+		for _, next := range graph[node] {
+			if _, known := graph[next]; known && !visit(next) {
+				return false
+			}
+		}
+		state[node] = done
+		return true
+	}
+	for name := range graph {
+		if !visit(name) {
+			t.Fatalf("HelmOp dependency graph has a cycle at %s", name)
+		}
+	}
+}
+
 func TestSharedExtrasManagerIngressGate(t *testing.T) {
 	if got := valueAt(t, SharedExtras(sharedTestCluster(), ExtrasOptions{}).Spec.Helm.Values.Data, "ingress", "enabled"); got != SharedManagerIngressEnabledTemplate {
 		t.Errorf("SharedExtras ingress.enabled = %v, want the manager-label template", got)
