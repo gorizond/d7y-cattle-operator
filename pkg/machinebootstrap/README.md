@@ -40,6 +40,51 @@ scheduler IPs are still empty, so the host dfdaemon does not start; later
 reconciles keep the marker and are idempotent. Workers normally have the
 annotation by the time their bootstrap Secret is rendered.
 
+## Pre-install annotation
+
+A provisioning Cluster can carry a per-cluster POSIX shell body in the
+`d7y-operator-preinstall` annotation. It is rendered as a second marked block
+(`# d7y-cattle-operator:preinstall` … `# d7y-cattle-operator:preinstall-end`)
+immediately **before** the p2p block, so it runs before `p2p-install.sh` and
+Dragonfly. The feature uses the same gate as the p2p block: label
+`d7y-operator-cattle: "true"` and annotation `p2p.dragonfly.io/seed: "true"`.
+An empty or whitespace-only annotation keeps the previous p2p-only behavior.
+
+The body is copied literally into a quoted heredoc (`D7Y_PREINSTALL_EOF`, with
+`_1`, `_2`, … suffixes when the body contains the delimiter) and executed by
+`bash` in a subshell:
+
+```sh
+bash /tmp/d7y-preinstall.sh >/tmp/d7y-preinstall.log 2>&1 || d7y_preinstall_rc=$?
+```
+
+The subshell and the namespaced `d7y_preinstall_rc` keep the outer Rancher
+`dash` bootstrap script untouched. The block is fail-open: a failing command
+does not stop the bootstrap or Dragonfly. stdout/stderr are echoed with the
+`[d7y-preinstall]` prefix and a final `[d7y-preinstall] exit=<code>` line; the
+final log line is emitted even without a trailing newline.
+
+Lifecycle and ordering: every reconcile removes the old pre-install block,
+replaces the p2p block, then inserts the new pre-install block before the p2p
+marker. The body is part of `p2p.dragonfly.io/bootstrap-inputs`, so a text edit
+re-renders the Secret once, identical text is a no-op, and clearing the
+annotation removes the block while the p2p block stays. Block markers created
+by v0.3.21 are recognized without manual migration. Existing nodes pick up the
+annotation only when their bootstrap/cloud-init runs again (normally a reboot);
+the operator never restarts machines.
+
+Limits and safety: the annotation is limited to 256 KiB. The final Secret is
+checked against the Kubernetes 1 MiB object limit by serializing a DeepCopy with
+`encoding/json` (`data` is base64 in the API, so the raw value length is not a
+safe guard). When the pre-install block would overflow, it is dropped, the p2p
+block is kept, the value is never truncated, and a `PreinstallTooLarge` warning
+event is emitted. NUL or a line equal to either pre-install marker is rejected
+with `PreinstallInvalid`. Events never contain the annotation body.
+
+**Never put secrets in this annotation.** Its value is visible in the Cluster
+object and in every machine bootstrap Secret, and it grants root execution on
+new nodes. Pass auth keys/tokens through a separate mechanism.
+
 ## P2P bootstrap asset delivery
 
 The first delivery is deliberately direct. `p2p-install.sh` detects the node

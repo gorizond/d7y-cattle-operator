@@ -21,9 +21,22 @@ const (
 	// the injected block.
 	ClientCertRevisionAnnotation = "p2p.dragonfly.io/client-cert-revision"
 	// BootstrapInputsAnnotation stores the full desired bootstrap-input
-	// fingerprint (client revision, scheduler IPs/ID, distro, asset versions).
+	// fingerprint (client revision, scheduler IPs/ID, distro, asset versions,
+	// pre-install body).
 	BootstrapInputsAnnotation = "p2p.dragonfly.io/bootstrap-inputs"
 	SchedulerIPsAnnotation    = "p2p.dragonfly.io/scheduler-ips"
+	// PreinstallAnnotation holds the per-Cluster POSIX shell body rendered
+	// immediately before the p2p block. Empty/whitespace disables it.
+	PreinstallAnnotation = "d7y-operator-preinstall"
+	// PreinstallMarker opens the injected pre-install block.
+	PreinstallMarker = "# d7y-cattle-operator:preinstall"
+	// PreinstallEndMarker closes the injected pre-install block.
+	PreinstallEndMarker = "# d7y-cattle-operator:preinstall-end"
+	// MaxPreinstallAnnotationBytes bounds the Cluster annotation value (256 KiB).
+	MaxPreinstallAnnotationBytes = 256 << 10
+	// MaxBootstrapValueBytes is the conservative raw-value ceiling:
+	// 1 MiB minus 64 KiB of object overhead.
+	MaxBootstrapValueBytes = 983040
 )
 
 // InstallConfig carries the operator-wide values used to build the p2p install
