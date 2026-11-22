@@ -2,14 +2,18 @@ package cluster
 
 import (
 	"context"
+	"errors"
 	"fmt"
+	"log/slog"
 	"net"
+	"net/http"
 	"sort"
 	"strings"
 	"time"
 
 	provv1 "github.com/rancher/rancher/pkg/apis/provisioning.cattle.io/v1"
 	corev1 "k8s.io/api/core/v1"
+	apierrors "k8s.io/apimachinery/pkg/api/errors"
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
 	"k8s.io/apimachinery/pkg/labels"
 	"k8s.io/apimachinery/pkg/watch"
@@ -115,6 +119,57 @@ func addPublicIPv4(ips *[]string, seen map[string]bool, raw string) {
 	*ips = append(*ips, value)
 }
 
+// seedMachineIPs returns all public IPv4 addresses of the seed Cluster's CAPI
+// Machines. It is the fallback when the downstream kubeconfig cannot be used.
+func (c *Controller) seedMachineIPs(cluster *provv1.Cluster) ([]string, error) {
+	if cluster == nil || c.machines == nil {
+		return nil, nil
+	}
+	machines, err := c.machines.List(cluster.Namespace, labels.Everything())
+	if err != nil {
+		return nil, fmt.Errorf("list machines for seed IPs: %w", err)
+	}
+	seen := map[string]bool{}
+	var ips []string
+	for i := range machines {
+		machine := machines[i]
+		if machine == nil || machine.DeletionTimestamp != nil || machine.Namespace != cluster.Namespace {
+			continue
+		}
+		clusterName := machine.Labels[capiClusterName]
+		if clusterName == "" {
+			clusterName = machine.Labels[rkeClusterName]
+		}
+		if clusterName != cluster.Name {
+			continue
+		}
+		for _, address := range machine.Status.Addresses {
+			if address.Type == capiv1beta2.MachineInternalIP || address.Type == capiv1beta2.MachineExternalIP {
+				addPublicIPv4(&ips, seen, address.Address)
+			}
+		}
+	}
+	sort.Strings(ips)
+	return ips, nil
+}
+
+// downstreamAccessDenied reports whether a downstream API error means the
+// Rancher kubeconfig identity is not allowed to use the cluster proxy.
+func downstreamAccessDenied(err error) bool {
+	if err == nil {
+		return false
+	}
+	if apierrors.IsForbidden(err) || apierrors.IsUnauthorized(err) {
+		return true
+	}
+	var status apierrors.APIStatus
+	if errors.As(err, &status) {
+		code := status.Status().Code
+		return code == http.StatusForbidden || code == http.StatusUnauthorized
+	}
+	return false
+}
+
 func (c *Controller) discoverSeedSchedulerIPs(cluster *provv1.Cluster) ([]string, error) {
 	if cluster == nil {
 		return nil, nil
@@ -133,7 +188,18 @@ func (c *Controller) discoverSeedSchedulerIPs(cluster *provv1.Cluster) ([]string
 	}
 	pods, err := c.downstream.ListSchedulerPods(c.ctx, kubeconfig)
 	if err != nil {
-		return nil, err
+		if !downstreamAccessDenied(err) {
+			return nil, err
+		}
+		fallback, fallbackErr := c.seedMachineIPs(cluster)
+		if fallbackErr != nil || len(fallback) == 0 {
+			return nil, err
+		}
+		slog.Warn("downstream scheduler pod discovery denied; using all seed machine public IPs",
+			"cluster", cluster.Namespace+"/"+cluster.Name, "error", err)
+		c.event(cluster, corev1.EventTypeWarning, "SchedulerIPsFallback",
+			"downstream scheduler pod discovery is denied; using all seed machine public IPs")
+		return fallback, nil
 	}
 	if len(pods) == 0 {
 		return nil, nil
