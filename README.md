@@ -725,14 +725,24 @@ scheduler Secret is delivered by the `p2p-scheduler-cert` HelmOp.
 
 On operator upgrade, the first seed reconcile creates the
 `<cluster>-p2p-scheduler-cert` HelmOp and leaves the legacy raw
-`<cluster>-p2p-scheduler` Bundle in place. Once Fleet reports the generated
-Bundle ready, the operator sets `p2p.dragonfly.io/mtls-cert-revision` and
-deletes the legacy Bundle. The Secret name and keys are unchanged, so pods
-keep mounting the same path and there is no window where it disappears. The
-migration is idempotent; deleting the seed or Cluster removes both the HelmOp
-and any lingering legacy Bundle. The HelmOp name carries the `-cert` suffix
-because Fleet names the generated Bundle after the HelmOp and the legacy raw
-Bundle still owns `<cluster>-p2p-scheduler` until migration completes.
+`<cluster>-p2p-scheduler` Bundle in place. The HelmOp sets
+`spec.helm.takeOwnership=true`, so its release adopts the existing
+`dragonfly-p2p-scheduler` Secret. Once Fleet reports the generated Bundle
+ready and the Secret is observed through the downstream kubeconfig, the
+operator patches the legacy Bundle with `spec.keepResources=true`, bumps its
+`forceSyncGeneration`, and waits for that legacy Bundle to redeploy and report
+Ready before deleting it. The deploy records `keepResources` in the legacy Helm
+release, so Fleet orphans the Secret instead of deleting it; the new Helm
+release already owns it. The operator re-checks the Secret after the delete.
+If it is missing, it bumps `spec.forceSyncGeneration` on the HelmOp to force a
+redeploy, retries a stuck redeploy at most every five minutes, and does
+not publish `p2p.dragonfly.io/mtls-cert-revision` until the Secret is present.
+
+The Secret name and keys are unchanged, so pods keep mounting the same path.
+The migration is idempotent; deleting the seed or Cluster removes both the
+HelmOp and any lingering legacy Bundle. The HelmOp name carries the `-cert`
+suffix because Fleet names the generated Bundle after the HelmOp and the legacy
+raw Bundle still owns `<cluster>-p2p-scheduler` until migration completes.
 
 Fleet `spec.downstreamResources` copies Secrets into the release namespace.
 Each copied Secret must have exactly one owning HelmOp per target cluster:

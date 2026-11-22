@@ -25,6 +25,9 @@ func SchedulerCert(c Cluster, crt, key, ca string) *fleetv1alpha1.HelmOp {
 				"ca":  ca,
 			},
 		}, nil)
+	// Adopt the Secret delivered by the legacy raw Bundle during migration.
+	// Cleanup still removes it with the release.
+	op.Spec.Helm.TakeOwnership = true
 	// Fleet copies spec.labels to the generated Bundle. The shared control
 	// depends on SchedulerCertLabel, so it waits for this HelmOp's Bundle
 	// rather than the legacy raw Bundle.
