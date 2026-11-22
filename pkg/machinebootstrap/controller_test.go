@@ -874,3 +874,75 @@ func TestClusterChangedEnqueuesOnPreinstallChange(t *testing.T) {
 		t.Fatalf("enqueued = %v, want a second enqueue after the pre-install change", secrets.enqueued)
 	}
 }
+
+func truncatedBootstrapSecret(name string) *corev1.Secret {
+	return &corev1.Secret{
+		ObjectMeta: metav1.ObjectMeta{
+			Name:      name,
+			Namespace: "fleet-default",
+			OwnerReferences: []metav1.OwnerReference{{
+				APIVersion: "rke.cattle.io/v1",
+				Kind:       "RKEBootstrap",
+				Name:       "machine-1",
+			}},
+		},
+		Type: bootstrapSecretType,
+		Data: map[string][]byte{bootstrapValueKey: []byte("#!/bin/bash\necho start\ndo_install \"$@\"\nexit 0\n")},
+	}
+}
+
+func TestReconcileTruncatedBootstrapSecretUsesOwnerReference(t *testing.T) {
+	controller, secrets, _, clusters, events, _ := testController()
+	setPreinstall(clusters, "echo pre")
+	truncated := truncatedBootstrapSecret("d7y-preinstall-test-d7y-preinstall-test-cp-kffbb-q4wdz-ma-ca823")
+	secrets.secret = truncated
+
+	reconcileNow(t, controller, secrets)
+	value := string(secrets.secret.Data[bootstrapValueKey])
+	if count := strings.Count(value, bootstrap.PreinstallMarker+"\n"); count != 1 {
+		t.Fatalf("pre-install marker count = %d, want 1: %q", count, value)
+	}
+	if count := strings.Count(value, bootstrap.Marker+"\n"); count != 1 {
+		t.Fatalf("p2p marker count = %d, want 1: %q", count, value)
+	}
+	if strings.Index(value, bootstrap.PreinstallMarker) > strings.Index(value, bootstrap.Marker) {
+		t.Fatalf("pre-install block is not before the p2p block: %q", value)
+	}
+	if secrets.updates != 1 {
+		t.Fatalf("Secret updates = %d, want 1", secrets.updates)
+	}
+	if event := eventByReason(events, "BootstrapInjected"); event == nil {
+		t.Fatalf("events = %+v, want BootstrapInjected", events.events)
+	}
+
+	reconcileNow(t, controller, secrets)
+	if secrets.updates != 1 {
+		t.Errorf("Secret updates = %d, want 1 after an idempotent re-sync", secrets.updates)
+	}
+}
+
+func TestClusterChangedEnqueuesTruncatedBootstrapSecret(t *testing.T) {
+	controller, secrets, _, clusters, _, _ := testController()
+	truncated := truncatedBootstrapSecret("d7y-preinstall-test-d7y-preinstall-test-cp-kffbb-q4wdz-ma-ca823")
+	secrets.secret = truncated
+
+	if _, err := controller.clusterChanged("", clusters.clusters["fleet-default/c1"]); err != nil {
+		t.Fatalf("clusterChanged() error = %v", err)
+	}
+	if len(secrets.enqueued) != 1 || secrets.enqueued[0] != "fleet-default/"+truncated.Name {
+		t.Fatalf("enqueued = %v, want fleet-default/%s", secrets.enqueued, truncated.Name)
+	}
+}
+
+func TestClientSecretChangeEnqueuesTruncatedBootstrapSecret(t *testing.T) {
+	controller, secrets, _, _, _, _ := testController()
+	truncated := truncatedBootstrapSecret("d7y-preinstall-test-d7y-preinstall-test-cp-kffbb-q4wdz-ma-ca823")
+	secrets.secret = truncated
+
+	if _, err := controller.clientSecretChanged("", secrets.mtls.DeepCopy()); err != nil {
+		t.Fatalf("clientSecretChanged() error = %v", err)
+	}
+	if len(secrets.enqueued) != 1 || secrets.enqueued[0] != "fleet-default/"+truncated.Name {
+		t.Fatalf("enqueued = %v, want fleet-default/%s", secrets.enqueued, truncated.Name)
+	}
+}

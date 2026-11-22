@@ -154,8 +154,8 @@ func (c *Controller) clusterChanged(_ string, cluster *provv1.Cluster) (*provv1.
 		if secret == nil || secret.Type != bootstrapSecretType {
 			continue
 		}
-		machineName := strings.TrimSuffix(secret.Name, machineBootstrapSuffix)
-		if machineName == "" || machineName == secret.Name {
+		machineName := machineNameFromSecret(secret)
+		if machineName == "" {
 			continue
 		}
 		machine, err := c.machines.Get(secret.Namespace, machineName)
@@ -200,6 +200,25 @@ func (c *Controller) clientSecretChanged(_ string, secret *corev1.Secret) (*core
 	return secret, nil
 }
 
+// machineNameFromSecret resolves the CAPI Machine name for a bootstrap Secret.
+// RKEBootstrap-created Secrets use a truncated generated name and point at the
+// Machine through an ownerReference; older Secrets use the
+// "<machine>-machine-bootstrap" name.
+func machineNameFromSecret(secret *corev1.Secret) string {
+	if secret == nil {
+		return ""
+	}
+	for _, ref := range secret.OwnerReferences {
+		if ref.APIVersion == "rke.cattle.io/v1" && ref.Kind == "RKEBootstrap" {
+			return ref.Name
+		}
+	}
+	if strings.HasSuffix(secret.Name, machineBootstrapSuffix) {
+		return strings.TrimSuffix(secret.Name, machineBootstrapSuffix)
+	}
+	return ""
+}
+
 func (c *Controller) reconcile(key string, secret *corev1.Secret) (*corev1.Secret, error) {
 	if secret == nil || secret.Type != bootstrapSecretType {
 		return secret, nil
@@ -207,8 +226,8 @@ func (c *Controller) reconcile(key string, secret *corev1.Secret) (*corev1.Secre
 	if c.secrets == nil || c.mtls == nil || c.machines == nil || c.clusters == nil {
 		return secret, nil
 	}
-	machineName := strings.TrimSuffix(secret.Name, machineBootstrapSuffix)
-	if machineName == "" || machineName == secret.Name {
+	machineName := machineNameFromSecret(secret)
+	if machineName == "" {
 		return secret, nil
 	}
 	machine, err := c.machines.Get(secret.Namespace, machineName)
