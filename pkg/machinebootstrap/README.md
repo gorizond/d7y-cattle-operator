@@ -1,18 +1,42 @@
 # Machine bootstrap
 
-The operator embeds `assets/p2p-install.sh` and injects it, with the bootstrap
-env-file assignments, into the Rancher node-driver machine bootstrap Secret.
-The block is written to `/tmp/d7y-p2p-install.sh` with a POSIX heredoc and
-executed as `bash /tmp/d7y-p2p-install.sh || true`, so a P2P failure cannot
-prevent the surrounding Rancher install script from calling `do_install "$@"`.
-The surrounding cloud-init shell is `dash`; the heredoc body is literal and is
-not parsed by dash.
+The operator injects the short p2p bootstrap command into the Rancher
+node-driver machine bootstrap Secret:
 
-The same embedded script is the single source of truth for the host setup; the
-`p2p-static` chart serves the static `/bin`, `/nydus`, `/client`, and
-`/snapshotter` assets.
+```sh
+# d7y-cattle-operator:p2p-install
+set -a
+P2P_DISTRO='...'
+SCHEDULER_IPS='...'
+MANAGER_GRPC='...'
+... full BuildInstallEnv env lines ...
+set +a
+curl -sfL "<static>/p2p-install.sh" | bash || true
+# d7y-cattle-operator:p2p-install-end
+```
 
-The block carries the client identity's `ca-bundle.crt` (falling back to
+The env-file is embedded in the Secret, shell-quoted, and exported with
+`set -a`/`set +a`; the piped `bash` reads the variables. The script itself is
+served by the `p2p-static` chart at a plain `/p2p-install.sh` URL — there is no
+payload in the URL or query. The Secret no longer carries the ~69.7 KiB
+`p2p-install.sh` body. The `|| true` keeps the p2p step fail-open so a P2P
+failure cannot prevent the surrounding Rancher install script from calling
+`do_install "$@"`. The markers make the block idempotent and let the
+pre-install block be inserted directly before it.
+
+The `p2p-static` chart serves `/p2p-install.sh` (a byte-identical copy of
+`pkg/machinebootstrap/assets/p2p-install.sh`) and the static `/bin`, `/nydus`,
+`/client`, and `/snapshotter` assets. The endpoint sets `access_log off`.
+
+The env includes `P2P_DISTRO`, `SCHEDULER_IPS`, `MANAGER_GRPC`, `STATIC_URL`,
+`SMART_PROXY_URL`, `NYDUS_MIRROR_URL`, `SCHEDULER_HOST`,
+`SCHEDULER_CLUSTER_ID`, `CLIENT_VERSION`, `NYDUS_VERSION`,
+`NYDUS_SNAPSHOTTER_VERSION`, `CA_CRT_B64`, `CLIENT_CRT_B64`, and
+`CLIENT_KEY_B64`. The client certificate **and key** stay in the Secret;
+CA-only is insufficient for mTLS. The full block stays far below the
+32 KiB `user_data` limit.
+
+The env carries the client identity's `ca-bundle.crt` (falling back to
 `ca.crt` for legacy Secrets). The bootstrap Secret is annotated with
 `p2p.dragonfly.io/client-cert-revision` and
 `p2p.dragonfly.io/bootstrap-inputs` (client revision + scheduler IPs/ID +
@@ -24,7 +48,12 @@ bootstrap/cloud-init runs again, which in practice requires a reboot. Version
 convergence is separate: host-sync updates `/etc/nydus/versions.env` live, and a
 later block re-run reads it.
 
-The block always carries `P2P_DISTRO` and the Cluster's
+Existing v0.3.23 Secrets with the old inline heredoc block are replaced by the
+short block on the next reconcile. Existing nodes only pick up the new block
+after their Rancher bootstrap/cloud-init runs again (normally a reboot), as
+with any other bootstrap change.
+
+The env always carries `P2P_DISTRO` and the Cluster's
 `p2p.dragonfly.io/scheduler-ips` annotation (seed clusters publish their own
 public CAPI machine IPs; non-seed clusters aggregate other seeds). With an empty IP list the block is
 still installed (binaries/configs/units), but `dfdaemon-bootstrap` is not
@@ -72,6 +101,11 @@ annotation removes the block while the p2p block stays. Block markers created
 by v0.3.21 are recognized without manual migration. Existing nodes pick up the
 annotation only when their bootstrap/cloud-init runs again (normally a reboot);
 the operator never restarts machines.
+
+**Security:** the mTLS client key is in the machine-bootstrap Secret (and
+therefore in node-driver `user_data`, which the provider can see), but it is **not**
+in the HTTP URL or access logs. The `p2p-static` chart sets `access_log off` for
+`/p2p-install.sh`; do not expose the Secret or its env in public artifacts.
 
 Limits and safety: the annotation is limited to 256 KiB. The final Secret is
 checked against the Kubernetes 1 MiB object limit by serializing a DeepCopy with

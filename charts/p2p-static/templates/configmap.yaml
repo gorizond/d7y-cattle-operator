@@ -6,9 +6,6 @@ metadata:
     {{- include "p2p-static.labels" . | nindent 4 }}
 data:
   default.conf: |-
-    large_client_header_buffers 4 32k;
-    client_header_buffer_size 32k;
-
     server {
         listen 80;
         listen [::]:80;
@@ -20,6 +17,13 @@ data:
             access_log off;
             add_header Content-Type text/plain;
             return 200 "ok\n";
+        }
+
+        location = /p2p-install.sh {
+            access_log off;
+            alias /etc/nginx/conf.d/p2p-install.sh;
+            default_type text/x-shellscript;
+            add_header Cache-Control "no-store" always;
         }
 
         location /bin/ {
@@ -50,5 +54,7 @@ data:
 {{ .Files.Get "files/populate-static.sh" | indent 4 }}
   nydus-fs-select.sh: |-
 {{ .Files.Get "files/nydus-fs-select.sh" | indent 4 }}
+  p2p-install.sh: |-
+{{ .Files.Get "files/p2p-install.sh" | indent 4 }}
   populate-plan.txt: |-
 {{ include "p2p-static.populatePlan" . | indent 4 }}

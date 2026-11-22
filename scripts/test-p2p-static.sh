@@ -31,6 +31,11 @@ if grep -Eq 'v1\.5\.14|v2\.4\.5|v0\.16\.0|ba080e62|370ff792|1ad7b793|85925af7|24
   fail "p2p-static values must not duplicate operator version/repo/checksum defaults"
 fi
 bash -n "$chart/files/nydus-fs-select.sh" || fail "chart nydus-fs-select.sh has a syntax error"
+bash -n "$chart/files/p2p-install.sh" || fail "chart p2p-install.sh has a syntax error"
+cmp -s "$chart/files/p2p-install.sh" "$script" || fail "chart p2p-install.sh differs from the embedded asset"
+if grep -q '__CFG__\|?cfg=' "$chart/files/p2p-install.sh"; then
+  fail "chart p2p-install.sh must not carry the cfg query/placeholder"
+fi
 
 helm template p2p-static "$chart" --namespace dragonfly-system --values "$values" >"$tmp/p2p-static.yaml"
 grep -q 'name: populate-static' "$tmp/p2p-static.yaml" || fail "p2p-static is missing the populate-static init container"
@@ -59,8 +64,11 @@ grep -q 'location /snapshotter/' "$tmp/p2p-static.yaml" || fail "p2p-static is m
 grep -q 'location /bin/' "$tmp/p2p-static.yaml" || fail "p2p-static is missing the /bin asset route"
 grep -q 'listen 80;' "$tmp/p2p-static.yaml" || fail "p2p-static nginx must listen on port 80"
 grep -q 'listen \[::\]:80;' "$tmp/p2p-static.yaml" || fail "p2p-static nginx must listen on IPv6 localhost too"
-if grep -q 'p2p-install.sh' "$tmp/p2p-static.yaml"; then
-  fail "p2p-static must not serve p2p-install.sh"
+grep -q 'location = /p2p-install.sh' "$tmp/p2p-static.yaml" || fail "p2p-static is missing the p2p-install.sh endpoint"
+grep -q 'access_log off;' "$tmp/p2p-static.yaml" || fail "p2p-static must disable access logs for p2p-install.sh"
+grep -q 'alias /etc/nginx/conf.d/p2p-install.sh;' "$tmp/p2p-static.yaml" || fail "p2p-static must serve p2p-install.sh from the ConfigMap file"
+if grep -q 'sub_filter\|__CFG__\|?cfg=' "$tmp/p2p-static.yaml"; then
+  fail "p2p-static must not use the cfg query/sub_filter"
 fi
 
 helm template p2p-static "$chart" --namespace dragonfly-system --values "$values" \
@@ -71,9 +79,7 @@ grep -q 'PathPrefix(`/bin`)' "$tmp/p2p-static-manager.yaml" || fail "p2p-static 
 grep -q 'PathPrefix(`/nydus`)' "$tmp/p2p-static-manager.yaml" || fail "p2p-static /nydus path missing"
 grep -q 'PathPrefix(`/client`)' "$tmp/p2p-static-manager.yaml" || fail "p2p-static /client path missing"
 grep -q 'PathPrefix(`/snapshotter`)' "$tmp/p2p-static-manager.yaml" || fail "p2p-static /snapshotter path missing"
-if grep -q 'p2p-install.sh' "$tmp/p2p-static-manager.yaml"; then
-  fail "p2p-static manager route must not include p2p-install.sh"
-fi
+grep -q 'PathPrefix(`/p2p-install.sh`)' "$tmp/p2p-static-manager.yaml" || fail "p2p-static manager route is missing /p2p-install.sh"
 
 # Exercise the populate script with a fake downloader: versioned/arch layouts
 # for both architectures, legacy /bin from the node arch, existing dfdaemon kept.
