@@ -64,7 +64,7 @@ func testECDSAIdentity(t *testing.T) (caPEM, certPEM, keyPEM []byte) {
 		pem.EncodeToMemory(&pem.Block{Type: "EC PRIVATE KEY", Bytes: keyDER})
 }
 
-func TestShortBootstrapSecretFitsHetznerUserData(t *testing.T) {
+func TestShortBootstrapSecretFitsUserDataLimit(t *testing.T) {
 	controller, secrets, _, clusters, _, _ := testController()
 	caPEM, certPEM, keyPEM := testECDSAIdentity(t)
 	secrets.mtls.Data = map[string][]byte{

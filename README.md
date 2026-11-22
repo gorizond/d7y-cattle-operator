@@ -598,7 +598,7 @@ The env is shell-quoted in the Secret and exported to the piped `bash` with
 manager/static URLs, scheduler host/ID, versions, and the CA, client
 certificate, and **client key** (mTLS needs all three). The plain
 `p2p-static` URL carries no payload/query. The full block is far below
-Hetzner's 32 KiB `user_data` limit. Existing v0.3.23 Secrets are migrated from
+node-driver `user_data` limits (32 KiB in some providers). Existing v0.3.23 Secrets are migrated from
 the inline heredoc block on the next reconcile; nodes apply the new block only
 after their next bootstrap/cloud-init run (normally a reboot). **Security:** the
 client key is in the Secret and provider-visible `user_data`, but not in HTTP
@@ -925,7 +925,7 @@ registry so RKE2 can still start.
 a byte-identical copy of the host installer script (no query/substitution).
 The machine bootstrap Secret contains the short `curl` command plus the
 shell-quoted env-file (no JSON, no `jq`, no python on the node); the Secret
-stays below Hetzner's 32 KiB `user_data` limit. The script installs the
+stays below the 32 KiB `user_data` limit used by some node drivers. The script installs the
 host-only upstream nydus
 snapshotter (`v0.16.0`) plus the static `v2.4.5` daemon assets
 (including `nydus-overlayfs`), writes the global nydus containerd drop-in

@@ -33,7 +33,7 @@ The env includes `P2P_DISTRO`, `SCHEDULER_IPS`, `MANAGER_GRPC`, `STATIC_URL`,
 `SCHEDULER_CLUSTER_ID`, `CLIENT_VERSION`, `NYDUS_VERSION`,
 `NYDUS_SNAPSHOTTER_VERSION`, `CA_CRT_B64`, `CLIENT_CRT_B64`, and
 `CLIENT_KEY_B64`. The client certificate **and key** stay in the Secret;
-CA-only is insufficient for mTLS. The full block stays far below Hetzner's
+CA-only is insufficient for mTLS. The full block stays far below the
 32 KiB `user_data` limit.
 
 The env carries the client identity's `ca-bundle.crt` (falling back to
@@ -103,7 +103,7 @@ annotation only when their bootstrap/cloud-init runs again (normally a reboot);
 the operator never restarts machines.
 
 **Security:** the mTLS client key is in the machine-bootstrap Secret (and
-therefore in Hetzner `user_data`, which the provider can see), but it is **not**
+therefore in node-driver `user_data`, which the provider can see), but it is **not**
 in the HTTP URL or access logs. The `p2p-static` chart sets `access_log off` for
 `/p2p-install.sh`; do not expose the Secret or its env in public artifacts.
 

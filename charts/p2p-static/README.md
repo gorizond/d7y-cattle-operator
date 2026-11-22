@@ -18,7 +18,7 @@ and exported to the piped `bash` with `set -a`/`set +a`: `P2P_DISTRO`,
 `SCHEDULER_IPS`, `MANAGER_GRPC`, `STATIC_URL`, `SMART_PROXY_URL`,
 `NYDUS_MIRROR_URL`, `SCHEDULER_HOST`, `SCHEDULER_CLUSTER_ID`, the
 client/nydus/snapshotter versions, and the CA, client certificate, and client
-key (base64). The Secret stays below Hetzner's 32 KiB `user_data` limit.
+key (base64). The Secret stays below the 32 KiB `user_data` limit.
 
 **Security:** the mTLS client key is in the Secret (and provider-visible
 `user_data`), but **not** in the HTTP URL/access logs. Do not expose the Secret
