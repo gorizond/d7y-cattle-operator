@@ -76,6 +76,20 @@ entries:
     version: 0.1.0
   d7y-cattle-operator:
   - apiVersion: v2
+    appVersion: v0.3.20
+    created: "2026-11-22T16:43:23.116257123Z"
+    description: Dragonfly P2P operator for Rancher-managed RKE2 clusters
+    digest: 0e22eb7c6b2b57bf4cbdf1fb949bf498bd01387f82fca359a96381c4099ab5b5
+    home: https://github.com/gorizond/d7y-cattle-operator
+    kubeVersion: '>=1.28.0-0'
+    name: d7y-cattle-operator
+    sources:
+    - https://github.com/gorizond/d7y-cattle-operator
+    type: application
+    urls:
+    - https://github.com/gorizond/d7y-cattle-operator/releases/download/d7y-cattle-operator-0.3.20/d7y-cattle-operator-0.3.20.tgz
+    version: 0.3.20
+  - apiVersion: v2
     appVersion: v0.3.19
     created: "2026-11-22T13:19:39.176111877Z"
     description: Dragonfly P2P operator for Rancher-managed RKE2 clusters
@@ -1487,6 +1501,21 @@ entries:
     urls:
     - https://github.com/gorizond/d7y-cattle-operator/releases/download/p2p-host-sync-0.1.0/p2p-host-sync-0.1.0.tgz
     version: 0.1.0
+  p2p-scheduler-cert:
+  - apiVersion: v2
+    appVersion: 1.0.0
+    created: "2026-11-22T16:43:23.547085874Z"
+    description: Per-seed scheduler TLS Secret for the Dragonfly P2P control plane
+    digest: f0aee16fcc28128b27724a9af9abe5283d22939fc38e33b4b267b5d374c25da2
+    home: https://github.com/gorizond/d7y-cattle-operator
+    kubeVersion: '>=1.28.0-0'
+    name: p2p-scheduler-cert
+    sources:
+    - https://github.com/gorizond/d7y-cattle-operator
+    type: application
+    urls:
+    - https://github.com/gorizond/d7y-cattle-operator/releases/download/p2p-scheduler-cert-0.1.0/p2p-scheduler-cert-0.1.0.tgz
+    version: 0.1.0
   p2p-static:
   - apiVersion: v2
     appVersion: 0.1.0
@@ -1937,4 +1966,4 @@ entries:
     urls:
     - https://github.com/gorizond/d7y-cattle-operator/releases/download/registry-proxy-0.1.0/registry-proxy-0.1.0.tgz
     version: 0.1.0
-generated: "2026-11-22T13:19:39.904449101Z"
+generated: "2026-11-22T16:43:23.70313295Z"
