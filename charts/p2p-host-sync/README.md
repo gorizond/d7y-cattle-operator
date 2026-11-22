@@ -1,14 +1,16 @@
 # p2p-host-sync
 
-Privileged per-seed DaemonSet that keeps host bootstrap inputs current without
-waiting for a node reboot.
+Chart 0.1.4. Privileged per-seed DaemonSet that keeps host bootstrap inputs
+current without waiting for a node reboot. It mounts `/etc/dragonfly`,
+`/etc/nydus`, and `/usr/local/bin` from the host and runs with `hostPID`.
 
 It writes from its ConfigMap to the host:
 
 - `/etc/dragonfly/{dynconfig.yaml,scheduler-ips,certs/*}` (existing);
 - `/etc/nydus/versions.env` and `/etc/nydus/updater.env` with the operator
   versions, repositories, and fallback checksums, including
-  `NYDUS_SNAPSHOTTER_BINARY_SHA256_AMD64/ARM64` (verified v0.16.0 defaults);
+  `NYDUS_SNAPSHOTTER_BINARY_SHA256_AMD64/ARM64` (verified v0.16.0 defaults:
+  `9bd24308ef51…2ff0` / `399f7a5b80…3859`);
 - `/usr/local/bin/nydus-updater` and `/usr/local/bin/nydus-fs-select`.
 
 The DaemonSet runs with `hostPID: true` and, once per revision, triggers

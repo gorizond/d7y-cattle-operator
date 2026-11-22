@@ -9,7 +9,8 @@ The surrounding cloud-init shell is `dash`; the heredoc body is literal and is
 not parsed by dash.
 
 The same embedded script is the single source of truth for the host setup; the
-`p2p-static` chart serves only the static `/bin` and `/nydus` assets.
+`p2p-static` chart serves the static `/bin`, `/nydus`, `/client`, and
+`/snapshotter` assets.
 
 The block carries the client identity's `ca-bundle.crt` (falling back to
 `ca.crt` for legacy Secrets). The bootstrap Secret is annotated with
@@ -18,8 +19,10 @@ The block carries the client identity's `ca-bundle.crt` (falling back to
 distro); when either changes, the injected block is replaced in place (bounded
 by the p2p start/end markers). A provisioning-Cluster watch re-enqueues only
 that cluster's bootstrap Secrets when its scheduler annotations change.
-Existing nodes only pick up the new block after their Rancher
-bootstrap/cloud-init runs again, which in practice requires a reboot.
+Existing nodes only pick up a changed bootstrap block after their Rancher
+bootstrap/cloud-init runs again, which in practice requires a reboot. Version
+convergence is separate: host-sync updates `/etc/nydus/versions.env` live, and a
+later block re-run reads it.
 
 The block always carries `P2P_DISTRO` and the Cluster's
 `p2p.dragonfly.io/scheduler-ips` annotation (seed clusters publish their own
@@ -64,14 +67,15 @@ waits up to `P2P_ASSETS_READY_TIMEOUT` seconds (default 60) for
 service and switches the remaining downloads to direct.
 `dfget --scheduling-policy always --endpoint /var/run/dragonfly/dfdaemon.sock
 --timeout 10m [--digest sha256:<sum>] <url> -O <tmp>` fetches the pinned nydus
-tarball (`nydus-static-v2.4.5-linux-amd64.tgz`) and the upstream
+tarball (`nydus-static-v2.4.5-linux-<arch>.tgz`) and the upstream
 `containerd/nydus-snapshotter` `v0.16.0` tarball (extracts
 `bin/containerd-nydus-grpc`).
 The static-store and P2P URLs carry version+arch:
 `/nydus/<version>/<arch>/nydus-static.tgz` and
 `/snapshotter/<version>/<arch>/<asset>`. The nydus order is P2P, static-store
-tarball, GitHub release; the snapshotter order is the pinned per-arch checksum,
-P2P with digest, static store, GitHub release. Every nydus tarball and
+tarball, GitHub release; the snapshotter order is the release checksum
+(sidecar first, pinned fallback), P2P with digest, static store, GitHub
+release. Every nydus tarball and
 snapshotter is SHA-256 verified; a mismatch is discarded and never installed.
 A final direct checksum mismatch is fatal. Upstream v0.16.0 publishes amd64
 and arm64 tarballs with `bin/containerd-nydus-grpc`; both the tarball and the
@@ -100,7 +104,9 @@ is intentionally unchanged. `nydus-snapshotter-bootstrap.service` gains
 `After=dfdaemon-bootstrap.service` without `Wants`, so an early P2P dfdaemon is
 ordered first without pulling it in on non-P2P paths. `nydus-updater` does not
 use P2P yet: it runs after the cluster exists, where the host dfdaemon socket is
-normally disabled by the switch. P2P updater support is deferred.
+normally disabled by the switch. It does use the static store first (versioned
+then compat), then GitHub, and verifies release checksums and the snapshotter
+binary pin. P2P updater support is deferred.
 
 ## Host-sync live updates
 

@@ -3,7 +3,7 @@
 Kubernetes operator that runs [Dragonfly](https://d7y.io) P2P on Rancher-managed
 RKE2 clusters.
 
-**Status**: v0.2.0 (2026-11-20). The operator implements the Cluster controller,
+**Status**: v0.3.18 (2026-11-22). The operator implements the Cluster controller,
 role resolution, KeyDB, manager, seed role, manager registration,
 `dragonfly-extras`, the fail-open p2p host bootstrap, manager root
 credentials, and host nydus. Harbor, registry-proxy, and pod-image admission
@@ -24,6 +24,13 @@ Pod image-mutation admission, Harbor, and registry-proxy add-ons are out of scop
   template values. The CA is never regenerated automatically.
 - Reconciles `provisioning.cattle.io/v1` Clusters selected by the
   `d7y-operator-cattle: "true"` label.
+- Creates a singleton `p2p-static` HelmOp on the manager-labeled Cluster,
+  rendering client/nydus/snapshotter versions, repositories, fallback
+  checksums, and the manager route from operator config. The existing
+  `p2p-static` release is adopted with `takeOwnership`.
+- Creates a per-seed `p2p-host-sync` HelmOp that keeps host nydus inputs
+  current: `/etc/nydus/{versions,updater}.env`, the updater/selector binaries,
+  and a revision-triggered `nydus-updater.service` run without reboot.
 - Deploys KeyDB and the Dragonfly manager through Fleet HelmOps, without
   PersistentVolumeClaims. Dragonfly releases use the gorizond fork chart
   `dragonfly 1.10.1-patch.2`, which renders `server.grpc.tls` under `grpc`,
@@ -139,7 +146,8 @@ Color legend: gray = workload pods, blue = dfdaemon, green = scheduler, purple =
 
 ### At a glance
 
-- The operator runs on the local Rancher/Fleet cluster. It reconciles every Cluster labelled `d7y-operator-cattle: "true"` and creates the Fleet HelmOps for KeyDB, manager, scheduler/seed, extras, and the containerd mirror. Its machine-bootstrap Secret controller inserts the self-contained p2p install block into the node-driver bootstrap script that Rancher merges into cloud-init, before the Rancher `do_install "$@"` call.
+- The operator runs on the local Rancher/Fleet cluster. It reconciles every Cluster labelled `d7y-operator-cattle: "true"` and creates the Fleet HelmOps for KeyDB, manager, scheduler/seed, extras, the
+containerd mirror, the singleton p2p-static server, and per-seed host-sync. Its machine-bootstrap Secret controller inserts the self-contained p2p install block into the node-driver bootstrap script that Rancher merges into cloud-init, before the Rancher `do_install "$@"` call.
 - Every running downstream node has a dfdaemon pod, with nydus on the host; pods pull through the node-local proxy and Dragonfly distributes blobs P2P. The diagram shows a scheduler pod per seed cluster and the manager pod on a node in downstream cluster B.
 - The orange dashed node in downstream cluster A consumes that bootstrap Secret through cloud-init before RKE2: it has only the host dfdaemon and nydus and is already joining P2P. The scheduler alias `d7y-scheduler.<cluster-id>.<domain>` is published by external-dns (or a wildcard zone) and used before RKE2 to bootstrap node/RKE2 image pulls.
 
@@ -199,7 +207,7 @@ and JWT signing key; see [Manager root credentials](#manager-root-credentials).
 | `manager.grpcDomain` | `MANAGER_GRPC_DOMAIN` | Public manager gRPC hostname, without scheme |
 | `manager.grpcPort` | `MANAGER_GRPC_PORT` | Public manager gRPC port used by schedulers; default `443` |
 | `manager.apiURL` | `MANAGER_API_URL` | Public manager REST API URL (`https://`) |
-| `nginx.staticURL` | `NGINX_STATIC_URL` | Base URL for the static nydus assets used by the embedded host script; may be the manager host when the p2p-static manager route is enabled. |
+| `nginx.staticURL` | `NGINX_STATIC_URL` | Base URL for the static client/nydus/snapshotter assets used by the embedded host script and host-sync updater; may be the manager host when the p2p-static manager route is enabled. |
 | `nydus.mirrorURL` | `NYDUS_MIRROR_URL` | Optional HTTPS mirror path for nydus blobs in the bootstrap payload |
 | `scheduler.domain` | `P2P_DOMAIN` | Base domain for `d7y-scheduler.<fleet-cluster-id>.<domain>`; required |
 | `scheduler.clusterID` | `P2P_CLUSTER_ID` | Optional fallback when provisioning Cluster `status.clusterName` is empty |
@@ -211,6 +219,11 @@ and JWT signing key; see [Manager root credentials](#manager-root-credentials).
 | `hostSync.chart.repo` | `HOST_SYNC_CHART_REPO` | Helm repository URL of the p2p-host-sync chart |
 | `hostSync.chart.name` | `HOST_SYNC_CHART_NAME` | p2p-host-sync chart name |
 | `hostSync.chart.version` | `HOST_SYNC_CHART_VERSION` | p2p-host-sync chart version |
+| `static.chart.repo` / `.name` / `.version` | `STATIC_CHART_REPO` / `STATIC_CHART_NAME` / `STATIC_CHART_VERSION` | p2p-static chart location; default `p2p-static 0.1.11` |
+| `static.releaseName` | `STATIC_RELEASE_NAME` | Helm release name for the singleton p2p-static release; default `p2p-static` |
+| `releases.client` / `.nydus` / `.snapshotter` | `CLIENT_RELEASE_REPO` / `NYDUS_RELEASE_REPO` / `NYDUS_SNAPSHOTTER_RELEASE_REPO` | GitHub release repositories |
+| `versions.client` / `.nydus` / `.snapshotter` | `CLIENT_VERSION` / `NYDUS_VERSION` / `NYDUS_SNAPSHOTTER_VERSION` | Pinned client/nydus/snapshotter versions; defaults `v1.5.14` / `v2.4.5` / `v0.16.0` |
+| `checksums.*` | `CLIENT_SHA256_*`, `NYDUS_SHA256_*`, `NYDUS_SNAPSHOTTER_*`, `NYDUS_SNAPSHOTTER_BINARY_SHA256_*` | Fallback pins; release checksum sidecars are preferred |
 | `extras.ingress.controller` | `EXTRAS_INGRESS_CONTROLLER` | `nginx` (default) or `traefik` |
 | `extras.ingress.className` | `EXTRAS_INGRESS_CLASS_NAME` | Ingress class; empty uses the cluster default |
 | `extras.ingress.grpcEnabled` | `EXTRAS_INGRESS_GRPC_ENABLED` | Render the manager gRPC front when the manager role is active; default `true` |
@@ -226,7 +239,9 @@ Defaults: `mtlsSecretName=dragonfly-p2p-mtls`, `dragonfly.chart.name=dragonfly`,
 `static.chart.version=0.1.11`, `static.releaseName=p2p-static`,
 `extras.ingress.controller=nginx`,
 `extras.ingress.grpcEnabled=true`, `extras.ingress.restEnabled=true`,
-`manager.grpcPort=443`, `leaderElect=false`. Scheduler node IPs come from
+`manager.grpcPort=443`, `leaderElect=false`. Version defaults are
+`v1.5.14` / `v2.4.5` / `v0.16.0`; snapshotter binary pins default to the
+verified amd64/arm64 v0.16.0 hashes. Scheduler node IPs come from
 downstream scheduler pods/CAPI Machines; there is no scheduler IP value.
 `scheduler.domain` has no default and is required.
 `scheduler.clusterID` is only a fallback for an unpopulated
@@ -261,7 +276,7 @@ The role annotations and matching labels add:
 | Roles | HelmOps |
 |---|---|
 | gate only | `d7y-keydb` |
-| `manager: "true"` | `d7y-keydb`, `d7y-manager` |
+| `manager: "true"` | `d7y-keydb`, `d7y-manager`, `p2p-static` |
 | `seed: "true"` + scheduler ID | `d7y-keydb`, `d7y-control`, `d7y-data`, `d7y-extras`, `d7y-containerd-mirror` |
 | manager + seed | shared seed set + `d7y-manager` |
 
@@ -284,6 +299,7 @@ templates.
 | `d7y-data` | seedClient + client | same as control |
 | `d7y-extras` | extras (VPA, manager Ingress) | same as control |
 | `d7y-containerd-mirror` | node containerd mirror | same as control |
+| `p2p-static` | static asset server (adopted release `p2p-static`) | `d7y-operator-cattle=true`, `d7y-operator-manager=true` |
 
 The rendered values keep the per-cluster downstream names:
 
@@ -310,6 +326,40 @@ Existing annotation-driven Clusters must add the matching role label (for
 example `d7y-operator-seed: "true"` next to `p2p.dragonfly.io/seed: "true"`):
 Fleet selectors cannot read annotations. The operator never sets or removes
 role labels.
+
+### Cluster deletion finalizer
+
+Every gated Cluster (`d7y-operator-cattle: "true"`) gets the
+`p2p.dragonfly.io/finalizer`. On `DeletionTimestamp`, the operator runs the
+same idempotent cleanup as a disabled gate and `deleteSchedulerPKI`: it removes
+the per-cluster HelmOps/Bundles and the `<cluster>-p2p-scheduler` Bundle in the
+Cluster namespace, plus the scheduler source Secret in the operator namespace.
+Only then is the finalizer removed.
+
+The scheduler Secret is in the operator namespace, a different namespace from
+the Cluster, so Kubernetes ownerRef garbage collection cannot remove it; the
+finalizer is the deletion hook and no cross-namespace ownerRef is assumed. Cleanup errors keep
+the finalizer and return an error, so Wrangler requeues with backoff; deletes
+are NotFound-tolerant, and deletion writes no Cluster status. A failed
+finalizer add is logged and retried on the next reconcile without blocking the
+normal pass.
+
+### Manager root credentials
+
+The manager credentials Secret (`managerApiCredentialsSecret`) is the source of
+truth for the operator's manager REST sign-in and the manager's initial root
+account. The operator ensures it in its own namespace, replicates it for Fleet
+delivery, and renders `manager.extraEnvVars` as `secretKeyRef`s:
+
+- `DRAGONFLY_INITIAL_ROOT_PASSWORD` → `password`
+- `MANAGER_AUTH_JWT_KEY` → `jwt-key`
+
+Keys are `username`, `password` (8–20 characters), and `jwt-key`. Existing
+values are preserved when valid; otherwise the operator generates a 16-character
+alphanumeric password and a 32-byte base64url JWT key. Only Secret names/keys
+enter Helm values; values stay in the Secret and are never logged. The initial
+root account is seeded only while the manager users table is empty, so a
+database reset re-seeds the same password instead of a chart default.
 
 ### Known shared-HelmOp limitations
 
@@ -507,11 +557,13 @@ yet:
   `nydus-image`, and `nydus-overlayfs` assets. It is the global CRI
   snapshotter. `enable_oci_tar` is not set (it is not a nydus field). A daily
   host timer runs `nydus-updater` to refresh the static assets and restart the
-  host unit only when something changed. The updater never uses P2P (a
-  post-cluster node has no host dfdaemon socket); it tries the static store
-  first and falls back to the pinned `dragonflyoss/nydus` GitHub release
-  tarball, verifying its SHA-256 before installing anything. The snapshotter
-  is updated by rerunning `p2p-install.sh`.
+  host unit only when a nydus/snapshotter binary or the selected fs driver
+  changed. The updater never uses P2P (a post-cluster node has no host dfdaemon
+  socket); it tries the static store first (versioned, then compat paths) and
+  falls back to GitHub, verifying release checksums and the snapshotter binary
+  pin before installing. It updates the client, nydus binaries, and the
+  upstream `containerd-nydus-grpc`; rerunning `p2p-install.sh` also installs
+  the same versions.
 - Host `dfdaemon-bootstrap` is the cold-start P2P client. A boot helper starts
   it before RKE2 even if the switch disabled it at the previous shutdown; a
   30s host timer detects the node's in-cluster `client` pod via `crictl` and
@@ -583,28 +635,39 @@ contain a copy of `tls.key`.
 
 ### Host sync DaemonSet
 
-`p2p-host-sync` is a per-seed HelmOp (`<cluster>-p2p-host-sync`) rendered from
-the Cluster `p2p.dragonfly.io/scheduler-ips` annotation. The operator only
+`p2p-host-sync` 0.1.4 is a per-seed HelmOp (`<cluster>-p2p-host-sync`) rendered
+from the Cluster `p2p.dragonfly.io/scheduler-ips` annotation. The operator only
 creates it for seed clusters with a non-empty scheduler IP list; an empty list
-removes the HelmOp. The chart renders a ConfigMap containing
-`scheduler-ips` (`<ip>:8002` entries) and a matching `scheduler:` `addrs` list.
+removes the HelmOp. The chart renders a ConfigMap with `scheduler-ips`
+(`<ip>:8002` entries), the matching `scheduler.addrs` list, and the version
+inputs below.
 
-The DaemonSet mounts only `/etc/dragonfly` from the host, the operator-generated
-ConfigMap, and the `dragonfly-p2p-mtls` client Secret. The shared control HelmOp
-is the only downstream owner of that Secret; host-sync depends on control and
-does not redeclare it, so Fleet does not rewrite the Secret copy on every
-host-sync reconcile. It runs privileged as
-root, has no Kubernetes API access, and every 30 seconds copies the ConfigMap
-`dynconfig.yaml`/`scheduler-ips` and the client `ca.crt`/`tls.crt`/`tls.key` to
-the host files (`tls.key` is mode 0600). Missing or transiently unreadable
-sources are logged and skipped; an empty scheduler list removes the
-`scheduler-ips` marker. It never starts, stops, or restarts systemd units: the
-existing host/in-cluster switch owns handoff. A scheduler-IP change updates the
-HelmOp values, Fleet applies the updated ConfigMap, and the DaemonSet loop
-updates the host files without restarting pods.
+The DaemonSet mounts `/etc/dragonfly`, `/etc/nydus`, and `/usr/local/bin` from
+the host, the operator-generated ConfigMap, and the `dragonfly-p2p-mtls` client
+Secret. The shared control HelmOp is the only downstream owner of that Secret;
+host-sync depends on control and does not redeclare it, so Fleet does not
+rewrite the Secret copy on every host-sync reconcile. It runs privileged as
+root with `hostPID`, has no Kubernetes API access, and every 30 seconds copies:
 
-The new chart is packaged by the release workflow (`cr package charts/*`) along
-with the other charts; no separate publication step is required.
+- `dynconfig.yaml`/`scheduler-ips` and the client `ca.crt`/`tls.crt`/`tls.key`
+  (the key is mode 0600);
+- `/etc/nydus/versions.env` and `/etc/nydus/updater.env` (versions,
+  repositories, fallback checksums, `STATIC_URL`, and the verified snapshotter
+  binary pins);
+- `/usr/local/bin/nydus-updater` and `/usr/local/bin/nydus-fs-select`.
+
+Missing or transiently unreadable sources are logged and skipped; an empty
+scheduler list removes the `scheduler-ips` marker. When the revision of those
+files changes, host-sync triggers `nydus-updater.service` through
+`nsenter -t 1 -m -u -i -n -p -- systemctl start nydus-updater.service`. It does
+not restart the snapshotter or dfdaemon itself: the updater restarts the
+snapshotter only when a nydus/snapshotter binary or the selected fs driver
+changed, and restarts `dfdaemon-bootstrap` only when client binaries changed
+and the service is active. A scheduler-IP change still updates the ConfigMap
+and host files without restarting pods.
+
+The chart is packaged by the release workflow (`cr package charts/*`) along with
+the other charts; no separate publication step is required.
 
 ### Port security
 
@@ -778,14 +841,14 @@ releases. It writes versioned/arch layouts:
 `/nydus/<version>/<arch>/{nydusd,nydus-image,nydus-overlayfs,nydus-static.tgz}`,
 and `/snapshotter/<version>/<arch>/<asset>`. Legacy `/bin` and
 `/nydus/<version>/` paths are filled from the node architecture only when
-absent. An existing `/bin/dfdaemon` is preserved. Defaults cover client and
-nydus amd64+arm64 and snapshotter amd64; the amd64 GNU client tarball is
+absent. An existing `/bin/dfdaemon` is preserved. Defaults cover client,
+nydus, and snapshotter amd64+arm64; the amd64 GNU client tarball is
 `dragonfly-client-v1.5.14-x86_64-unknown-linux-gnu.tar.gz`, SHA-256
 `ba080e62…b1f7`, with a 42.1 MB `dfdaemon` SHA-256 `e0d03d4759…bf85` matching
 the host bootstrap. Both GNU and musl binaries report `1.5.14 (8887c145f)`, so
-the artifact hash is the discriminator. The chart uses `emptyDir`, never a
-PVC; defaults are roughly 550 MiB after population (the /bin compatibility copies add ~150 MiB) plus transient
-download/extract space, and the first start fetches roughly 185 MiB. Narrow
+the artifact hash is the discriminator. The operator-managed release uses
+`emptyDir`, not a PVC; defaults are roughly 550 MiB after population (the /bin compatibility copies add ~150 MiB) plus transient
+download/extract space, and the first start fetches roughly 180–205 MiB. Narrow
 `static.populate.client.versions`/arches or set `static.sizeLimit` if that is
 too expensive. URLs, versions, checksums, arches, retries, and the init image
 are values. If an asset download fails after retries, the init container fails
@@ -872,15 +935,44 @@ daemon assets (including `nydus-overlayfs`), writes `/etc/nydus/config.toml`
 (multiple/fusedev, `[experimental]` `enable_referrer_detect`/
 `enable_index_detect`, no tarfs), the registry-backend `nydusd-config.json`,
 and the global containerd drop-in. It starts the host unit before RKE2 and runs
-a daily updater for the static binaries. Do not add
+a daily host updater for client/nydus/snapshotter binaries. Do not add
 `enable_oci_tar` (it is not a nydus field). Pilot must verify the drop-in merge
 with `containerd config dump`, the upstream v0.16.0 unit flags, and the host restart
 procedure. Tarfs is intentionally disabled; enabling it requires kernel >= 6.4
 and a matching nydusd. Ordinary-OCI Zran is not claimed.
 
+## Troubleshooting
+
+- **`/client` or `/snapshotter` returns 301→`/` or internal 404:** the
+  p2p-static chart is older than 0.1.11 or the manager IngressRoute lacks the
+  new prefixes. Upgrade the chart/operator and re-check the rendered
+  `default.conf`/IngressRoute.
+- **p2p-static pod starts but assets are missing:** check the `populate-static`
+  init logs. Release checksum sidecars are preferred; configured pins are
+  fallback. The emptyDir is re-populated on pod recreation, so a failed init
+  does not leave a half-populated volume behind.
+- **`/etc/nydus/versions.env` or `updater.env` has an empty
+  `NYDUS_SNAPSHOTTER_BINARY_SHA256_*`:** host-sync is older than 0.1.4 or the
+  HostSync HelmOp values lost `checksums.snapshotterBinary`; compare the
+  HostSync HelmOp values and rerun the host-sync reconcile.
+- **`nydus-updater` did not run after a version change:** check the
+  `/etc/nydus/host-sync-revision` marker and the host-sync logs for the
+  `nsenter … systemctl start nydus-updater.service` trigger. Failed triggers
+  retry on the next 30s loop.
+- **Snapshotter restarted unexpectedly:** the updater restarts it only when a
+  nydus/snapshotter binary or fs-driver selection changed; check the updater
+  log for `updated …` lines before the restart.
+- **A node still reports the old fork snapshotter build:** it is running a
+  stale bootstrap block. Current operator/chart versions have no fork
+  fallback; re-run the v0.3.18+ bootstrap block and let host-sync/updater
+  converge.
+- **First seed has no P2P peers:** it has empty scheduler IPs, so the bootstrap
+  stays direct. Use `P2P_ASSETS=0` for an explicit rollback to direct asset
+  downloads.
+
 ## Development
 
-Go 1.26 is required because the operator builds against the Rancher 2.15 and
+Go 1.27 is required because the operator builds against the Rancher 2.15 and
 Fleet 0.16 API machinery used by the target management cluster.
 
 Docker is the source of truth for builds and tests:
@@ -901,9 +993,11 @@ make helm-template  # render the operator, extras, p2p-static, and mirror charts
   cert Bundle. The CA private key exists only in the Opaque
   `dragonfly-p2p-ca` Secret. Neither is logged. Restrict Bundle read access:
   anyone who can read the cert Bundle can read the scheduler leaf `tls.key`.
-- The host sync DaemonSet is privileged and mounts `/etc/dragonfly` read-write;
-  it has no ServiceAccount token or Kubernetes API access. Treat its node
-  placement and hostPath mount as a cluster-admin surface.
+- The host sync DaemonSet is privileged, runs with `hostPID`, and mounts
+  `/etc/dragonfly`, `/etc/nydus`, and `/usr/local/bin` from the host read-write
+  so it can install the updater and trigger host systemd via `nsenter`. It has
+  no ServiceAccount token or Kubernetes API access. Treat its node placement
+  and hostPath mounts as a cluster-admin surface.
 - The operator uses Wrangler/lasso clients for its own resources and a client-go
   clientset only to read downstream scheduler pods through the per-cluster
   kubeconfig. Its ClusterRole includes create/update/patch on Fleet Bundles for
@@ -919,7 +1013,7 @@ Pushing a `v*` tag runs `.github/workflows/release.yml`:
   the `gh-pages` branch.
 
 The repository charts are `d7y-cattle-operator`, `dragonfly-extras`,
-`p2p-static`, and `containerd-mirror`. The KeyDB chart is
+`p2p-static`, `p2p-host-sync`, and `containerd-mirror`. The KeyDB chart is
 external (`enapter/keydb` `0.48.0` from
 `https://enapter.github.io/charts/`) and is not vendored or published here.
 The operator pins that external chart and submits the three-master, no-PVC
