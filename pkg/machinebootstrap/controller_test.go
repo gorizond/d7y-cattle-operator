@@ -1,6 +1,9 @@
 package machinebootstrap
 
 import (
+	"crypto/sha256"
+	"encoding/hex"
+	"encoding/json"
 	"errors"
 	"os/exec"
 	"strings"
@@ -513,5 +516,361 @@ func TestClusterChangedEnqueuesOnlyMatchingBootstrapSecrets(t *testing.T) {
 	}
 	if len(secrets.enqueued) != 2 {
 		t.Errorf("non-seed/non-enabled cluster enqueued %v", secrets.enqueued)
+	}
+}
+
+func setPreinstall(clusters *fakeClusters, body string) {
+	clusters.clusters["fleet-default/c1"].Annotations[bootstrap.PreinstallAnnotation] = body
+}
+
+func eventByReason(events *fakeEvents, reason string) *corev1.Event {
+	for _, event := range events.events {
+		if event.Reason == reason {
+			return event
+		}
+	}
+	return nil
+}
+
+func reconcileNow(t *testing.T, controller *Controller, secrets *fakeSecrets) {
+	t.Helper()
+	if _, err := controller.reconcile("fleet-default/machine-1-machine-bootstrap", secrets.secret.DeepCopy()); err != nil {
+		t.Fatalf("reconcile() error = %v", err)
+	}
+}
+
+func TestReconcileInjectsPreinstallBeforeP2P(t *testing.T) {
+	controller, secrets, _, clusters, events, _ := testController()
+	const body = "echo pre-install"
+	setPreinstall(clusters, body)
+	reconcileNow(t, controller, secrets)
+
+	value := string(secrets.secret.Data[bootstrapValueKey])
+	if count := strings.Count(value, bootstrap.PreinstallMarker+"\n"); count != 1 {
+		t.Fatalf("pre-install marker count = %d, want 1: %q", count, value)
+	}
+	if count := strings.Count(value, bootstrap.Marker+"\n"); count != 1 {
+		t.Fatalf("p2p marker count = %d, want 1: %q", count, value)
+	}
+	preAt := strings.Index(value, bootstrap.PreinstallMarker)
+	p2pAt := strings.Index(value, bootstrap.Marker)
+	if preAt < 0 || p2pAt < 0 || preAt > p2pAt {
+		t.Fatalf("pre-install block is not before the p2p block: %q", value)
+	}
+	if !strings.Contains(value, body+"\n") {
+		t.Fatalf("pre-install body is missing: %q", value)
+	}
+	injected := eventByReason(events, "BootstrapInjected")
+	if injected == nil || !strings.Contains(injected.Message, "included") {
+		t.Fatalf("BootstrapInjected message does not indicate an included pre-install: %+v", events.events)
+	}
+	if strings.Contains(injected.Message, body) {
+		t.Fatalf("BootstrapInjected event contains the annotation body: %q", injected.Message)
+	}
+}
+
+func TestReconcileEmptyPreinstallIsP2POnly(t *testing.T) {
+	controller, secrets, _, clusters, events, _ := testController()
+	setPreinstall(clusters, "  \n\t ")
+	reconcileNow(t, controller, secrets)
+
+	value := string(secrets.secret.Data[bootstrapValueKey])
+	if strings.Contains(value, bootstrap.PreinstallMarker) {
+		t.Fatalf("pre-install block was injected for a whitespace annotation: %q", value)
+	}
+	if !strings.Contains(value, bootstrap.Marker) {
+		t.Fatalf("p2p block is missing: %q", value)
+	}
+	injected := eventByReason(events, "BootstrapInjected")
+	if injected == nil || !strings.Contains(injected.Message, "p2p-only") {
+		t.Fatalf("BootstrapInjected message is not explicit about p2p-only: %+v", events.events)
+	}
+}
+
+func TestReconcileNonGatedClusterIgnoresPreinstall(t *testing.T) {
+	controller, secrets, _, clusters, _, _ := testController()
+	setPreinstall(clusters, "echo pre")
+	clusters.clusters["fleet-default/c1"].Labels[labelEnabled] = "false"
+	original := string(secrets.secret.Data[bootstrapValueKey])
+
+	reconcileNow(t, controller, secrets)
+	value := string(secrets.secret.Data[bootstrapValueKey])
+	if value != original || secrets.updates != 0 || strings.Contains(value, bootstrap.PreinstallMarker) {
+		t.Fatalf("non-gated cluster was modified: %q", value)
+	}
+}
+
+func TestReconcilePreinstallTextChangeReplacesBlock(t *testing.T) {
+	controller, secrets, _, clusters, _, _ := testController()
+	setPreinstall(clusters, "echo first")
+	reconcileNow(t, controller, secrets)
+	firstFingerprint := secrets.secret.Annotations[bootstrap.BootstrapInputsAnnotation]
+
+	setPreinstall(clusters, "echo second")
+	reconcileNow(t, controller, secrets)
+	value := string(secrets.secret.Data[bootstrapValueKey])
+	if count := strings.Count(value, bootstrap.PreinstallMarker+"\n"); count != 1 {
+		t.Fatalf("pre-install marker count = %d, want 1: %q", count, value)
+	}
+	if strings.Contains(value, "echo first") || !strings.Contains(value, "echo second") {
+		t.Fatalf("pre-install body was not replaced: %q", value)
+	}
+	if secrets.updates != 2 {
+		t.Errorf("Secret updates = %d, want 2", secrets.updates)
+	}
+	if fingerprint := secrets.secret.Annotations[bootstrap.BootstrapInputsAnnotation]; fingerprint == firstFingerprint {
+		t.Error("bootstrap-inputs fingerprint did not change with the pre-install body")
+	}
+
+	reconcileNow(t, controller, secrets)
+	if secrets.updates != 2 {
+		t.Errorf("Secret updates = %d, want 2 for identical text", secrets.updates)
+	}
+}
+
+func TestReconcilePreinstallRemovalKeepsP2P(t *testing.T) {
+	controller, secrets, _, clusters, _, _ := testController()
+	setPreinstall(clusters, "echo pre")
+	reconcileNow(t, controller, secrets)
+	beforeFingerprint := secrets.secret.Annotations[bootstrap.BootstrapInputsAnnotation]
+
+	delete(clusters.clusters["fleet-default/c1"].Annotations, bootstrap.PreinstallAnnotation)
+	reconcileNow(t, controller, secrets)
+	value := string(secrets.secret.Data[bootstrapValueKey])
+	if strings.Contains(value, bootstrap.PreinstallMarker) {
+		t.Fatalf("pre-install block survived annotation removal: %q", value)
+	}
+	if !strings.Contains(value, bootstrap.Marker) || !strings.Contains(value, `do_install "$@"`) {
+		t.Fatalf("p2p block or do_install was lost: %q", value)
+	}
+	if secrets.updates != 2 {
+		t.Errorf("Secret updates = %d, want 2", secrets.updates)
+	}
+	if fingerprint := secrets.secret.Annotations[bootstrap.BootstrapInputsAnnotation]; fingerprint == beforeFingerprint {
+		t.Error("bootstrap-inputs fingerprint did not change after annotation removal")
+	}
+}
+
+func TestReconcilePreinstallRepeatedTenTimesIsStable(t *testing.T) {
+	controller, secrets, _, clusters, _, _ := testController()
+	setPreinstall(clusters, "echo pre")
+	for i := 0; i < 10; i++ {
+		reconcileNow(t, controller, secrets)
+	}
+	value := string(secrets.secret.Data[bootstrapValueKey])
+	if secrets.updates != 1 {
+		t.Errorf("Secret updates = %d, want 1", secrets.updates)
+	}
+	if count := strings.Count(value, bootstrap.PreinstallMarker+"\n"); count != 1 {
+		t.Fatalf("pre-install marker count = %d, want 1: %q", count, value)
+	}
+	if count := strings.Count(value, bootstrap.Marker+"\n"); count != 1 {
+		t.Fatalf("p2p marker count = %d, want 1: %q", count, value)
+	}
+}
+
+func TestReconcilePreinstallWithLegacyP2PBlock(t *testing.T) {
+	controller, secrets, _, clusters, _, _ := testController()
+	legacy := strings.TrimSuffix(inlineInstallBlockFor("echo legacy\n", "SCHEDULER_IPS=''\n"), bootstrap.EndMarker+"\n")
+	secrets.secret.Data[bootstrapValueKey] = []byte("#!/bin/bash\n" + legacy + `do_install "$@"` + "\nexit 0\n")
+	setPreinstall(clusters, "echo pre")
+
+	reconcileNow(t, controller, secrets)
+	value := string(secrets.secret.Data[bootstrapValueKey])
+	if strings.Contains(value, "echo legacy") {
+		t.Fatalf("legacy p2p block was not replaced: %q", value)
+	}
+	if count := strings.Count(value, bootstrap.PreinstallMarker+"\n"); count != 1 {
+		t.Fatalf("pre-install marker count = %d, want 1: %q", count, value)
+	}
+	if count := strings.Count(value, bootstrap.Marker+"\n"); count != 1 {
+		t.Fatalf("p2p marker count = %d, want 1: %q", count, value)
+	}
+	if strings.Index(value, bootstrap.PreinstallMarker) > strings.Index(value, bootstrap.Marker) {
+		t.Fatalf("pre-install block is not before the p2p block: %q", value)
+	}
+}
+
+func TestBootstrapInputsFingerprintTracksPreinstall(t *testing.T) {
+	cluster := &provv1.Cluster{ObjectMeta: metav1.ObjectMeta{Name: "c1", Namespace: "fleet-default"}}
+	base := bootstrapInputsFingerprint(cluster, "rev", "v1", "v2", "v3", "")
+	first := bootstrapInputsFingerprint(cluster, "rev", "v1", "v2", "v3", "echo first")
+	second := bootstrapInputsFingerprint(cluster, "rev", "v1", "v2", "v3", "echo second")
+	if base == first || first == second {
+		t.Fatalf("fingerprints do not track the pre-install body: %q %q %q", base, first, second)
+	}
+	padded := bootstrapInputsFingerprint(cluster, "rev", "v1", "v2", "v3", "  echo first\n")
+	if padded != first {
+		t.Error("fingerprint is sensitive to surrounding whitespace")
+	}
+}
+
+func TestBootstrapInputsFingerprintPreservesLegacyEmptyPreinstall(t *testing.T) {
+	cluster := &provv1.Cluster{
+		ObjectMeta: metav1.ObjectMeta{
+			Name: "c1", Namespace: "fleet-default",
+			Annotations: map[string]string{
+				bootstrap.SchedulerIPsAnnotation:       "203.0.113.10",
+				bootstrap.SchedulerClusterIDAnnotation: "2",
+			},
+		},
+		Spec: provv1.ClusterSpec{KubernetesVersion: "v1.30.0+rke2r1"},
+	}
+	legacy := sha256.Sum256([]byte("rev" + "\x00" + "203.0.113.10" + "\x00" + "2" + "\x00" + "rke2" +
+		"\x00" + "v1" + "\x00" + "v2" + "\x00" + "v3"))
+	want := hex.EncodeToString(legacy[:])
+	if got := bootstrapInputsFingerprint(cluster, "rev", "v1", "v2", "v3", ""); got != want {
+		t.Fatalf("empty preinstall fingerprint = %s, want legacy v0.3.21 %s", got, want)
+	}
+	if got := bootstrapInputsFingerprint(cluster, "rev", "v1", "v2", "v3", "echo pre"); got == want {
+		t.Fatal("non-empty preinstall fingerprint still matches the legacy hash")
+	}
+}
+
+func TestReconcileInvalidPreinstallIsSkipped(t *testing.T) {
+	bodies := map[string]string{
+		"NUL":          "echo bad\x00",
+		"start marker": "echo ok\n" + bootstrap.PreinstallMarker + "\necho bad",
+		"end marker":   bootstrap.PreinstallEndMarker,
+	}
+	for name, body := range bodies {
+		t.Run(name, func(t *testing.T) {
+			controller, secrets, _, clusters, events, _ := testController()
+			setPreinstall(clusters, body)
+			reconcileNow(t, controller, secrets)
+			value := string(secrets.secret.Data[bootstrapValueKey])
+			if strings.Contains(value, bootstrap.PreinstallMarker) {
+				t.Fatalf("pre-install block was injected for an invalid body: %q", value)
+			}
+			if strings.Contains(value, "echo bad") {
+				t.Fatalf("invalid body leaked into the bootstrap value: %q", value)
+			}
+			if !strings.Contains(value, bootstrap.Marker) {
+				t.Fatalf("p2p block is missing: %q", value)
+			}
+			event := eventByReason(events, "PreinstallInvalid")
+			if event == nil || event.Type != corev1.EventTypeWarning {
+				t.Fatalf("events = %+v, want a PreinstallInvalid warning", events.events)
+			}
+			if strings.Contains(event.Message, "echo bad") {
+				t.Fatalf("PreinstallInvalid event contains the annotation body: %q", event.Message)
+			}
+		})
+	}
+}
+
+func TestReconcileOversizedPreinstallAnnotationIsSkipped(t *testing.T) {
+	controller, secrets, _, clusters, events, _ := testController()
+	body := strings.Repeat("x", bootstrap.MaxPreinstallAnnotationBytes+1)
+	setPreinstall(clusters, body)
+	reconcileNow(t, controller, secrets)
+
+	value := string(secrets.secret.Data[bootstrapValueKey])
+	if strings.Contains(value, bootstrap.PreinstallMarker) {
+		t.Fatalf("pre-install block was injected for an oversized annotation: %q", value)
+	}
+	if strings.Contains(value, body) {
+		t.Fatal("oversized annotation was truncated into the bootstrap value")
+	}
+	if !strings.Contains(value, bootstrap.Marker) {
+		t.Fatalf("p2p block is missing: %q", value)
+	}
+	event := eventByReason(events, "PreinstallTooLarge")
+	if event == nil || event.Type != corev1.EventTypeWarning {
+		t.Fatalf("events = %+v, want a PreinstallTooLarge warning", events.events)
+	}
+	if strings.Contains(event.Message, body) {
+		t.Fatal("PreinstallTooLarge event contains the annotation body")
+	}
+
+	reconcileNow(t, controller, secrets)
+	if secrets.updates != 1 {
+		t.Errorf("Secret updates = %d, want 1 after an oversized-annotation reconcile pair", secrets.updates)
+	}
+}
+
+func TestReconcileOversizedSerializedSecretSkipsPreinstall(t *testing.T) {
+	controller, secrets, _, clusters, events, _ := testController()
+	base := "#!/bin/bash\n#" + strings.Repeat("x", 620*1024) + "\ndo_install \"$@\"\nexit 0\n"
+	secrets.secret.Data[bootstrapValueKey] = []byte(base)
+	body := "echo " + strings.Repeat("y", 200*1024)
+	setPreinstall(clusters, body)
+
+	reconcileNow(t, controller, secrets)
+	value := string(secrets.secret.Data[bootstrapValueKey])
+	if strings.Contains(value, bootstrap.PreinstallMarker) {
+		t.Fatal("pre-install block was injected into an oversized Secret")
+	}
+	if strings.Contains(value, "yyyy") {
+		t.Fatal("pre-install body leaked into an oversized Secret")
+	}
+	if !strings.Contains(value, bootstrap.Marker) {
+		t.Fatalf("p2p block is missing: %q", value[:min(len(value), 200)])
+	}
+	if len(value) < 620*1024 {
+		t.Fatalf("bootstrap value was truncated to %d bytes", len(value))
+	}
+	raw, err := json.Marshal(secrets.secret)
+	if err != nil {
+		t.Fatalf("json.Marshal(secret) error = %v", err)
+	}
+	if len(raw) > 1<<20 {
+		t.Fatalf("serialized Secret is %d bytes, want <= 1 MiB", len(raw))
+	}
+	event := eventByReason(events, "PreinstallTooLarge")
+	if event == nil || event.Type != corev1.EventTypeWarning {
+		t.Fatalf("events = %+v, want a PreinstallTooLarge warning", events.events)
+	}
+}
+
+func TestReconcileLargeSecretWithoutAnnotationDoesNotWarn(t *testing.T) {
+	controller, secrets, _, _, events, _ := testController()
+	secrets.secret.Data[bootstrapValueKey] = []byte("#!/bin/bash\n#" + strings.Repeat("x", 990*1024) + "\ndo_install \"$@\"\nexit 0\n")
+	reconcileNow(t, controller, secrets)
+	if event := eventByReason(events, "PreinstallTooLarge"); event != nil {
+		t.Fatalf("unexpected PreinstallTooLarge without a pre-install annotation: %+v", event)
+	}
+}
+
+func TestReconcileEventsDoNotContainPreinstallBody(t *testing.T) {
+	const sentinel = "D7Y_TEST_SENTINEL_BODY"
+	controller, secrets, _, clusters, events, _ := testController()
+	setPreinstall(clusters, "echo "+sentinel)
+	reconcileNow(t, controller, secrets)
+	for _, event := range events.events {
+		if strings.Contains(event.Message, sentinel) {
+			t.Fatalf("event %q contains the annotation body", event.Reason)
+		}
+	}
+}
+
+func TestReconcileNonBootstrapSecretIsUntouched(t *testing.T) {
+	controller, secrets, _, clusters, _, _ := testController()
+	setPreinstall(clusters, "echo pre")
+	secrets.secret.Type = corev1.SecretTypeOpaque
+	original := string(secrets.secret.Data[bootstrapValueKey])
+
+	reconcileNow(t, controller, secrets)
+	value := string(secrets.secret.Data[bootstrapValueKey])
+	if value != original || secrets.updates != 0 || strings.Contains(value, bootstrap.PreinstallMarker) {
+		t.Fatalf("non-bootstrap Secret was modified: %q", value)
+	}
+}
+
+func TestClusterChangedEnqueuesOnPreinstallChange(t *testing.T) {
+	controller, secrets, _, clusters, _, _ := testController()
+	cluster := clusters.clusters["fleet-default/c1"]
+	if _, err := controller.clusterChanged("", cluster); err != nil {
+		t.Fatalf("clusterChanged() error = %v", err)
+	}
+	if len(secrets.enqueued) != 1 {
+		t.Fatalf("enqueued = %v, want the bootstrap Secret", secrets.enqueued)
+	}
+	setPreinstall(clusters, "echo pre")
+	if _, err := controller.clusterChanged("", cluster); err != nil {
+		t.Fatalf("clusterChanged(preinstall) error = %v", err)
+	}
+	if len(secrets.enqueued) != 2 {
+		t.Fatalf("enqueued = %v, want a second enqueue after the pre-install change", secrets.enqueued)
 	}
 }

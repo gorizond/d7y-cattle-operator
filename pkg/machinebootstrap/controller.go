@@ -6,6 +6,7 @@ import (
 	"context"
 	"crypto/sha256"
 	"encoding/hex"
+	"encoding/json"
 	"fmt"
 	"log/slog"
 	"strings"
@@ -38,6 +39,10 @@ const (
 	capiClusterName    = "cluster.x-k8s.io/cluster-name"
 	rkeClusterName     = "rke.cattle.io/cluster-name"
 	eventComponentName = "d7y-cattle-operator-machine-bootstrap"
+
+	// maxBootstrapSecretBytes is the Kubernetes object limit. The API stores
+	// data as base64, so the raw value ceiling is not the right guard.
+	maxBootstrapSecretBytes = 1 << 20
 )
 
 // Options carries the operator configuration used to build the p2p line.
@@ -122,7 +127,8 @@ func (c *Controller) clusterChanged(_ string, cluster *provv1.Cluster) (*provv1.
 	}
 	signature := strings.TrimSpace(cluster.Annotations[bootstrap.SchedulerIPsAnnotation]) + "\x00" +
 		strings.TrimSpace(cluster.Annotations[bootstrap.SchedulerClusterIDAnnotation]) + "\x00" +
-		bootstrap.Distro(cluster)
+		bootstrap.Distro(cluster) + "\x00" +
+		strings.TrimSpace(cluster.Annotations[bootstrap.PreinstallAnnotation])
 	c.clusterInputsMu.Lock()
 	if c.clusterInputs == nil {
 		c.clusterInputs = map[string]string{}
@@ -237,11 +243,18 @@ func (c *Controller) reconcile(key string, secret *corev1.Secret) (*corev1.Secre
 	}
 
 	value := string(secret.Data[bootstrapValueKey])
+	base, err := removePreinstallBlock(value)
+	if err != nil {
+		c.event(machine, cluster, secret, corev1.EventTypeWarning, "BootstrapPatchFailed", err.Error())
+		return secret, err
+	}
 	schedulerID := ""
 	if cluster != nil {
 		schedulerID = strings.TrimSpace(cluster.Annotations[bootstrap.SchedulerClusterIDAnnotation])
 	}
 	placeholderSchedulerID := schedulerID == ""
+
+	preinstall, preinstallReason := effectivePreinstall(cluster, base)
 
 	mtls, err := c.mtls.Get(c.opts.OperatorNamespace, c.opts.MTLSSecretName)
 	if err != nil {
@@ -250,9 +263,14 @@ func (c *Controller) reconcile(key string, secret *corev1.Secret) (*corev1.Secre
 	}
 	clientRevision := pki.SecretRevision(mtls.Data)
 	inputsRevision := bootstrapInputsFingerprint(cluster, clientRevision,
-		c.opts.ClientVersion, c.opts.NydusVersion, c.opts.SnapshotterVersion)
-	if strings.Contains(value, bootstrap.Marker) && secret.Annotations[bootstrap.BootstrapInputsAnnotation] == inputsRevision {
+		c.opts.ClientVersion, c.opts.NydusVersion, c.opts.SnapshotterVersion, preinstall)
+	if strings.Contains(value, bootstrap.Marker) &&
+		secret.Annotations[bootstrap.BootstrapInputsAnnotation] == inputsRevision &&
+		strings.Contains(value, bootstrap.PreinstallMarker) == (preinstall != "") {
 		return secret, nil
+	}
+	if preinstallReason != "" {
+		c.event(machine, cluster, secret, corev1.EventTypeWarning, preinstallReason, preinstallSkipMessage(preinstallReason))
 	}
 	env, err := bootstrap.BuildInstallEnv(cluster, mtls, "", bootstrap.InstallConfig{
 		ManagerGRPCDomain:  c.opts.ManagerGRPCDomain,
@@ -277,14 +295,26 @@ func (c *Controller) reconcile(key string, secret *corev1.Secret) (*corev1.Secre
 			"cluster", clusterName, "machine", machineName, "schedulerClusterID", "0")
 	}
 
-	updated := secret.DeepCopy()
-	if updated.Data == nil {
-		updated.Data = map[string][]byte{}
-	}
-	patched, err := insertInlineBlock(value, inlineInstallBlock(env))
+	// The old pre-install block was removed before the p2p step so its body
+	// lines cannot be mistaken for the p2p marker; now replace the p2p block
+	// and insert the new pre-install block immediately before it.
+	patched, err := insertInlineBlock(base, inlineInstallBlock(env))
 	if err != nil {
 		c.event(machine, cluster, secret, corev1.EventTypeWarning, "BootstrapPatchFailed", err.Error())
 		return secret, err
+	}
+	preinstallIncluded := false
+	if preinstall != "" {
+		patched, err = insertPreinstallBlock(patched, inlinePreinstallBlock(preinstall))
+		if err != nil {
+			c.event(machine, cluster, secret, corev1.EventTypeWarning, "BootstrapPatchFailed", err.Error())
+			return secret, err
+		}
+		preinstallIncluded = true
+	}
+	updated := secret.DeepCopy()
+	if updated.Data == nil {
+		updated.Data = map[string][]byte{}
 	}
 	updated.Data[bootstrapValueKey] = []byte(patched)
 	if updated.Annotations == nil {
@@ -292,25 +322,112 @@ func (c *Controller) reconcile(key string, secret *corev1.Secret) (*corev1.Secre
 	}
 	updated.Annotations[bootstrap.ClientCertRevisionAnnotation] = clientRevision
 	updated.Annotations[bootstrap.BootstrapInputsAnnotation] = inputsRevision
+
+	// The Kubernetes Secret limit applies to the serialized object, where
+	// data is base64-encoded; the raw value length alone is not a safe guard.
+	if preinstallIncluded && bootstrapSecretTooLarge(updated) {
+		preinstallIncluded = false
+		p2pOnly, err := insertInlineBlock(base, inlineInstallBlock(env))
+		if err != nil {
+			c.event(machine, cluster, secret, corev1.EventTypeWarning, "BootstrapPatchFailed", err.Error())
+			return secret, err
+		}
+		patched = p2pOnly
+		inputsRevision = bootstrapInputsFingerprint(cluster, clientRevision,
+			c.opts.ClientVersion, c.opts.NydusVersion, c.opts.SnapshotterVersion, "")
+		updated.Data[bootstrapValueKey] = []byte(patched)
+		updated.Annotations[bootstrap.BootstrapInputsAnnotation] = inputsRevision
+		c.event(machine, cluster, secret, corev1.EventTypeWarning, "PreinstallTooLarge",
+			"pre-install block exceeds the serialized Secret limit; pre-install block skipped")
+	}
+
+	// An oversized annotation must not cause repeated Updates: when the
+	// candidate value and annotations already match, the Secret converges.
+	if string(secret.Data[bootstrapValueKey]) == patched &&
+		secret.Annotations[bootstrap.ClientCertRevisionAnnotation] == clientRevision &&
+		secret.Annotations[bootstrap.BootstrapInputsAnnotation] == inputsRevision {
+		return secret, nil
+	}
 	result, err := c.secrets.Update(updated)
 	if err != nil {
 		c.event(machine, cluster, secret, corev1.EventTypeWarning, "BootstrapPatchFailed", err.Error())
 		return secret, err
 	}
-	c.event(machine, cluster, secret, corev1.EventTypeNormal, "BootstrapInjected", "inline p2p block added to the machine bootstrap secret")
+	message := "inline p2p block added to the machine bootstrap secret (p2p-only; d7y-operator-preinstall not included)"
+	if preinstallIncluded {
+		message = "inline p2p and pre-install blocks added to the machine bootstrap secret (d7y-operator-preinstall included)"
+	}
+	c.event(machine, cluster, secret, corev1.EventTypeNormal, "BootstrapInjected", message)
 	return result, nil
 }
 
-func bootstrapInputsFingerprint(cluster *provv1.Cluster, clientRevision, clientVersion, nydusVersion, snapshotterVersion string) string {
+func bootstrapInputsFingerprint(cluster *provv1.Cluster, clientRevision, clientVersion, nydusVersion, snapshotterVersion, preinstall string) string {
 	ips := ""
 	schedulerID := ""
 	if cluster != nil {
 		ips = strings.TrimSpace(cluster.Annotations[bootstrap.SchedulerIPsAnnotation])
 		schedulerID = strings.TrimSpace(cluster.Annotations[bootstrap.SchedulerClusterIDAnnotation])
 	}
-	sum := sha256.Sum256([]byte(clientRevision + "\x00" + ips + "\x00" + schedulerID + "\x00" + bootstrap.Distro(cluster) +
-		"\x00" + clientVersion + "\x00" + nydusVersion + "\x00" + snapshotterVersion))
+	input := clientRevision + "\x00" + ips + "\x00" + schedulerID + "\x00" + bootstrap.Distro(cluster) +
+		"\x00" + clientVersion + "\x00" + nydusVersion + "\x00" + snapshotterVersion
+	// Keep the exact v0.3.21 hash when no pre-install body is configured, so
+	// upgrading the operator does not re-inject p2p blocks into existing nodes.
+	if preinstall = strings.TrimSpace(preinstall); preinstall != "" {
+		input += "\x00" + preinstall
+	}
+	sum := sha256.Sum256([]byte(input))
 	return hex.EncodeToString(sum[:])
+}
+
+// effectivePreinstall returns the body to render and a skip reason when the
+// annotation cannot be injected. Invalid or oversized bodies never reach the
+// Secret; the p2p block is still rendered.
+func effectivePreinstall(cluster *provv1.Cluster, value string) (string, string) {
+	if cluster == nil {
+		return "", ""
+	}
+	annotation := cluster.Annotations[bootstrap.PreinstallAnnotation]
+	body := strings.TrimSpace(annotation)
+	if body == "" {
+		return "", ""
+	}
+	switch {
+	case len(annotation) > bootstrap.MaxPreinstallAnnotationBytes:
+		return "", "PreinstallTooLarge"
+	case invalidPreinstall(body):
+		return "", "PreinstallInvalid"
+	case len(value)+len(body)+1024 > bootstrap.MaxBootstrapValueBytes:
+		return "", "PreinstallTooLarge"
+	}
+	return body, ""
+}
+
+func invalidPreinstall(body string) bool {
+	if strings.IndexByte(body, 0) >= 0 {
+		return true
+	}
+	for _, line := range strings.Split(body, "\n") {
+		trimmed := strings.TrimSpace(line)
+		if trimmed == bootstrap.PreinstallMarker || trimmed == bootstrap.PreinstallEndMarker {
+			return true
+		}
+	}
+	return false
+}
+
+func preinstallSkipMessage(reason string) string {
+	if reason == "PreinstallInvalid" {
+		return "d7y-operator-preinstall annotation contains NUL or a reserved marker line; pre-install block skipped"
+	}
+	return "d7y-operator-preinstall annotation exceeds a size limit; pre-install block skipped"
+}
+
+func bootstrapSecretTooLarge(secret *corev1.Secret) bool {
+	raw, err := json.Marshal(secret)
+	if err != nil {
+		return true
+	}
+	return len(raw) > maxBootstrapSecretBytes
 }
 
 func (c *Controller) event(machine *capiv1beta2.Machine, cluster *provv1.Cluster, secret *corev1.Secret, eventType, reason, message string) {

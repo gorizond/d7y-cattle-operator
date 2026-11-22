@@ -579,6 +579,35 @@ yet:
   disables the host bootstrap while the pod is running. If the pod disappears,
   the timer re-enables the host bootstrap. The switch never touches nydus.
 
+### Pre-install bootstrap annotation
+
+A provisioning Cluster can carry a POSIX shell body in the
+`d7y-operator-preinstall` annotation. Under the same gate as the p2p block
+(label `d7y-operator-cattle: "true"` and annotation
+`p2p.dragonfly.io/seed: "true"`) the operator inserts a separate marked block
+immediately **before** the p2p block in every `<machine>-machine-bootstrap`
+Secret, so the commands run before Dragonfly. An empty or whitespace-only
+annotation keeps the p2p-only behavior.
+
+The block writes the body to `/tmp/d7y-preinstall.sh` with a quoted heredoc
+(`D7Y_PREINSTALL_EOF`, suffixed on collision), runs it with `bash` in a
+subshell, and is fail-open: errors, including a non-zero exit, never stop the
+Rancher bootstrap or Dragonfly. Output is prefixed `[d7y-preinstall]` and ends
+with `[d7y-preinstall] exit=<code>`. The body participates in the
+`p2p.dragonfly.io/bootstrap-inputs` fingerprint, so a text change replaces the
+block once, identical text is a no-op, and removing the annotation removes the
+block while the p2p block remains. Existing nodes apply a changed annotation
+only on the next bootstrap/cloud-init run (normally a reboot); the operator
+does not restart machines.
+
+Limits: the annotation is capped at 256 KiB and the final Secret at the
+Kubernetes 1 MiB object limit (checked by serializing the object; `data` is
+base64 in the API). Over-limit or invalid bodies (NUL, a line equal to a
+pre-install marker) are skipped with a `PreinstallTooLarge` or
+`PreinstallInvalid` warning event, the p2p block is kept, and the value is never
+truncated. **Never put secrets in this annotation**: it is visible in the
+Cluster object and the bootstrap Secret and grants root execution on new nodes.
+
 #### P2P bootstrap asset delivery
 
 The first delivery stays direct: `dfdaemon` and `dfget` are installed from the
