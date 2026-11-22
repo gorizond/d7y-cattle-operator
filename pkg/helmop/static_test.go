@@ -50,6 +50,9 @@ func TestSharedStaticRendersConfigVersions(t *testing.T) {
 	if got := valueAt(t, values, "manager", "tlsSecret"); got != "manager-tls" {
 		t.Errorf("manager.tlsSecret = %v", got)
 	}
+	if got := valueAt(t, values, "static", "populate", "enabled"); got != true {
+		t.Errorf("static.populate.enabled = %v, want true", got)
+	}
 	if got := valueAt(t, values, "static", "populate", "client", "compatVersion"); got != "v1.5.14" {
 		t.Errorf("client compatVersion = %v", got)
 	}

@@ -1,6 +1,6 @@
 # p2p-host-sync
 
-Chart 0.1.4. Privileged per-seed DaemonSet that keeps host bootstrap inputs
+Chart 0.1.5. Privileged per-seed DaemonSet that keeps host bootstrap inputs
 current without waiting for a node reboot. It mounts `/etc/dragonfly`,
 `/etc/nydus`, and `/usr/local/bin` from the host and runs with `hostPID`.
 
@@ -26,15 +26,17 @@ fs driver changed. It restarts `dfdaemon-bootstrap` only when client binaries
 changed and that service is active. Host-sync never restarts the snapshotter or
 dfdaemon itself.
 
-Values (normally rendered by the operator):
+Values are required from the operator; this chart intentionally carries no
+versions, repositories, or checksums of its own. `staticURL` may be empty only
+when the static store is disabled, in which case the updater uses GitHub.
 
 ```yaml
 staticURL: https://static.example.com
-versions: {client: v1.5.14, nydus: v2.4.5, snapshotter: v0.16.0}
+versions: {client: <operator>, nydus: <operator>, snapshotter: <operator>}
 repos:
-  client: dragonflyoss/client
-  nydus: dragonflyoss/nydus
-  snapshotter: containerd/nydus-snapshotter
+  client: <operator>
+  nydus: <operator>
+  snapshotter: <operator>
 checksums:  # fallback pins; release sidecars are preferred
   client: {amd64: "...", arm64: "..."}
   nydus: {amd64: "...", arm64: "..."}

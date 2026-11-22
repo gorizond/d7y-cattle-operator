@@ -10,8 +10,8 @@ const defaultStaticReleaseName = "p2p-static"
 
 // SharedStatic returns the singleton p2p-static HelmOp for the manager cluster.
 // It owns the static asset server and renders its populate plan from the
-// operator versions/repositories. Checksums are left empty so the chart fetches
-// the release-provided sidecar checksum before installing an artifact.
+// operator versions/repositories/fallback checksums. The chart prefers the
+// release-provided sidecar checksum before falling back to these pins.
 func SharedStatic(c Cluster) *fleetv1alpha1.HelmOp {
 	c = sharedCluster(c)
 	releaseName := c.StaticReleaseName
@@ -81,6 +81,7 @@ func staticValues(c Cluster) map[string]any {
 		},
 		"static": map[string]any{
 			"populate": map[string]any{
+				"enabled": true,
 				"client": map[string]any{
 					"enabled":       true,
 					"compatVersion": clientVersion,

@@ -86,9 +86,11 @@ mirrors-config directory and does **not** implicitly consume containerd's
 `/etc/nydus/mirrors`, or rely on the origin registry/kubeconfig keychain.
 
 The client, nydus, and snapshotter versions come from the bootstrap payload
-(`CLIENT_VERSION`, `NYDUS_VERSION`, `NYDUS_SNAPSHOTTER_VERSION`; defaults
-`v1.5.14`, `v2.4.5`, `v0.16.0`). The operator renders the p2p-static
-HelmOp values from the same config. `P2P_ASSETS=0` disables the early dfdaemon/P2P path entirely;
+(`CLIENT_VERSION`, `NYDUS_VERSION`, `NYDUS_SNAPSHOTTER_VERSION`; chart defaults
+`v1.5.14`, `v2.4.5`, `v0.16.0`). The operator chart values are the single
+source; the script keeps per-arch checksum pins only as a last-resort fallback
+for those default versions and fails if a non-default version arrives without
+its checksum. `P2P_ASSETS=0` disables the early dfdaemon/P2P path entirely;
 the variable is a plain env entry, so it can be added to the bootstrap payload
 for rollback.
 Concurrent boots are safe: each node downloads to its own temp directory and

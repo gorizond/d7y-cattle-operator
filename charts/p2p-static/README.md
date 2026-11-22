@@ -11,9 +11,14 @@ and is not served by this chart.
 ```bash
 helm install p2p-static charts/p2p-static \
   --namespace dragonfly-system \
+  --values scripts/testdata/p2p-static-operator-values.yaml \
   --set ingress.enabled=true \
   --set ingress.hosts[0].host=static.example.test
 ```
+
+`static.populate.enabled` defaults to `false` for standalone lint/render; set it
+to `true` and provide the version/repository/checksum values (the fixture above
+is an operator-shaped example). The integrated operator always supplies them.
 
 The integrated operator deployment uses an `emptyDir` and never sets
 `static.existingClaim`; the volume survives for the pod lifetime and is
@@ -34,13 +39,16 @@ Legacy compatibility paths (`/bin/dfdaemon`, `/bin/dfget`,
 from the **node architecture only** when absent. An existing `/bin/dfdaemon`
 (the live poligon volume) is never overwritten. Downloads retry with backoff
 and fail the init container instead of starting nginx with incomplete assets.
-All artifact URLs, versions, checksums, arches, and the init image are
-overridable under `static.populate`; `static.populate.enabled=false` restores
-the old externally-populated behavior.
+The chart carries no version, repository, or checksum defaults: the operator
+chart (`charts/d7y-cattle-operator/values.yaml`) owns them and renders them into
+`static.populate.*`. `static.populate.enabled=false` restores the old
+externally-populated behavior. If populate is enabled, the template fails when
+the client versions, nydus version/arches, or snapshotter version/arches are
+missing.
 
 There is no PVC. The chart uses `emptyDir`, so everything is re-downloaded
-after pod recreation. Defaults include amd64 and arm64 for client, nydus, and
-the upstream nydus-snapshotter `v0.16.0`; that is roughly 550–560 MiB after
+after pod recreation. The operator values include amd64 and arm64 for client,
+nydus, and the upstream nydus-snapshotter; that is roughly 550–560 MiB after
 population (the `/bin` compatibility copies add ~150 MiB) plus transient
 download/extract space during init. On a slow first start this means fetching
 roughly 205 MiB before nginx becomes ready. Narrow the version/arch lists or
@@ -52,7 +60,9 @@ In the integrated deployment the operator creates the `p2p-static` HelmOp and
 renders these values from config (`CLIENT_VERSION`, `NYDUS_VERSION`,
 `NYDUS_SNAPSHOTTER_VERSION`, release repositories, manager host/TLS Secret, and
 ingress class). The release is adopted with `takeOwnership=true`; no manual
-chart edits are needed. The standalone values below remain the defaults.
+chart edits are needed. The operator chart is the single source of those
+versions/repositories/checksums; this chart only carries empty required-value
+placeholders.
 
 Checksums are dynamic: the populate init container first fetches the release
 sidecar (`.sha256sum`/`.sha256`). Values `sha256`/`tarballSHA256` are fallback
@@ -82,10 +92,10 @@ helm install p2p-static charts/p2p-static \
 
 ## Asset volume
 
-The chart populates the static volume from pinned upstream releases; it does
-not vendor binaries. Defaults are nydus `v2.4.5`
-(`nydus-static-v2.4.5-linux-<arch>.tgz`) and dragonfly-client `v1.5.14`
-(`dragonfly-client-v1.5.14-x86_64-unknown-linux-gnu.tar.gz`, SHA-256
+The chart populates the static volume from the upstream releases selected by
+the operator chart; it does not vendor binaries. The operator defaults are
+nydus `v2.4.5` (`nydus-static-v2.4.5-linux-<arch>.tgz`) and dragonfly-client
+`v1.5.14` (`dragonfly-client-v1.5.14-x86_64-unknown-linux-gnu.tar.gz`, SHA-256
 `ba080e62f1626ab2fc2a5a0629a5cd912cc15099508820403108abbe2f75b1f7`). This is
 the GNU build used by the host bootstrap: its `dfdaemon` is 42.1 MB with SHA-256
 `e0d03d4759310e49cc1eba05341d2d4acf678f4926f2c37d9a4127ea1b94bf85`; both the
@@ -97,8 +107,8 @@ SHA-256 verified before extraction. The host updater prefers
 `/bin` and `/nydus/<version>/` paths, while the client falls back to the
 GitHub tarball. `/bin` also carries `dfget` for the host installer. An existing
 `/bin/dfdaemon` or `/bin/dfget` is preserved; the chart only fills missing
-files from the GNU client tarball. The upstream nydus-snapshotter `v0.16.0` release tarballs are mirrored under
-`/snapshotter/v0.16.0/<arch>/`; the embedded installer fetches the tarball
+files from the GNU client tarball. The upstream nydus-snapshotter release tarballs are mirrored under
+`/snapshotter/<version>/<arch>/`; the embedded installer fetches the tarball
 through P2P, then the static store, then the upstream GitHub release, and
 verifies both the tarball and the extracted `bin/containerd-nydus-grpc`. The embedded operator script
 checks executability of host binaries, not signatures, and `nydus-fs-select`

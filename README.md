@@ -219,11 +219,11 @@ and JWT signing key; see [Manager root credentials](#manager-root-credentials).
 | `hostSync.chart.repo` | `HOST_SYNC_CHART_REPO` | Helm repository URL of the p2p-host-sync chart |
 | `hostSync.chart.name` | `HOST_SYNC_CHART_NAME` | p2p-host-sync chart name |
 | `hostSync.chart.version` | `HOST_SYNC_CHART_VERSION` | p2p-host-sync chart version |
-| `static.chart.repo` / `.name` / `.version` | `STATIC_CHART_REPO` / `STATIC_CHART_NAME` / `STATIC_CHART_VERSION` | p2p-static chart location; default `p2p-static 0.1.11` |
+| `static.chart.repo` / `.name` / `.version` | `STATIC_CHART_REPO` / `STATIC_CHART_NAME` / `STATIC_CHART_VERSION` | p2p-static chart location; default `p2p-static 0.1.12` |
 | `static.releaseName` | `STATIC_RELEASE_NAME` | Helm release name for the singleton p2p-static release; default `p2p-static` |
 | `releases.client` / `.nydus` / `.snapshotter` | `CLIENT_RELEASE_REPO` / `NYDUS_RELEASE_REPO` / `NYDUS_SNAPSHOTTER_RELEASE_REPO` | GitHub release repositories |
-| `versions.client` / `.nydus` / `.snapshotter` | `CLIENT_VERSION` / `NYDUS_VERSION` / `NYDUS_SNAPSHOTTER_VERSION` | Pinned client/nydus/snapshotter versions; defaults `v1.5.14` / `v2.4.5` / `v0.16.0` |
-| `checksums.*` | `CLIENT_SHA256_*`, `NYDUS_SHA256_*`, `NYDUS_SNAPSHOTTER_*`, `NYDUS_SNAPSHOTTER_BINARY_SHA256_*` | Fallback pins; release checksum sidecars are preferred |
+| `versions.client` / `.nydus` / `.snapshotter` | `CLIENT_VERSION` / `NYDUS_VERSION` / `NYDUS_SNAPSHOTTER_VERSION` | Canonical client/nydus/snapshotter versions; defaults `v1.5.14` / `v2.4.5` / `v0.16.0`. The p2p-static and p2p-host-sync charts carry no version defaults. |
+| `checksums.*` | `CLIENT_SHA256_*`, `NYDUS_SHA256_*`, `NYDUS_SNAPSHOTTER_*`, `NYDUS_SNAPSHOTTER_BINARY_SHA256_*` | Canonical fallback pins rendered into both P2P charts; release checksum sidecars are preferred |
 | `extras.ingress.controller` | `EXTRAS_INGRESS_CONTROLLER` | `nginx` (default) or `traefik` |
 | `extras.ingress.className` | `EXTRAS_INGRESS_CLASS_NAME` | Ingress class; empty uses the cluster default |
 | `extras.ingress.grpcEnabled` | `EXTRAS_INGRESS_GRPC_ENABLED` | Render the manager gRPC front when the manager role is active; default `true` |
@@ -235,13 +235,14 @@ Defaults: `mtlsSecretName=dragonfly-p2p-mtls`, `dragonfly.chart.name=dragonfly`,
 `dragonfly.chart.repo=https://gorizond.github.io/dragonflyoss-helm-charts`,
 `dragonfly.chart.version=1.10.1-patch.2`, `extras.chart.name=dragonfly-extras`,
 `extras.chart.version=0.1.10`, `hostSync.chart.name=p2p-host-sync`,
-`hostSync.chart.version=0.1.4`, `static.chart.name=p2p-static`,
-`static.chart.version=0.1.11`, `static.releaseName=p2p-static`,
+`hostSync.chart.version=0.1.5`, `static.chart.name=p2p-static`,
+`static.chart.version=0.1.12`, `static.releaseName=p2p-static`,
 `extras.ingress.controller=nginx`,
 `extras.ingress.grpcEnabled=true`, `extras.ingress.restEnabled=true`,
 `manager.grpcPort=443`, `leaderElect=false`. Version defaults are
 `v1.5.14` / `v2.4.5` / `v0.16.0`; snapshotter binary pins default to the
-verified amd64/arm64 v0.16.0 hashes. Scheduler node IPs come from
+verified amd64/arm64 v0.16.0 hashes. These values are the single source for the
+P2P charts. Scheduler node IPs come from
 downstream scheduler pods/CAPI Machines; there is no scheduler IP value.
 `scheduler.domain` has no default and is required.
 `scheduler.clusterID` is only a fallback for an unpopulated
@@ -635,7 +636,7 @@ contain a copy of `tls.key`.
 
 ### Host sync DaemonSet
 
-`p2p-host-sync` 0.1.4 is a per-seed HelmOp (`<cluster>-p2p-host-sync`) rendered
+`p2p-host-sync` 0.1.5 is a per-seed HelmOp (`<cluster>-p2p-host-sync`) rendered
 from the Cluster `p2p.dragonfly.io/scheduler-ips` annotation. The operator only
 creates it for seed clusters with a non-empty scheduler IP list; an empty list
 removes the HelmOp. The chart renders a ConfigMap with `scheduler-ips`
@@ -811,11 +812,11 @@ on the node. The `[experimental] enable_referrer_detect`/
 `enable_index_detect` options and `[remote.mirrors_config]` are valid upstream
 v0.16.0 options.
 
-The installer defaults are
-`NYDUS_SNAPSHOTTER_REPO=containerd/nydus-snapshotter`,
+The installer keeps `NYDUS_SNAPSHOTTER_REPO=containerd/nydus-snapshotter`,
 `NYDUS_SNAPSHOTTER_VERSION=v0.16.0`, and the per-arch
-`nydus-snapshotter-v0.16.0-linux-<arch>.tar.gz` asset. Override them for
-another upstream release. The other nydus daemon assets (`nydusd`,
+`nydus-snapshotter-v0.16.0-linux-<arch>.tar.gz` asset as last-resort fallback
+values for the default version. The operator chart values are canonical;
+another upstream release must also provide its checksums. The other nydus daemon assets (`nydusd`,
 `nydus-image`, `nydus-overlayfs`) stay pinned in the static store at
 `NYDUS_VERSION` (`v2.4.5`). A missing release asset falls back to the direct
 registry so RKE2 can still start.
@@ -841,8 +842,8 @@ releases. It writes versioned/arch layouts:
 `/nydus/<version>/<arch>/{nydusd,nydus-image,nydus-overlayfs,nydus-static.tgz}`,
 and `/snapshotter/<version>/<arch>/<asset>`. Legacy `/bin` and
 `/nydus/<version>/` paths are filled from the node architecture only when
-absent. An existing `/bin/dfdaemon` is preserved. Defaults cover client,
-nydus, and snapshotter amd64+arm64; the amd64 GNU client tarball is
+absent. An existing `/bin/dfdaemon` is preserved. The operator values cover
+client, nydus, and snapshotter amd64+arm64; the amd64 GNU client tarball is
 `dragonfly-client-v1.5.14-x86_64-unknown-linux-gnu.tar.gz`, SHA-256
 `ba080e62…b1f7`, with a 42.1 MB `dfdaemon` SHA-256 `e0d03d4759…bf85` matching
 the host bootstrap. Both GNU and musl binaries report `1.5.14 (8887c145f)`, so
@@ -855,6 +856,20 @@ are values. If an asset download fails after retries, the init container fails
 instead of starting nginx with a directory that answers 404. The chart's
 `nydus-fs-select.sh` is a copy of the embedded operator asset and
 `scripts/test-p2p-static.sh` fails if the two drift.
+
+### Single source for P2P versions
+
+Bump versions, release repositories, and fallback checksums in
+`charts/d7y-cattle-operator/values.yaml` only (or the matching
+`CLIENT_VERSION`/`NYDUS_VERSION`/`NYDUS_SNAPSHOTTER_VERSION` and checksum
+environment variables). The operator renders them into both the `p2p-static`
+and `p2p-host-sync` HelmOps. `charts/p2p-static/values.yaml` and
+`charts/p2p-host-sync/values.yaml` intentionally have empty version/repository/
+checksum defaults; do not add a second copy there. The embedded
+`p2p-install.sh` keeps only last-resort arch pins for the default versions and
+fails when a non-default version lacks its checksum. Rollback is the same
+one-place edit back to the previous values followed by a Fleet/HelmOp
+reconcile.
 
 ### Operator-managed static values and live convergence
 

@@ -24,11 +24,15 @@ fi
 bash "$self_test" || fail "embedded p2p-install self-test failed"
 
 chart="$root/charts/p2p-static"
+values="$root/scripts/testdata/p2p-static-operator-values.yaml"
 cmp -s "$chart/files/nydus-fs-select.sh" "$selector" || fail "chart nydus-fs-select.sh differs from the embedded asset"
 bash -n "$chart/files/populate-static.sh" || fail "populate-static.sh has a syntax error"
+if grep -Eq 'v1\.5\.14|v2\.4\.5|v0\.16\.0|ba080e62|370ff792|1ad7b793|85925af7|24e4ceaa|136e9c64|dragonflyoss/(client|nydus)|containerd/nydus-snapshotter' "$chart/values.yaml"; then
+  fail "p2p-static values must not duplicate operator version/repo/checksum defaults"
+fi
 bash -n "$chart/files/nydus-fs-select.sh" || fail "chart nydus-fs-select.sh has a syntax error"
 
-helm template p2p-static "$chart" --namespace dragonfly-system >"$tmp/p2p-static.yaml"
+helm template p2p-static "$chart" --namespace dragonfly-system --values "$values" >"$tmp/p2p-static.yaml"
 grep -q 'name: populate-static' "$tmp/p2p-static.yaml" || fail "p2p-static is missing the populate-static init container"
 grep -q 'nydus-static-v2.4.5-linux-amd64.tgz' "$tmp/p2p-static.yaml" || fail "p2p-static is missing the pinned nydus tarball URL"
 grep -q '1ad7b793a1996577e462b0bf5c1a22e4450b9c04f7e9e99d4b274ccc92f19072' "$tmp/p2p-static.yaml" || fail "p2p-static is missing the pinned nydus checksum"
@@ -59,7 +63,7 @@ if grep -q 'p2p-install.sh' "$tmp/p2p-static.yaml"; then
   fail "p2p-static must not serve p2p-install.sh"
 fi
 
-helm template p2p-static "$chart" --namespace dragonfly-system \
+helm template p2p-static "$chart" --namespace dragonfly-system --values "$values" \
   --set manager.enabled=true --set manager.host=manager.example.com \
   --set manager.tlsSecret=manager-tls >"$tmp/p2p-static-manager.yaml"
 grep -q 'kind: IngressRoute' "$tmp/p2p-static-manager.yaml" || fail "p2p-static manager IngressRoute missing"

@@ -29,14 +29,12 @@ fetch() {
     || die "download failed: ${url}"
 }
 
-# Prefer the release-provided checksum sidecar. A pinned fallback exists only
-# for a client release that publishes no checksum asset (v1.5.14).
+# Prefer the release-provided checksum sidecar; fall back to the checksum the
+# operator supplied in the populate plan.
 resolve_checksum() {
   url="$1"
   expected="$2"
   kind="$3"
-  version="$4"
-  arch="$5"
   # Dragonfly client releases publish no checksum/signature sidecar. Use the
   # operator-provided checksum directly instead of probing predictable 404s.
   if [ "$kind" = "client" ] && [ -n "$expected" ]; then
@@ -59,11 +57,7 @@ resolve_checksum() {
     printf '%s' "$expected"
     return 0
   fi
-  case "${kind}:${version}:${arch}" in
-    client:v1.5.14:amd64) printf '%s' 'ba080e62f1626ab2fc2a5a0629a5cd912cc15099508820403108abbe2f75b1f7' ;;
-    client:v1.5.14:arm64) printf '%s' '370ff792a1c6957a7244b770d6cd12792668e326b2282b3017fea2cbfa3510af' ;;
-    *) return 1 ;;
-  esac
+  return 1
 }
 
 verify() {
@@ -122,7 +116,7 @@ while IFS='|' read -r kind version arch url sha root; do
         continue
       fi
       fetch "$url" "$tmp/client.tgz"
-      resolved="$(resolve_checksum "$url" "$sha" client "$version" "$arch")" \
+      resolved="$(resolve_checksum "$url" "$sha" client)" \
         || die "no checksum available for client $version/$arch: ${url}"
       verify "$tmp/client.tgz" "$resolved" "client $version/$arch"
       extract="$tmp/client-$version-$arch"
@@ -153,7 +147,7 @@ while IFS='|' read -r kind version arch url sha root; do
       [ -s "$dest/nydus-static.tgz" ] || need=1
       if [ "$need" = 1 ]; then
         fetch "$url" "$tmp/nydus-$version-$arch.tgz"
-        resolved="$(resolve_checksum "$url" "$sha" nydus "$version" "$arch")" \
+        resolved="$(resolve_checksum "$url" "$sha" nydus)" \
           || die "no checksum available for nydus $version/$arch: ${url}"
         verify "$tmp/nydus-$version-$arch.tgz" "$resolved" "nydus $version/$arch"
         extract="$tmp/nydus-extract-$version-$arch"
@@ -181,7 +175,7 @@ while IFS='|' read -r kind version arch url sha root; do
         log "snapshotter $version/$arch/$root already present"
       else
         fetch "$url" "$tmp/snapshotter-$version-$arch"
-        resolved="$(resolve_checksum "$url" "$sha" snapshotter "$version" "$arch")" \
+        resolved="$(resolve_checksum "$url" "$sha" snapshotter)" \
           || die "no checksum available for snapshotter $version/$arch/$root: ${url}"
         verify "$tmp/snapshotter-$version-$arch" "$resolved" "snapshotter $version/$arch/$root"
         install_file "$tmp/snapshotter-$version-$arch" "$dest/$root"
