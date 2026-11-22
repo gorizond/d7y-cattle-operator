@@ -3,6 +3,7 @@ set -euo pipefail
 
 root="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
 chart="$root/charts/p2p-host-sync"
+values="$root/scripts/testdata/p2p-host-sync-operator-values.yaml"
 install="$root/pkg/machinebootstrap/assets/p2p-install.sh"
 tmp="$(mktemp -d)"
 trap 'rm -rf "$tmp"' EXIT
@@ -17,11 +18,12 @@ cmp -s "$chart/files/nydus-fs-select.sh" "$root/pkg/machinebootstrap/assets/nydu
 } > "$tmp/embedded-updater"
 cmp -s "$chart/files/nydus-updater" "$tmp/embedded-updater" \
   || fail "host-sync nydus-updater differs from the embedded updater"
+if grep -Eq 'v1\.5\.14|v2\.4\.5|v0\.16\.0|ba080e62|370ff792|1ad7b793|85925af7|24e4ceaa|136e9c64|dragonflyoss/(client|nydus)|containerd/nydus-snapshotter' "$chart/values.yaml"; then
+  fail "p2p-host-sync values must not duplicate operator version/repo/checksum defaults"
+fi
 
-helm template p2p-host-sync "$chart" --namespace dragonfly-system \
+helm template p2p-host-sync "$chart" --namespace dragonfly-system --values "$values" \
   --set 'schedulerIPs[0]=203.0.113.10:8002' \
-  --set staticURL=https://static.example.test \
-  --set versions.client=v1.5.14 --set versions.nydus=v2.4.5 --set versions.snapshotter=v0.16.0 \
   > "$tmp/host-sync.yaml"
 grep -q 'hostPID: true' "$tmp/host-sync.yaml" || fail "host-sync must use hostPID for nsenter"
 grep -q 'nsenter -t 1 -m -u -i -n -p -- systemctl start nydus-updater.service' "$tmp/host-sync.yaml" \

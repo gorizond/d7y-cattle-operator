@@ -88,14 +88,14 @@ hostSync:
   chart:
     repo: https://gorizond.github.io/d7y-cattle-operator
     name: p2p-host-sync
-    version: 0.1.4
+    version: 0.1.5
 
 # Operator-managed p2p-static release on the manager-labeled cluster.
 static:
   chart:
     repo: https://gorizond.github.io/d7y-cattle-operator
     name: p2p-static
-    version: 0.1.11
+    version: 0.1.12
   releaseName: p2p-static
 
 # GitHub release repositories and version fallbacks. Checksums are fallback

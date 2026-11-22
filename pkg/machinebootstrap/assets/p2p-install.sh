@@ -37,9 +37,14 @@ if [ -f "${ROOT}${NYDUS_DIR}/versions.env" ]; then
   # shellcheck disable=SC1090
   . "${ROOT}${NYDUS_DIR}/versions.env"
 fi
+# Defaults live in the operator chart values; these constants only identify
+# when the per-architecture checksum fallbacks below still apply.
+DEFAULT_DRAGONFLY_CLIENT_VERSION="v1.5.14"
+DEFAULT_NYDUS_VERSION="v2.4.5"
+DEFAULT_NYDUS_SNAPSHOTTER_VERSION="v0.16.0"
 # Static-store assets for nydusd/nydus-image/nydus-overlayfs. The host
 # snapshotter is the upstream containerd/nydus-snapshotter release, see below.
-NYDUS_VERSION="${NYDUS_VERSION:-v2.4.5}"
+NYDUS_VERSION="${NYDUS_VERSION:-${DEFAULT_NYDUS_VERSION}}"
 NYDUS_BINARIES="nydusd
 nydus-image
 nydus-overlayfs"
@@ -49,7 +54,7 @@ nydus-overlayfs"
 # does not implicitly read containerd's certs.d. Installed to the existing
 # /usr/local/bin/containerd-nydus-grpc path and run by the same unit.
 NYDUS_SNAPSHOTTER_REPO="${NYDUS_SNAPSHOTTER_REPO:-containerd/nydus-snapshotter}"
-NYDUS_SNAPSHOTTER_VERSION="${NYDUS_SNAPSHOTTER_VERSION:-v0.16.0}"
+NYDUS_SNAPSHOTTER_VERSION="${NYDUS_SNAPSHOTTER_VERSION:-${DEFAULT_NYDUS_SNAPSHOTTER_VERSION}}"
 NYDUS_SNAPSHOTTER_BINARY="containerd-nydus-grpc"
 # Optional official Nydus release fallback for the daemon binaries when the
 # static store is not populated. The tarball contains nydusd, nydus-image, and
@@ -59,7 +64,7 @@ NYDUS_GITHUB_REPO="${NYDUS_GITHUB_REPO:-${NYDUS_RELEASE_REPO:-dragonflyoss/nydus
 # Direct Dragonfly client tarball for dfdaemon/dfget. The first delivery must
 # stay direct: dfget cannot use dfdaemon before dfdaemon exists.
 DRAGONFLY_CLIENT_REPO="${DRAGONFLY_CLIENT_REPO:-${CLIENT_RELEASE_REPO:-dragonflyoss/client}}"
-DRAGONFLY_CLIENT_VERSION="${DRAGONFLY_CLIENT_VERSION:-${CLIENT_VERSION:-v1.5.14}}"
+DRAGONFLY_CLIENT_VERSION="${DRAGONFLY_CLIENT_VERSION:-${CLIENT_VERSION:-${DEFAULT_DRAGONFLY_CLIENT_VERSION}}}"
 DRAGONFLY_CLIENT_LIBC="${DRAGONFLY_CLIENT_LIBC:-gnu}"
 DRAGONFLY_CLIENT_BINARIES="dfdaemon
 dfget"
@@ -149,13 +154,13 @@ case "$HOST_ARCH" in
     : "${CLIENT_SHA256:=${CLIENT_SHA256_AMD64:-}}"
     : "${NYDUS_SHA256:=${NYDUS_SHA256_AMD64:-}}"
     : "${NYDUS_SNAPSHOTTER_SHA256:=${NYDUS_SNAPSHOTTER_SHA256_AMD64:-}}"
-    : "${NYDUS_SNAPSHOTTER_BINARY_SHA256:=${NYDUS_SNAPSHOTTER_BINARY_SHA256_AMD64:-9bd24308ef51139310bf58927a97eec49567d0154606bc5774ad69d2ee492ff0}}"
+    : "${NYDUS_SNAPSHOTTER_BINARY_SHA256:=${NYDUS_SNAPSHOTTER_BINARY_SHA256_AMD64:-}}"
     ;;
   arm64)
     : "${CLIENT_SHA256:=${CLIENT_SHA256_ARM64:-}}"
     : "${NYDUS_SHA256:=${NYDUS_SHA256_ARM64:-}}"
     : "${NYDUS_SNAPSHOTTER_SHA256:=${NYDUS_SNAPSHOTTER_SHA256_ARM64:-}}"
-    : "${NYDUS_SNAPSHOTTER_BINARY_SHA256:=${NYDUS_SNAPSHOTTER_BINARY_SHA256_ARM64:-399f7a5b800bb6d05c63bbb340e7fa1820b84609b882589a6a95dd8796d03859}}"
+    : "${NYDUS_SNAPSHOTTER_BINARY_SHA256:=${NYDUS_SNAPSHOTTER_BINARY_SHA256_ARM64:-}}"
     ;;
 esac
 if [ -n "${CLIENT_SHA256:-}" ]; then
@@ -166,20 +171,45 @@ if [ -n "${NYDUS_SHA256:-}" ]; then
 fi
 NYDUS_SNAPSHOTTER_ASSET="${NYDUS_SNAPSHOTTER_ASSET:-nydus-snapshotter-${NYDUS_SNAPSHOTTER_VERSION}-linux-${NYDUS_SNAPSHOTTER_ARCH}.tar.gz}"
 
-# Per-architecture SHA-256 pins for the upstream v0.16.0 release tarballs.
-# The reference 236 node runs the amd64 binary with SHA-256 9bd24308...
+# Per-architecture SHA-256 pins are only a last-resort fallback for the
+# versions shipped in the operator chart. Any other version must provide its
+# checksums through the environment (the operator/host-sync does).
 case "$HOST_ARCH" in
   amd64)
-    : "${DRAGONFLY_CLIENT_SHA256:=ba080e62f1626ab2fc2a5a0629a5cd912cc15099508820403108abbe2f75b1f7}"
-    : "${NYDUS_GITHUB_SHA256:=1ad7b793a1996577e462b0bf5c1a22e4450b9c04f7e9e99d4b274ccc92f19072}"
-    : "${NYDUS_SNAPSHOTTER_SHA256:=24e4ceaae9c87e396e71e89bd3eb074f2cc6a5a14b1a2081c8d890481857a0e4}"
+    if [ "$DRAGONFLY_CLIENT_VERSION" = "$DEFAULT_DRAGONFLY_CLIENT_VERSION" ]; then
+      : "${DRAGONFLY_CLIENT_SHA256:=ba080e62f1626ab2fc2a5a0629a5cd912cc15099508820403108abbe2f75b1f7}"
+    fi
+    if [ "$NYDUS_VERSION" = "$DEFAULT_NYDUS_VERSION" ]; then
+      : "${NYDUS_GITHUB_SHA256:=1ad7b793a1996577e462b0bf5c1a22e4450b9c04f7e9e99d4b274ccc92f19072}"
+    fi
+    if [ "$NYDUS_SNAPSHOTTER_VERSION" = "$DEFAULT_NYDUS_SNAPSHOTTER_VERSION" ]; then
+      : "${NYDUS_SNAPSHOTTER_SHA256:=24e4ceaae9c87e396e71e89bd3eb074f2cc6a5a14b1a2081c8d890481857a0e4}"
+      : "${NYDUS_SNAPSHOTTER_BINARY_SHA256:=9bd24308ef51139310bf58927a97eec49567d0154606bc5774ad69d2ee492ff0}"
+    fi
     ;;
   arm64)
-    : "${DRAGONFLY_CLIENT_SHA256:=370ff792a1c6957a7244b770d6cd12792668e326b2282b3017fea2cbfa3510af}"
-    : "${NYDUS_GITHUB_SHA256:=85925af702d79fc3a8b9d501a5267ddc9f81449ff9fe94841845eb98eda84593}"
-    : "${NYDUS_SNAPSHOTTER_SHA256:=136e9c649a63c16b3d3322a15fcdf918e7dda9a4cbb043e2923451e87a8ba08f}"
+    if [ "$DRAGONFLY_CLIENT_VERSION" = "$DEFAULT_DRAGONFLY_CLIENT_VERSION" ]; then
+      : "${DRAGONFLY_CLIENT_SHA256:=370ff792a1c6957a7244b770d6cd12792668e326b2282b3017fea2cbfa3510af}"
+    fi
+    if [ "$NYDUS_VERSION" = "$DEFAULT_NYDUS_VERSION" ]; then
+      : "${NYDUS_GITHUB_SHA256:=85925af702d79fc3a8b9d501a5267ddc9f81449ff9fe94841845eb98eda84593}"
+    fi
+    if [ "$NYDUS_SNAPSHOTTER_VERSION" = "$DEFAULT_NYDUS_SNAPSHOTTER_VERSION" ]; then
+      : "${NYDUS_SNAPSHOTTER_SHA256:=136e9c649a63c16b3d3322a15fcdf918e7dda9a4cbb043e2923451e87a8ba08f}"
+      : "${NYDUS_SNAPSHOTTER_BINARY_SHA256:=399f7a5b800bb6d05c63bbb340e7fa1820b84609b882589a6a95dd8796d03859}"
+    fi
     ;;
 esac
+if [ "$DRAGONFLY_CLIENT_VERSION" != "$DEFAULT_DRAGONFLY_CLIENT_VERSION" ] && [ -z "${DRAGONFLY_CLIENT_SHA256:-}" ]; then
+  die "DRAGONFLY_CLIENT_SHA256 is required for non-default dragonfly-client ${DRAGONFLY_CLIENT_VERSION}"
+fi
+if [ "$NYDUS_VERSION" != "$DEFAULT_NYDUS_VERSION" ] && [ -z "${NYDUS_GITHUB_SHA256:-}" ]; then
+  die "NYDUS_GITHUB_SHA256 is required for non-default nydus ${NYDUS_VERSION}"
+fi
+if [ "$NYDUS_SNAPSHOTTER_VERSION" != "$DEFAULT_NYDUS_SNAPSHOTTER_VERSION" ]; then
+  [ -n "${NYDUS_SNAPSHOTTER_SHA256:-}" ] || die "NYDUS_SNAPSHOTTER_SHA256 is required for non-default nydus-snapshotter ${NYDUS_SNAPSHOTTER_VERSION}"
+  [ -n "${NYDUS_SNAPSHOTTER_BINARY_SHA256:-}" ] || die "NYDUS_SNAPSHOTTER_BINARY_SHA256 is required for non-default nydus-snapshotter ${NYDUS_SNAPSHOTTER_VERSION}"
+fi
 
 log "target ${TARGET_ARCH}: host=${HOST_ARCH} client=${DRAGONFLY_CLIENT_ARCH} nydus=${NYDUS_ARCH} snapshotter=${NYDUS_SNAPSHOTTER_ARCH}"
 log "pins: client ${DRAGONFLY_CLIENT_VERSION} ${DRAGONFLY_CLIENT_SHA256}, nydus ${NYDUS_VERSION} ${NYDUS_GITHUB_SHA256}, snapshotter ${NYDUS_SNAPSHOTTER_VERSION} ${NYDUS_SNAPSHOTTER_SHA256:-unavailable} (binary ${NYDUS_SNAPSHOTTER_BINARY_SHA256:-unavailable})"
@@ -1566,9 +1596,9 @@ fi
 : "${CLIENT_VERSION:?CLIENT_VERSION is required}"
 : "${NYDUS_VERSION:?NYDUS_VERSION is required}"
 : "${NYDUS_SNAPSHOTTER_VERSION:?NYDUS_SNAPSHOTTER_VERSION is required}"
-CLIENT_RELEASE_REPO="${CLIENT_RELEASE_REPO:-dragonflyoss/client}"
-NYDUS_RELEASE_REPO="${NYDUS_RELEASE_REPO:-dragonflyoss/nydus}"
-NYDUS_SNAPSHOTTER_REPO="${NYDUS_SNAPSHOTTER_REPO:-containerd/nydus-snapshotter}"
+: "${CLIENT_RELEASE_REPO:?CLIENT_RELEASE_REPO is required}"
+: "${NYDUS_RELEASE_REPO:?NYDUS_RELEASE_REPO is required}"
+: "${NYDUS_SNAPSHOTTER_REPO:?NYDUS_SNAPSHOTTER_REPO is required}"
 CLIENT_SHA256="${CLIENT_SHA256:-}"
 NYDUS_SHA256="${NYDUS_SHA256:-}"
 NYDUS_SNAPSHOTTER_SHA256="${NYDUS_SNAPSHOTTER_SHA256:-}"

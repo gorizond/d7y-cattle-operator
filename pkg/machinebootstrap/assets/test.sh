@@ -570,9 +570,9 @@ assert_not_contains "$INSTALL" 'machineGlobalConfig'
 assert_not_contains "$INSTALL" 'enable_oci_tar'
 assert_contains "$INSTALL" 'fallback_direct'
 assert_contains "$INSTALL" 'SCHEDULER_PORT=8002'
-assert_contains "$INSTALL" 'NYDUS_VERSION="${NYDUS_VERSION:-v2.4.5}"'
+assert_contains "$INSTALL" 'NYDUS_VERSION="${NYDUS_VERSION:-${DEFAULT_NYDUS_VERSION}}"'
 assert_contains "$INSTALL" 'NYDUS_SNAPSHOTTER_REPO="${NYDUS_SNAPSHOTTER_REPO:-containerd/nydus-snapshotter}"'
-assert_contains "$INSTALL" 'NYDUS_SNAPSHOTTER_VERSION="${NYDUS_SNAPSHOTTER_VERSION:-v0.16.0}"'
+assert_contains "$INSTALL" 'NYDUS_SNAPSHOTTER_VERSION="${NYDUS_SNAPSHOTTER_VERSION:-${DEFAULT_NYDUS_SNAPSHOTTER_VERSION}}"'
 assert_contains "$INSTALL" 'NYDUS_SNAPSHOTTER_ASSET="${NYDUS_SNAPSHOTTER_ASSET:-nydus-snapshotter-${NYDUS_SNAPSHOTTER_VERSION}-linux-${NYDUS_SNAPSHOTTER_ARCH}.tar.gz}"'
 assert_not_contains "$INSTALL" 'p2p.2'
 assert_not_contains "$INSTALL" 'gorizond/nydus-snapshotter'
@@ -984,6 +984,56 @@ assert_contains "${WORK}/arch-arm64-pins.log" 'host=arm64 client=aarch64 nydus=a
 assert_contains "${WORK}/arch-arm64-pins.log" 'pins: client v1.5.14 370ff792a1c6957a7244b770d6cd12792668e326b2282b3017fea2cbfa3510af'
 assert_contains "${WORK}/arch-arm64-pins.log" 'nydus v2.4.5 85925af702d79fc3a8b9d501a5267ddc9f81449ff9fe94841845eb98eda84593'
 assert_contains "${WORK}/arch-arm64-pins.log" 'snapshotter v0.16.0 136e9c649a63c16b3d3322a15fcdf918e7dda9a4cbb043e2923451e87a8ba08f (binary 399f7a5b800bb6d05c63bbb340e7fa1820b84609b882589a6a95dd8796d03859)'
+
+# Non-default versions must use the supplied checksums, never the defaults.
+ROOT_OVERRIDE="${WORK}/root-version-override"
+OVERRIDE_SHA="1111111111111111111111111111111111111111111111111111111111111111"
+env TARGET_ARCH=amd64 P2P_ROOT="$ROOT_OVERRIDE" SKIP_DOWNLOAD=1 SKIP_MODULES=1 SKIP_SYSTEMD=1 SKIP_PREFLIGHT=1 CONTAINERD_MAJOR=1 \
+  DRAGONFLY_CLIENT_VERSION=v9.9.9 DRAGONFLY_CLIENT_SHA256="$OVERRIDE_SHA" \
+  NYDUS_VERSION=v9.9.9 NYDUS_SHA256="$OVERRIDE_SHA" \
+  NYDUS_SNAPSHOTTER_VERSION=v9.9.9 NYDUS_SNAPSHOTTER_SHA256="$OVERRIDE_SHA" NYDUS_SNAPSHOTTER_BINARY_SHA256="$OVERRIDE_SHA" \
+  "$RUNNER" "$INSTALL" "$CFG" > "${WORK}/version-override.log" 2>&1
+assert_contains "${WORK}/version-override.log" "pins: client v9.9.9 ${OVERRIDE_SHA}"
+assert_contains "${WORK}/version-override.log" "nydus v9.9.9 ${OVERRIDE_SHA}"
+assert_contains "${WORK}/version-override.log" "snapshotter v9.9.9 ${OVERRIDE_SHA} (binary ${OVERRIDE_SHA})"
+assert_not_contains "${WORK}/version-override.log" 'ba080e62f1626ab2fc2a5a0629a5cd912cc15099508820403108abbe2f75b1f7'
+assert_not_contains "${WORK}/version-override.log" '1ad7b793a1996577e462b0bf5c1a22e4450b9c04f7e9e99d4b274ccc92f19072'
+assert_not_contains "${WORK}/version-override.log" '24e4ceaae9c87e396e71e89bd3eb074f2cc6a5a14b1a2081c8d890481857a0e4'
+assert_not_contains "${WORK}/version-override.log" '9bd24308ef51139310bf58927a97eec49567d0154606bc5774ad69d2ee492ff0'
+
+# A non-default version without its checksum fails before any download.
+if env -u DRAGONFLY_CLIENT_SHA256 -u CLIENT_SHA256 TARGET_ARCH=amd64 P2P_ROOT="${WORK}/root-missing-client-sha" SKIP_DOWNLOAD=1 SKIP_MODULES=1 SKIP_SYSTEMD=1 SKIP_PREFLIGHT=1 CONTAINERD_MAJOR=1 \
+  DRAGONFLY_CLIENT_VERSION=v9.9.9 \
+  "$RUNNER" "$INSTALL" "$CFG" > "${WORK}/missing-client-sha.log" 2>&1; then
+  echo "p2p-static self-test: non-default client without checksum did not fail" >&2
+  exit 1
+fi
+assert_contains "${WORK}/missing-client-sha.log" 'DRAGONFLY_CLIENT_SHA256 is required for non-default dragonfly-client v9.9.9'
+
+if env -u NYDUS_GITHUB_SHA256 -u NYDUS_SHA256 -u NYDUS_SHA256_AMD64 TARGET_ARCH=amd64 P2P_ROOT="${WORK}/root-missing-nydus-sha" SKIP_DOWNLOAD=1 SKIP_MODULES=1 SKIP_SYSTEMD=1 SKIP_PREFLIGHT=1 CONTAINERD_MAJOR=1 \
+  NYDUS_VERSION=v9.9.9 \
+  "$RUNNER" "$INSTALL" "$CFG" > "${WORK}/missing-nydus-sha.log" 2>&1; then
+  echo "p2p-static self-test: non-default nydus without checksum did not fail" >&2
+  exit 1
+fi
+assert_contains "${WORK}/missing-nydus-sha.log" 'NYDUS_GITHUB_SHA256 is required for non-default nydus v9.9.9'
+
+if env -u NYDUS_SNAPSHOTTER_SHA256 -u NYDUS_SNAPSHOTTER_SHA256_AMD64 -u NYDUS_SNAPSHOTTER_BINARY_SHA256 -u NYDUS_SNAPSHOTTER_BINARY_SHA256_AMD64 \
+  TARGET_ARCH=amd64 P2P_ROOT="${WORK}/root-missing-snapshotter-sha" SKIP_DOWNLOAD=1 SKIP_MODULES=1 SKIP_SYSTEMD=1 SKIP_PREFLIGHT=1 CONTAINERD_MAJOR=1 \
+  NYDUS_SNAPSHOTTER_VERSION=v9.9.9 "$RUNNER" "$INSTALL" "$CFG" > "${WORK}/missing-snapshotter-sha.log" 2>&1; then
+  echo "p2p-static self-test: non-default snapshotter without tarball checksum did not fail" >&2
+  exit 1
+fi
+assert_contains "${WORK}/missing-snapshotter-sha.log" 'NYDUS_SNAPSHOTTER_SHA256 is required for non-default nydus-snapshotter v9.9.9'
+
+if env -u NYDUS_SNAPSHOTTER_BINARY_SHA256 -u NYDUS_SNAPSHOTTER_BINARY_SHA256_AMD64 \
+  TARGET_ARCH=amd64 P2P_ROOT="${WORK}/root-missing-snapshotter-bin" SKIP_DOWNLOAD=1 SKIP_MODULES=1 SKIP_SYSTEMD=1 SKIP_PREFLIGHT=1 CONTAINERD_MAJOR=1 \
+  NYDUS_SNAPSHOTTER_VERSION=v9.9.9 NYDUS_SNAPSHOTTER_SHA256="$OVERRIDE_SHA" \
+  "$RUNNER" "$INSTALL" "$CFG" > "${WORK}/missing-snapshotter-bin.log" 2>&1; then
+  echo "p2p-static self-test: non-default snapshotter without binary checksum did not fail" >&2
+  exit 1
+fi
+assert_contains "${WORK}/missing-snapshotter-bin.log" 'NYDUS_SNAPSHOTTER_BINARY_SHA256 is required for non-default nydus-snapshotter v9.9.9'
 
 # Arm64 URL selection with the upstream arm64 snapshotter tarball. The
 # checksums are overridden only to accept the tiny test artifacts.

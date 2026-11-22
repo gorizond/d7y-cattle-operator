@@ -31,6 +31,15 @@ app.kubernetes.io/instance: {{ .Release.Name }}
 
 
 {{- define "p2p-static.populatePlan" -}}
+{{- if and $.Values.static.populate.enabled $.Values.static.populate.client.enabled (not $.Values.static.populate.client.versions) }}
+{{- fail "p2p-static: static.populate.client.versions is required from the operator" }}
+{{- end }}
+{{- if and $.Values.static.populate.enabled $.Values.static.populate.nydus.enabled (or (not $.Values.static.populate.nydus.version) (not $.Values.static.populate.nydus.arches)) }}
+{{- fail "p2p-static: static.populate.nydus.version/arches are required from the operator" }}
+{{- end }}
+{{- if and $.Values.static.populate.enabled $.Values.static.populate.snapshotter.enabled (or (not $.Values.static.populate.snapshotter.version) (not $.Values.static.populate.snapshotter.arches)) }}
+{{- fail "p2p-static: static.populate.snapshotter.version/arches are required from the operator" }}
+{{- end }}
 {{- if $.Values.static.populate.client.enabled }}
 {{- range $version := $.Values.static.populate.client.versions }}
 {{- range $artifact := $version.arches }}

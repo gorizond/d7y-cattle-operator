@@ -43,7 +43,10 @@ static:
   # for the node architecture. No PVC: emptyDir data lives for the pod lifetime
   # and is re-downloaded on every pod recreation.
   populate:
-    enabled: true
+    # The integrated operator sets this true and supplies all version/repo/
+    # checksum values. The standalone chart default is false so `helm lint`
+    # and render checks do not require a second copy of those defaults.
+    enabled: false
     image:
       repository: curlimages/curl
       tag: "8.10.1"
@@ -51,46 +54,25 @@ static:
     retries: 5
     client:
       enabled: true
-      # /bin compatibility layout uses this version and the node architecture.
-      compatVersion: v1.5.14
-      versions:
-        - version: v1.5.14
-          arches:
-            - arch: amd64
-              url: https://github.com/dragonflyoss/client/releases/download/v1.5.14/dragonfly-client-v1.5.14-x86_64-unknown-linux-gnu.tar.gz
-              sha256: ba080e62f1626ab2fc2a5a0629a5cd912cc15099508820403108abbe2f75b1f7
-              tarballRoot: dragonfly-client-v1.5.14-x86_64-unknown-linux-gnu
-            - arch: arm64
-              url: https://github.com/dragonflyoss/client/releases/download/v1.5.14/dragonfly-client-v1.5.14-aarch64-unknown-linux-gnu.tar.gz
-              sha256: 370ff792a1c6957a7244b770d6cd12792668e326b2282b3017fea2cbfa3510af
-              tarballRoot: dragonfly-client-v1.5.14-aarch64-unknown-linux-gnu
+      # Required from the operator: /bin compatibility version and the full
+      # client version/arch plan (URL, fallback checksum, tarball root).
+      compatVersion: ""
+      versions: []
     nydus:
       enabled: true
-      version: v2.4.5
+      # Required from the operator.
+      version: ""
       tarballRoot: nydus-static
       binaries:
         - nydusd
         - nydus-image
         - nydus-overlayfs
-      arches:
-        - arch: amd64
-          tarballURL: https://github.com/dragonflyoss/nydus/releases/download/v2.4.5/nydus-static-v2.4.5-linux-amd64.tgz
-          tarballSHA256: 1ad7b793a1996577e462b0bf5c1a22e4450b9c04f7e9e99d4b274ccc92f19072
-        - arch: arm64
-          tarballURL: https://github.com/dragonflyoss/nydus/releases/download/v2.4.5/nydus-static-v2.4.5-linux-arm64.tgz
-          tarballSHA256: 85925af702d79fc3a8b9d501a5267ddc9f81449ff9fe94841845eb98eda84593
+      arches: []
     snapshotter:
       enabled: true
-      version: v0.16.0
-      arches:
-        - arch: amd64
-          asset: nydus-snapshotter-v0.16.0-linux-amd64.tar.gz
-          url: https://github.com/containerd/nydus-snapshotter/releases/download/v0.16.0/nydus-snapshotter-v0.16.0-linux-amd64.tar.gz
-          sha256: 24e4ceaae9c87e396e71e89bd3eb074f2cc6a5a14b1a2081c8d890481857a0e4
-        - arch: arm64
-          asset: nydus-snapshotter-v0.16.0-linux-arm64.tar.gz
-          url: https://github.com/containerd/nydus-snapshotter/releases/download/v0.16.0/nydus-snapshotter-v0.16.0-linux-arm64.tar.gz
-          sha256: 136e9c649a63c16b3d3322a15fcdf918e7dda9a4cbb043e2923451e87a8ba08f
+      # Required from the operator.
+      version: ""
+      arches: []
     selector:
       enabled: true
 
