@@ -7,9 +7,8 @@ import (
 	"github.com/gorizond/d7y-cattle-operator/pkg/bootstrap"
 )
 
-// inlineInstallBlock wraps the env-file assignments and the embedded script in
-// a POSIX heredoc, then executes the literal body under bash. Marker is the
-// first line for idempotency.
+// inlineInstallBlock renders the legacy v0.3.21-v0.3.23 inline block. It is
+// retained for migration tests; production reconciles use shortInstallBlock.
 func inlineInstallBlock(env string) string {
 	return inlineInstallBlockFor(p2pInstallBody, env)
 }
@@ -27,6 +26,19 @@ func inlineInstallBlockFor(rawBody, env string) string {
 		delimiter + "\n" +
 		"bash /tmp/d7y-p2p-install.sh || true\n" +
 		"fi\n" +
+		bootstrap.EndMarker + "\n"
+}
+
+// shortInstallQuery identifies the short static-delivery p2p block.
+const shortInstallQuery = "p2p-install.sh?cfg="
+
+// shortInstallBlock returns the marked short p2p block. The script and its
+// base64url env payload are fetched from the static server; the marker stays
+// on its own line so the pre-install block can be inserted before it.
+func shortInstallBlock(staticURL, payload string) string {
+	base := strings.TrimRight(strings.TrimSpace(staticURL), "/")
+	return bootstrap.Marker + "\n" +
+		"curl -sfL \"" + base + "/" + shortInstallQuery + payload + "\" | bash || true\n" +
 		bootstrap.EndMarker + "\n"
 }
 

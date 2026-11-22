@@ -31,6 +31,10 @@ if grep -Eq 'v1\.5\.14|v2\.4\.5|v0\.16\.0|ba080e62|370ff792|1ad7b793|85925af7|24
   fail "p2p-static values must not duplicate operator version/repo/checksum defaults"
 fi
 bash -n "$chart/files/nydus-fs-select.sh" || fail "chart nydus-fs-select.sh has a syntax error"
+bash -n "$chart/files/p2p-install.sh" || fail "chart p2p-install.sh has a syntax error"
+[ "$(grep -c '__CFG__' "$chart/files/p2p-install.sh")" -eq 1 ] || fail "chart p2p-install.sh must have exactly one __CFG__ placeholder"
+grep -q 'The nginx sub_filter replaces' "$chart/files/p2p-install.sh" || fail "chart p2p-install.sh is missing the cfg prelude"
+grep -q 'write_file()' "$chart/files/p2p-install.sh" || fail "chart p2p-install.sh is missing the host installer body"
 
 helm template p2p-static "$chart" --namespace dragonfly-system --values "$values" >"$tmp/p2p-static.yaml"
 grep -q 'name: populate-static' "$tmp/p2p-static.yaml" || fail "p2p-static is missing the populate-static init container"
@@ -59,9 +63,12 @@ grep -q 'location /snapshotter/' "$tmp/p2p-static.yaml" || fail "p2p-static is m
 grep -q 'location /bin/' "$tmp/p2p-static.yaml" || fail "p2p-static is missing the /bin asset route"
 grep -q 'listen 80;' "$tmp/p2p-static.yaml" || fail "p2p-static nginx must listen on port 80"
 grep -q 'listen \[::\]:80;' "$tmp/p2p-static.yaml" || fail "p2p-static nginx must listen on IPv6 localhost too"
-if grep -q 'p2p-install.sh' "$tmp/p2p-static.yaml"; then
-  fail "p2p-static must not serve p2p-install.sh"
-fi
+grep -q 'location = /p2p-install.sh' "$tmp/p2p-static.yaml" || fail "p2p-static is missing the p2p-install.sh endpoint"
+grep -q 'access_log off;' "$tmp/p2p-static.yaml" || fail "p2p-static must disable access logs for p2p-install.sh"
+grep -q "sub_filter '__CFG__'" "$tmp/p2p-static.yaml" || fail "p2p-static is missing the cfg sub_filter"
+grep -q 'large_client_header_buffers 4 32k' "$tmp/p2p-static.yaml" || fail "p2p-static is missing the 32k large header buffers"
+grep -q 'client_header_buffer_size 32k' "$tmp/p2p-static.yaml" || fail "p2p-static is missing the 32k client header buffer"
+grep -q 'p2p-install.sh.tmpl' "$tmp/p2p-static.yaml" || fail "p2p-static is missing the p2p-install.sh template"
 
 helm template p2p-static "$chart" --namespace dragonfly-system --values "$values" \
   --set manager.enabled=true --set manager.host=manager.example.com \
@@ -71,9 +78,7 @@ grep -q 'PathPrefix(`/bin`)' "$tmp/p2p-static-manager.yaml" || fail "p2p-static 
 grep -q 'PathPrefix(`/nydus`)' "$tmp/p2p-static-manager.yaml" || fail "p2p-static /nydus path missing"
 grep -q 'PathPrefix(`/client`)' "$tmp/p2p-static-manager.yaml" || fail "p2p-static /client path missing"
 grep -q 'PathPrefix(`/snapshotter`)' "$tmp/p2p-static-manager.yaml" || fail "p2p-static /snapshotter path missing"
-if grep -q 'p2p-install.sh' "$tmp/p2p-static-manager.yaml"; then
-  fail "p2p-static manager route must not include p2p-install.sh"
-fi
+grep -q 'PathPrefix(`/p2p-install.sh`)' "$tmp/p2p-static-manager.yaml" || fail "p2p-static manager route is missing /p2p-install.sh"
 
 # Exercise the populate script with a fake downloader: versioned/arch layouts
 # for both architectures, legacy /bin from the node arch, existing dfdaemon kept.

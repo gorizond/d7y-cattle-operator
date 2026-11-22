@@ -11,7 +11,7 @@ webhooks are out of scope.
 
 ## What it does today
 
-Pod image-mutation admission, Harbor, and registry-proxy add-ons are out of scope. The operator embeds `pkg/machinebootstrap/assets/p2p-install.sh` and injects it, with the bootstrap env-file, into the Rancher machine-bootstrap Secret.
+Pod image-mutation admission, Harbor, and registry-proxy add-ons are out of scope. The operator injects a short p2p bootstrap command plus a base64url env payload into the Rancher machine-bootstrap Secret; the script and payload are served by `p2p-static`.
 
 - Parses and validates the operator configuration from flags/environment variables.
 - Maintains a stable CA Secret (`dragonfly-p2p-ca`, Opaque) and split leaf
@@ -111,7 +111,7 @@ flowchart LR
 
   FLEET -->|"HelmOps"| D1
   FLEET -->|"HelmOps"| D2
-  OP -.->|"machine-bootstrap Secret: adds inline p2p block"| MC
+  OP -.->|"machine-bootstrap Secret: adds short p2p block"| MC
   MC -->|"cloud-init from bootstrap Secret"| N3
   MGR -.->|"register scheduler/seed"| SCH1
   %% invisible rank balance: keeps A and B side by side
@@ -149,7 +149,7 @@ Color legend: gray = workload pods, blue = dfdaemon, green = scheduler, purple =
 ### At a glance
 
 - The operator runs on the local Rancher/Fleet cluster. It reconciles every Cluster labelled `d7y-operator-cattle: "true"` and creates the Fleet HelmOps for KeyDB, manager, scheduler/seed, extras, the
-containerd mirror, the singleton p2p-static server, and per-seed host-sync. Its machine-bootstrap Secret controller inserts the self-contained p2p install block into the node-driver bootstrap script that Rancher merges into cloud-init, before the Rancher `do_install "$@"` call.
+containerd mirror, the singleton p2p-static server, and per-seed host-sync. Its machine-bootstrap Secret controller inserts a short p2p bootstrap block (script and payload served by `p2p-static`) into the node-driver bootstrap script that Rancher merges into cloud-init, before the Rancher `do_install "$@"` call.
 - Every running downstream node has a dfdaemon pod, with nydus on the host; pods pull through the node-local proxy and Dragonfly distributes blobs P2P. The diagram shows a scheduler pod per seed cluster and the manager pod on a node in downstream cluster B.
 - The orange dashed node in downstream cluster A consumes that bootstrap Secret through cloud-init before RKE2: it has only the host dfdaemon and nydus and is already joining P2P. The scheduler alias `d7y-scheduler.<cluster-id>.<domain>` is published by external-dns (or a wildcard zone) and used before RKE2 to bootstrap node/RKE2 image pulls.
 
@@ -157,7 +157,7 @@ containerd mirror, the singleton p2p-static server, and per-seed host-sync. Its 
 
 - The manager is a role, not a fixed local component: the diagram places the purple manager pod on a node in downstream cluster B, while any Cluster with `d7y-operator-manager` can run it; the operator stays on the local Rancher cluster. Green scheduler pods are per seed Cluster, and blue dfdaemon pods run on every running node. Manager and seed roles may be split across different Clusters, each with its own KeyDB/extras release.
 - N downstream/seed Clusters have N scheduler IDs. Each seed Cluster runs its own scheduler + seed under its ID. The scheduler/seed for a new Cluster's ID runs in a seed Cluster reachable before the new Cluster's RKE2 (it cannot run in that Cluster before its own RKE2 exists); external-dns or a wildcard zone publishes `d7y-scheduler.<cluster-id>.<domain>`. In downstream cluster A, the orange dashed node is the pre-RKE2 bootstrap stage: its host dfdaemon joins P2P before RKE2 and any Kubernetes Pods exist.
-- `p2p-install.sh` from the machine-bootstrap Secret + the host dfdaemon bootstrap start before RKE2 and pull node/RKE2 images via Dragonfly P2P from the scheduler/seed. This accelerates provisioning before the Kubernetes node starts; if the alias is unreachable, the script is fail-open and pulls directly.
+- `p2p-install.sh` fetched by the machine-bootstrap Secret from `p2p-static` + the host dfdaemon bootstrap start before RKE2 and pull node/RKE2 images via Dragonfly P2P from the scheduler/seed. This accelerates provisioning before the Kubernetes node starts; if the alias is unreachable, the script is fail-open and pulls directly.
 
 ## Follow-ups
 
@@ -209,7 +209,7 @@ and JWT signing key; see [Manager root credentials](#manager-root-credentials).
 | `manager.grpcDomain` | `MANAGER_GRPC_DOMAIN` | Public manager gRPC hostname, without scheme |
 | `manager.grpcPort` | `MANAGER_GRPC_PORT` | Public manager gRPC port used by schedulers; default `443` |
 | `manager.apiURL` | `MANAGER_API_URL` | Public manager REST API URL (`https://`) |
-| `nginx.staticURL` | `NGINX_STATIC_URL` | Base URL for the static client/nydus/snapshotter assets used by the embedded host script and host-sync updater; may be the manager host when the p2p-static manager route is enabled. |
+| `nginx.staticURL` | `NGINX_STATIC_URL` | Base URL for the `p2p-install.sh` endpoint and the static client/nydus/snapshotter assets; may be the manager host when the p2p-static manager route is enabled. |
 | `nydus.mirrorURL` | `NYDUS_MIRROR_URL` | Optional HTTPS mirror path for nydus blobs in the bootstrap payload |
 | `scheduler.domain` | `P2P_DOMAIN` | Base domain for `d7y-scheduler.<fleet-cluster-id>.<domain>`; required |
 | `scheduler.clusterID` | `P2P_CLUSTER_ID` | Optional fallback when provisioning Cluster `status.clusterName` is empty |
@@ -519,7 +519,7 @@ exists, so the first upgrade must rotate trust once:
 
 Existing nodes must reboot (or otherwise re-run their Rancher machine
 bootstrap/cloud-init) after the bootstrap Secret revision changes. A running
-host dfdaemon keeps its old certificate/config until the embedded block is
+host dfdaemon keeps its old certificate/config until the p2p block is
 re-executed; the machine-bootstrap Secret now carries a client-certificate
 revision and replaces the injected block when that revision changes.
 
@@ -578,6 +578,25 @@ yet:
   30s host timer detects the node's in-cluster `client` pod via `crictl` and
   disables the host bootstrap while the pod is running. If the pod disappears,
   the timer re-enables the host bootstrap. The switch never touches nydus.
+
+### Short p2p delivery and payload
+
+The machine bootstrap Secret contains only the marked short command:
+
+```sh
+curl -sfL "<static>/p2p-install.sh?cfg=<base64url(env)>" | bash || true
+```
+
+`p2p-static` serves the script and substitutes `__CFG__` with the query value;
+the env payload includes `P2P_DISTRO`, `SCHEDULER_IPS`, the manager/static URLs,
+scheduler host/ID, versions, and the CA, client certificate, and **client key**
+(mTLS needs all three). The encoded payload is capped at 8 KiB. Existing
+v0.3.23 Secrets are migrated from the inline heredoc block on the next
+reconcile; nodes apply the new block only after their next
+bootstrap/cloud-init run (normally a reboot). **Security:** the client key is in
+the `cfg` query string; `p2p-static` sets `access_log off` for
+`/p2p-install.sh`, never put the payload in public artifacts, and treat the
+bootstrap Secret as sensitive.
 
 ### Pre-install bootstrap annotation
 
@@ -894,8 +913,13 @@ registry so RKE2 can still start.
 ## Bootstrap static chart
 
 `charts/p2p-static` serves the static `/bin`, `/nydus`, `/client`, and
-`/snapshotter` asset volume through Nginx. The embedded host script is inlined into the machine bootstrap Secret;
-its payload is an env-file (no JSON, no `jq`, no python on the node). The script installs the host-only upstream nydus
+`/snapshotter` asset volume through Nginx. It also serves `/p2p-install.sh`,
+the host script with an `__CFG__` placeholder that Nginx replaces from the
+`cfg` query value. The machine bootstrap Secret contains only the short `curl`
+command; its payload is a base64url env-file (no JSON, no `jq`, no python on
+the node), capped at 8 KiB encoded. The nginx endpoint uses 32 KiB header
+buffers, and the Secret stays below Hetzner's 32 KiB `user_data` limit. The
+script installs the host-only upstream nydus
 snapshotter (`v0.16.0`) plus the static `v2.4.5` daemon assets
 (including `nydus-overlayfs`), writes the global nydus containerd drop-in
 `config-v3.toml.d/90-nydus.toml`, starts it before RKE2, and installs a daily
@@ -903,7 +927,7 @@ host updater. There is no in-cluster nydus DaemonSet or HelmOp. The injector
 does not wait for `p2p.dragonfly.io/scheduler-cluster-id`: if it is still
 empty, the block carries the `SCHEDULER_CLUSTER_ID=0` placeholder and a
 `SchedulerClusterIDPlaceholder` warning until manager registration writes the
-real ID. See `pkg/machinebootstrap/README.md` for the embedded script and
+real ID. See `pkg/machinebootstrap/README.md` for the short delivery and payload and
 `charts/p2p-static/README.md` for the static chart values and risks.
 
 A `populate-static` init container makes the volume self-populating from pinned
@@ -935,8 +959,7 @@ Bump versions, release repositories, and fallback checksums in
 environment variables). The operator renders them into both the `p2p-static`
 and `p2p-host-sync` HelmOps. `charts/p2p-static/values.yaml` and
 `charts/p2p-host-sync/values.yaml` intentionally have empty version/repository/
-checksum defaults; do not add a second copy there. The embedded
-`p2p-install.sh` keeps only last-resort arch pins for the default versions and
+checksum defaults; do not add a second copy there. The `p2p-install.sh` asset served by `p2p-static` keeps only last-resort arch pins for the default versions and
 fails when a non-default version lacks its checksum. Rollback is the same
 one-place edit back to the previous values followed by a Fleet/HelmOp
 reconcile.

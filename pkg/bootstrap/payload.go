@@ -108,3 +108,17 @@ func Env(p Payload) (string, error) {
 	fmt.Fprintf(&builder, "CLIENT_KEY_B64=%s\n", base64.StdEncoding.EncodeToString(p.ClientKey))
 	return builder.String(), nil
 }
+
+// MaxEncodedSize bounds the base64url payload accepted by the static
+// bootstrap endpoint. The static chart's nginx header buffers and the Hetzner
+// user_data limit make larger payloads impractical.
+const MaxEncodedSize = 8 * 1024
+
+// Encode returns the URL-safe base64 payload for the static bootstrap URL.
+func Encode(env string) (string, error) {
+	encoded := base64.URLEncoding.EncodeToString([]byte(env))
+	if len(encoded) > MaxEncodedSize {
+		return "", fmt.Errorf("bootstrap: encoded payload is %d bytes, limit is %d", len(encoded), MaxEncodedSize)
+	}
+	return encoded, nil
+}

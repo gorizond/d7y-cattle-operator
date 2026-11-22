@@ -2,6 +2,7 @@ package machinebootstrap
 
 import (
 	"crypto/sha256"
+	"encoding/base64"
 	"encoding/hex"
 	"encoding/json"
 	"errors"
@@ -18,6 +19,7 @@ import (
 	capiv1beta2 "sigs.k8s.io/cluster-api/api/core/v1beta2"
 
 	"github.com/gorizond/d7y-cattle-operator/pkg/bootstrap"
+	"github.com/gorizond/d7y-cattle-operator/pkg/pki"
 )
 
 type fakeSecrets struct {
@@ -155,6 +157,24 @@ func testController() (*Controller, *fakeSecrets, *fakeMachines, *fakeClusters, 
 	return c, secrets, c.machines.(*fakeMachines), c.clusters.(*fakeClusters), events, cfg
 }
 
+func payloadEnv(t *testing.T, value string) string {
+	t.Helper()
+	idx := strings.Index(value, shortInstallQuery)
+	if idx < 0 {
+		t.Fatalf("short p2p payload is missing: %q", value)
+	}
+	rest := value[idx+len(shortInstallQuery):]
+	end := strings.IndexByte(rest, '"')
+	if end < 0 {
+		t.Fatalf("short p2p payload is unterminated: %q", value)
+	}
+	raw, err := base64.URLEncoding.DecodeString(rest[:end])
+	if err != nil {
+		t.Fatalf("short p2p payload is not base64url: %v", err)
+	}
+	return string(raw)
+}
+
 func TestReconcileInsertsBeforeDoInstall(t *testing.T) {
 	controller, secrets, _, _, events, _ := testController()
 	if _, err := controller.reconcile("fleet-default/machine-1-machine-bootstrap", secrets.secret.DeepCopy()); err != nil {
@@ -166,17 +186,24 @@ func TestReconcileInsertsBeforeDoInstall(t *testing.T) {
 	if blockAt < 0 || doInstallAt < 0 || blockAt > doInstallAt {
 		t.Fatalf("bootstrap block is not before do_install: %q", value)
 	}
-	if !strings.Contains(value[blockAt:doInstallAt], "bash /tmp/d7y-p2p-install.sh || true") {
-		t.Fatalf("bootstrap block is not best-effort under bash: %q", value)
+	if !strings.Contains(value[blockAt:doInstallAt], "curl -sfL ") ||
+		!strings.Contains(value[blockAt:doInstallAt], shortInstallQuery) ||
+		!strings.Contains(value[blockAt:doInstallAt], "| bash || true") {
+		t.Fatalf("bootstrap block is not the short fail-open p2p delivery: %q", value)
 	}
-	if strings.Contains(value, "p2p-install.sh?cfg=") {
-		t.Fatalf("bootstrap block still downloads p2p-install.sh: %q", value)
+	if strings.Contains(value, "D7Y_P2P_EOF") || strings.Contains(value, "d7y-p2p-install.sh") {
+		t.Fatalf("bootstrap block still contains the inline script body: %q", value)
 	}
-	if !strings.Contains(value, "MANAGER_GRPC='https://grpc.example.com:443'") {
-		t.Fatalf("bootstrap block is missing the inline manager env: %q", value)
-	}
-	if !strings.Contains(value, "P2P_DISTRO='k3s'") || !strings.Contains(value, "SCHEDULER_IPS=''") {
-		t.Fatalf("bootstrap block is missing the empty scheduler IP env: %q", value)
+	env := payloadEnv(t, value)
+	for _, want := range []string{
+		"MANAGER_GRPC=https://grpc.example.com:443",
+		"P2P_DISTRO=k3s",
+		"SCHEDULER_IPS=\n",
+		"STATIC_URL=http://static.example.com",
+	} {
+		if !strings.Contains(env, want) {
+			t.Fatalf("payload env missing %q: %q", want, env)
+		}
 	}
 	if len(events.events) != 1 || events.events[0].Reason != "BootstrapInjected" {
 		t.Errorf("events = %+v, want BootstrapInjected", events.events)
@@ -204,49 +231,28 @@ func TestReconcileFallsBackToLastExitZero(t *testing.T) {
 	}
 }
 
-func TestInlineBlockIsSelfContainedAndBestEffort(t *testing.T) {
-	block := inlineInstallBlock("STATIC_URL=http://static.example.com\n")
-	if !strings.HasPrefix(block, bootstrap.Marker+"\nif command -v bash >/dev/null 2>&1; then\n") {
-		t.Fatalf("block start = %q", block)
+func TestShortInstallBlockFormat(t *testing.T) {
+	block := shortInstallBlock("http://static.example.com/", "PAYLOAD")
+	want := bootstrap.Marker + "\n" +
+		`curl -sfL "http://static.example.com/p2p-install.sh?cfg=PAYLOAD" | bash || true` + "\n" +
+		bootstrap.EndMarker + "\n"
+	if block != want {
+		t.Fatalf("short block = %q, want %q", block, want)
 	}
-	for _, want := range []string{
-		"cat > /tmp/d7y-p2p-install.sh <<'D7Y_P2P_EOF'",
-		"\nD7Y_P2P_EOF\nbash /tmp/d7y-p2p-install.sh || true\nfi\n",
-	} {
-		if !strings.Contains(block, want) {
-			t.Fatalf("block missing %q: %q", want, block)
-		}
-	}
-	if strings.Contains(block, "\n(\n") || strings.Contains(block, ") || true") {
-		t.Fatalf("block still uses the old subshell wrapper: %q", block)
-	}
-	if strings.HasPrefix(p2pInstallBody, "#!") {
-		t.Fatal("embedded script body still starts with a shebang")
-	}
-	if strings.Contains(block, "p2p-install.sh?cfg=") {
-		t.Fatal("embedded block still downloads p2p-install.sh")
+	if strings.Contains(block, "D7Y_P2P_EOF") || strings.Contains(block, "d7y-p2p-install.sh") {
+		t.Fatalf("short block still embeds the installer body: %q", block)
 	}
 }
 
-func TestInlineBlockParsesUnderPOSIXShell(t *testing.T) {
+func TestShortInstallBlockParsesUnderPOSIXShell(t *testing.T) {
 	if _, err := exec.LookPath("sh"); err != nil {
 		t.Skip("sh is not available")
 	}
-	block := inlineInstallBlockFor("echo p2p-ok\n", "STATIC_URL=http://static.example.com\n")
+	block := shortInstallBlock("http://static.example.com", "PAYLOAD")
 	cmd := exec.Command("sh", "-n")
 	cmd.Stdin = strings.NewReader(block)
 	if out, err := cmd.CombinedOutput(); err != nil {
 		t.Fatalf("sh -n rejected the block: %v\n%s", err, out)
-	}
-}
-
-func TestInlineBlockDelimiterCollision(t *testing.T) {
-	block := inlineInstallBlockFor("echo D7Y_P2P_EOF\n", "")
-	if !strings.Contains(block, "cat > /tmp/d7y-p2p-install.sh <<'D7Y_P2P_EOF_1'") {
-		t.Fatalf("block did not choose a suffixed delimiter: %q", block)
-	}
-	if !strings.Contains(block, "\nD7Y_P2P_EOF_1\nbash /tmp/d7y-p2p-install.sh || true") {
-		t.Fatalf("block did not close with the suffixed delimiter: %q", block)
 	}
 }
 
@@ -256,9 +262,9 @@ func TestReconcileCarriesSchedulerIPs(t *testing.T) {
 	if _, err := controller.reconcile("", secrets.secret.DeepCopy()); err != nil {
 		t.Fatalf("reconcile() error = %v", err)
 	}
-	value := string(secrets.secret.Data[bootstrapValueKey])
-	if !strings.Contains(value, "SCHEDULER_IPS='203.0.113.10,203.0.113.11'") {
-		t.Fatalf("bootstrap block is missing scheduler IPs: %q", value)
+	env := payloadEnv(t, string(secrets.secret.Data[bootstrapValueKey]))
+	if !strings.Contains(env, "SCHEDULER_IPS=203.0.113.10,203.0.113.11\n") {
+		t.Fatalf("payload env is missing scheduler IPs: %q", env)
 	}
 }
 
@@ -288,8 +294,8 @@ func TestReconcileAppendsWithoutExitZero(t *testing.T) {
 		t.Fatalf("reconcile() error = %v", err)
 	}
 	value := string(secrets.secret.Data[bootstrapValueKey])
-	if !strings.HasSuffix(value, "fi\n"+bootstrap.EndMarker+"\n") {
-		t.Errorf("bootstrap value = %q, want the block appended with an end marker", value)
+	if !strings.Contains(value, shortInstallQuery) || !strings.HasSuffix(value, bootstrap.EndMarker+"\n") {
+		t.Errorf("bootstrap value = %q, want the short block appended with an end marker", value)
 	}
 }
 
@@ -312,8 +318,9 @@ func TestReconcileMissingSchedulerIDInjectsPlaceholder(t *testing.T) {
 		t.Fatalf("reconcile() error = %v", err)
 	}
 	value := string(secrets.secret.Data[bootstrapValueKey])
-	if !strings.Contains(value, "SCHEDULER_CLUSTER_ID='0'\n") {
-		t.Fatalf("bootstrap block is missing the scheduler ID placeholder: %q", value)
+	env := payloadEnv(t, value)
+	if !strings.Contains(env, "SCHEDULER_CLUSTER_ID=0\n") {
+		t.Fatalf("payload env is missing the scheduler ID placeholder: %q", env)
 	}
 	if !strings.Contains(value, bootstrap.Marker) {
 		t.Fatalf("bootstrap marker is missing: %q", value)
@@ -379,7 +386,7 @@ func TestReconcileRebuildsBlockOnClientRevisionChange(t *testing.T) {
 func TestInsertInlineBlockReplacesLegacyBlockWithoutEndMarker(t *testing.T) {
 	legacy := strings.TrimSuffix(inlineInstallBlockFor("echo legacy\n", "SCHEDULER_IPS=''\n"), bootstrap.EndMarker+"\n")
 	raw := "#!/bin/bash\n" + legacy + `do_install "$@"` + "\nexit 0\n"
-	next := inlineInstallBlockFor("echo new\n", "SCHEDULER_IPS='203.0.113.10'\n")
+	next := shortInstallBlock("http://static.example.com", "newpayload")
 	got, err := insertInlineBlock(raw, next)
 	if err != nil {
 		t.Fatalf("insertInlineBlock() error = %v", err)
@@ -387,8 +394,8 @@ func TestInsertInlineBlockReplacesLegacyBlockWithoutEndMarker(t *testing.T) {
 	if strings.Contains(got, "echo legacy") {
 		t.Errorf("legacy block was not removed: %q", got)
 	}
-	if !strings.Contains(got, "echo new") {
-		t.Errorf("new block was not inserted: %q", got)
+	if !strings.Contains(got, shortInstallQuery+"newpayload") {
+		t.Errorf("new short block was not inserted: %q", got)
 	}
 	if strings.Count(got, bootstrap.Marker+"\n") != 1 || strings.Count(got, bootstrap.EndMarker+"\n") != 1 {
 		t.Errorf("block markers = %q", got)
@@ -429,8 +436,9 @@ func TestSchedulerInputsChangeReinjectsBlock(t *testing.T) {
 		t.Fatalf("initial reconcile() error = %v", err)
 	}
 	value := string(secrets.secret.Data[bootstrapValueKey])
-	if !strings.Contains(value, "SCHEDULER_IPS='203.0.113.10'") {
-		t.Fatalf("initial block missing scheduler IP: %q", value)
+	env := payloadEnv(t, value)
+	if !strings.Contains(env, "SCHEDULER_IPS=203.0.113.10\n") {
+		t.Fatalf("initial payload missing scheduler IP: %q", env)
 	}
 	if secrets.updates != 1 {
 		t.Fatalf("updates = %d, want 1", secrets.updates)
@@ -445,8 +453,9 @@ func TestSchedulerInputsChangeReinjectsBlock(t *testing.T) {
 		t.Fatalf("IP-change reconcile() error = %v", err)
 	}
 	value = string(secrets.secret.Data[bootstrapValueKey])
-	if !strings.Contains(value, "SCHEDULER_IPS='203.0.113.11'") || strings.Contains(value, "SCHEDULER_IPS='203.0.113.10'") {
-		t.Fatalf("block did not replace scheduler IP: %q", value)
+	env = payloadEnv(t, value)
+	if !strings.Contains(env, "SCHEDULER_IPS=203.0.113.11\n") || strings.Contains(env, "SCHEDULER_IPS=203.0.113.10") {
+		t.Fatalf("payload did not replace scheduler IP: %q", env)
 	}
 	if secrets.updates != 2 {
 		t.Errorf("updates = %d, want 2", secrets.updates)
@@ -680,6 +689,9 @@ func TestReconcilePreinstallWithLegacyP2PBlock(t *testing.T) {
 	if strings.Contains(value, "echo legacy") {
 		t.Fatalf("legacy p2p block was not replaced: %q", value)
 	}
+	if !strings.Contains(value, shortInstallQuery) {
+		t.Fatalf("p2p block was not migrated to the short delivery: %q", value)
+	}
 	if count := strings.Count(value, bootstrap.PreinstallMarker+"\n"); count != 1 {
 		t.Fatalf("pre-install marker count = %d, want 1: %q", count, value)
 	}
@@ -688,6 +700,42 @@ func TestReconcilePreinstallWithLegacyP2PBlock(t *testing.T) {
 	}
 	if strings.Index(value, bootstrap.PreinstallMarker) > strings.Index(value, bootstrap.Marker) {
 		t.Fatalf("pre-install block is not before the p2p block: %q", value)
+	}
+}
+
+func TestReconcileMigratesInlineBlockWithEndMarkerToShort(t *testing.T) {
+	controller, secrets, _, clusters, _, _ := testController()
+	cluster := clusters.clusters["fleet-default/c1"]
+	legacy := inlineInstallBlockFor("echo p2p-v0323\n", "STATIC_URL=http://static.example.com\n")
+	secret := secrets.secret
+	secret.Data[bootstrapValueKey] = []byte("#!/bin/bash\n" + legacy + `do_install "$@"` + "\nexit 0\n")
+	if secret.Annotations == nil {
+		secret.Annotations = map[string]string{}
+	}
+	secret.Annotations[bootstrap.BootstrapInputsAnnotation] = bootstrapInputsFingerprint(
+		cluster,
+		pki.SecretRevision(secrets.mtls.Data),
+		controller.opts.ClientVersion,
+		controller.opts.NydusVersion,
+		controller.opts.SnapshotterVersion,
+		"",
+	)
+
+	reconcileNow(t, controller, secrets)
+	value := string(secrets.secret.Data[bootstrapValueKey])
+	if !strings.Contains(value, shortInstallQuery) {
+		t.Fatalf("inline block was not migrated to the short delivery: %q", value)
+	}
+	if strings.Contains(value, "echo p2p-v0323") {
+		t.Fatalf("inline p2p body survived migration: %q", value)
+	}
+	if secrets.updates != 1 {
+		t.Fatalf("Secret updates = %d, want 1", secrets.updates)
+	}
+
+	reconcileNow(t, controller, secrets)
+	if secrets.updates != 1 {
+		t.Errorf("Secret updates = %d, want 1 after an idempotent re-sync", secrets.updates)
 	}
 }
 

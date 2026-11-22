@@ -283,7 +283,8 @@ func (c *Controller) reconcile(key string, secret *corev1.Secret) (*corev1.Secre
 	clientRevision := pki.SecretRevision(mtls.Data)
 	inputsRevision := bootstrapInputsFingerprint(cluster, clientRevision,
 		c.opts.ClientVersion, c.opts.NydusVersion, c.opts.SnapshotterVersion, preinstall)
-	if strings.Contains(value, bootstrap.Marker) &&
+	if strings.Contains(base, bootstrap.Marker) &&
+		strings.Contains(base, shortInstallQuery) &&
 		secret.Annotations[bootstrap.BootstrapInputsAnnotation] == inputsRevision &&
 		strings.Contains(value, bootstrap.PreinstallMarker) == (preinstall != "") {
 		return secret, nil
@@ -307,6 +308,11 @@ func (c *Controller) reconcile(key string, secret *corev1.Secret) (*corev1.Secre
 		c.event(machine, cluster, secret, corev1.EventTypeWarning, "PayloadBuildFailed", err.Error())
 		return secret, err
 	}
+	payload, err := bootstrap.Encode(env)
+	if err != nil {
+		c.event(machine, cluster, secret, corev1.EventTypeWarning, "PayloadBuildFailed", err.Error())
+		return secret, err
+	}
 	if placeholderSchedulerID {
 		c.event(machine, cluster, secret, corev1.EventTypeWarning, "SchedulerClusterIDPlaceholder",
 			"scheduler cluster ID annotation is empty; injecting schedulerClusterID 0 placeholder")
@@ -317,7 +323,7 @@ func (c *Controller) reconcile(key string, secret *corev1.Secret) (*corev1.Secre
 	// The old pre-install block was removed before the p2p step so its body
 	// lines cannot be mistaken for the p2p marker; now replace the p2p block
 	// and insert the new pre-install block immediately before it.
-	patched, err := insertInlineBlock(base, inlineInstallBlock(env))
+	patched, err := insertInlineBlock(base, shortInstallBlock(c.opts.StaticURL, payload))
 	if err != nil {
 		c.event(machine, cluster, secret, corev1.EventTypeWarning, "BootstrapPatchFailed", err.Error())
 		return secret, err
@@ -346,7 +352,7 @@ func (c *Controller) reconcile(key string, secret *corev1.Secret) (*corev1.Secre
 	// data is base64-encoded; the raw value length alone is not a safe guard.
 	if preinstallIncluded && bootstrapSecretTooLarge(updated) {
 		preinstallIncluded = false
-		p2pOnly, err := insertInlineBlock(base, inlineInstallBlock(env))
+		p2pOnly, err := insertInlineBlock(base, shortInstallBlock(c.opts.StaticURL, payload))
 		if err != nil {
 			c.event(machine, cluster, secret, corev1.EventTypeWarning, "BootstrapPatchFailed", err.Error())
 			return secret, err
@@ -372,9 +378,9 @@ func (c *Controller) reconcile(key string, secret *corev1.Secret) (*corev1.Secre
 		c.event(machine, cluster, secret, corev1.EventTypeWarning, "BootstrapPatchFailed", err.Error())
 		return secret, err
 	}
-	message := "inline p2p block added to the machine bootstrap secret (p2p-only; d7y-operator-preinstall not included)"
+	message := "short p2p block added to the machine bootstrap secret (p2p-only; d7y-operator-preinstall not included)"
 	if preinstallIncluded {
-		message = "inline p2p and pre-install blocks added to the machine bootstrap secret (d7y-operator-preinstall included)"
+		message = "short p2p and pre-install blocks added to the machine bootstrap secret (d7y-operator-preinstall included)"
 	}
 	c.event(machine, cluster, secret, corev1.EventTypeNormal, "BootstrapInjected", message)
 	return result, nil
