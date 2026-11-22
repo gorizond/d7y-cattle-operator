@@ -4,16 +4,13 @@ import (
 	"crypto/x509"
 	"net"
 	"slices"
-	"strings"
 	"testing"
 	"time"
 
-	fleetv1alpha1 "github.com/rancher/fleet/pkg/apis/fleet.cattle.io/v1alpha1"
 	provv1 "github.com/rancher/rancher/pkg/apis/provisioning.cattle.io/v1"
 	corev1 "k8s.io/api/core/v1"
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
 	"k8s.io/apimachinery/pkg/apis/meta/v1/unstructured"
-	"k8s.io/apimachinery/pkg/runtime"
 	capiv1beta2 "sigs.k8s.io/cluster-api/api/core/v1beta2"
 
 	"github.com/gorizond/d7y-cattle-operator/pkg/helmop"
@@ -130,18 +127,75 @@ func TestPKIStableCAAndSplitLeaves(t *testing.T) {
 		t.Errorf("scheduler IP SANs = %v / %v", schedulerACert.IPAddresses, schedulerBCert.IPAddresses)
 	}
 
-	bundleA := getBundle(t, controller, seedA.Namespace, helmop.SchedulerBundleName(seedA.Name))
-	if bundleA.GetLabels()["p2p-dragonfly-io"] != "p2p-mtls" || bundleA.GetLabels()["p2p.dragonfly.io/cluster-name"] != "c1" {
-		t.Errorf("scheduler Bundle labels = %v", bundleA.GetLabels())
+	opA := controller.helmops.(*fakeHelmOpStore).object("fleet-default/" + helmop.SchedulerCertName(seedA.Name))
+	if opA == nil {
+		t.Fatal("scheduler certificate HelmOp is missing")
 	}
-	if bundleA.Spec.TargetNamespace != helmop.TargetNamespace || len(bundleA.Spec.Targets) != 1 || bundleA.Spec.Targets[0].ClusterName != "c1" || bundleA.Spec.Targets[0].Name != "default" {
-		t.Errorf("scheduler Bundle target = %+v", bundleA.Spec)
+	if got := nestedString(t, opA, "spec", "namespace"); got != helmop.TargetNamespace {
+		t.Errorf("scheduler certificate targetNamespace = %q", got)
 	}
-	if len(bundleA.OwnerReferences) != 1 || bundleA.OwnerReferences[0].Kind != "Cluster" || bundleA.OwnerReferences[0].Name != "c1" {
-		t.Errorf("scheduler Bundle ownerReferences = %+v", bundleA.OwnerReferences)
+	if got := nestedString(t, opA, "spec", "helm", "chart"); got != "p2p-scheduler-cert" {
+		t.Errorf("scheduler certificate chart = %q", got)
 	}
-	if len(bundleA.Spec.Resources) != 1 || !strings.HasSuffix(bundleA.Spec.Resources[0].Name, ".yaml") || !strings.Contains(bundleA.Spec.Resources[0].Content, "name: dragonfly-p2p-scheduler") {
-		t.Errorf("scheduler Bundle resources = %+v", bundleA.Spec.Resources)
+	if got := nestedString(t, opA, "spec", "helm", "values", "tls", "crt"); got != string(schedulerAAfter.Data[corev1.TLSCertKey]) {
+		t.Errorf("scheduler certificate tls.crt does not match the leaf")
+	}
+	labels, _, _ := unstructured.NestedStringMap(opA.Object, "spec", "labels")
+	if labels["p2p-dragonfly-io"] != "p2p-mtls" || labels["p2p.dragonfly.io/cluster-name"] != "c1" {
+		t.Errorf("scheduler certificate Bundle labels = %v", labels)
+	}
+	if controller.bundles.(*fakeHelmOpStore).has("fleet-default/" + helmop.SchedulerBundleName(seedA.Name)) {
+		t.Error("new seed still has a raw scheduler Bundle")
+	}
+}
+
+func TestSchedulerCertMigratesLegacyBundleOnlyWhenReady(t *testing.T) {
+	controller, _, _ := newTestController(t)
+	cluster := pkiSeed("c1", "c-m-a")
+	legacyName := helmop.SchedulerBundleName(cluster.Name)
+	controller.bundles.(*fakeHelmOpStore).objects["fleet-default/"+legacyName] = &unstructured.Unstructured{Object: map[string]any{
+		"apiVersion": "fleet.cattle.io/v1alpha1",
+		"kind":       "Bundle",
+		"metadata": map[string]any{
+			"name":      legacyName,
+			"namespace": "fleet-default",
+			"labels": map[string]any{
+				"p2p-dragonfly-io":              "p2p-mtls",
+				"p2p.dragonfly.io/cluster-name": "c1",
+			},
+		},
+	}}
+
+	// First pass creates the HelmOp. The legacy Bundle must survive until the
+	// HelmOp-generated Bundle is ready, so the Secret never disappears.
+	reconcileCluster(t, controller, cluster)
+	if !controller.helmops.(*fakeHelmOpStore).has("fleet-default/" + helmop.SchedulerCertName("c1")) {
+		t.Fatal("scheduler certificate HelmOp was not created")
+	}
+	if !controller.bundles.(*fakeHelmOpStore).has("fleet-default/" + legacyName) {
+		t.Fatal("legacy Bundle was removed before the replacement was ready")
+	}
+
+	markSchedulerCertReady(t, controller, cluster.Name)
+	reconcileCluster(t, controller, cluster)
+	if controller.bundles.(*fakeHelmOpStore).has("fleet-default/" + legacyName) {
+		t.Error("legacy scheduler Bundle remains after the HelmOp Bundle is ready")
+	}
+	if !controller.helmops.(*fakeHelmOpStore).has("fleet-default/" + helmop.SchedulerCertName("c1")) {
+		t.Error("scheduler certificate HelmOp disappeared during migration")
+	}
+	if got := controller.clusters.(*fakeClusterStore).annotation(helmop.AnnotationMTLSCertRevision); got == "" {
+		t.Error("scheduler revision was not set after migration")
+	}
+
+	// Idempotent: a second pass keeps the HelmOp and does not recreate the raw
+	// Bundle or fail on the already-removed legacy object.
+	reconcileCluster(t, controller, cluster)
+	if controller.bundles.(*fakeHelmOpStore).has("fleet-default/" + legacyName) {
+		t.Error("legacy scheduler Bundle was recreated")
+	}
+	if !controller.helmops.(*fakeHelmOpStore).has("fleet-default/" + helmop.SchedulerCertName("c1")) {
+		t.Error("scheduler certificate HelmOp was removed on a repeated reconcile")
 	}
 }
 
@@ -197,8 +251,11 @@ func TestManagerOnlyPKI(t *testing.T) {
 	if _, err := controller.secrets.Get("dragonfly-system", helmop.SchedulerSourceSecretName(cluster.Name), metav1.GetOptions{}); err == nil {
 		t.Error("manager-only cluster has a scheduler Secret")
 	}
-	if err := controller.bundles.Get(controller.ctx, cluster.Namespace, helmop.SchedulerBundleName(cluster.Name), &fleetv1alpha1.Bundle{}, metav1.GetOptions{}); err == nil {
-		t.Error("manager-only cluster has a scheduler Bundle")
+	if controller.helmops.(*fakeHelmOpStore).has("fleet-default/" + helmop.SchedulerCertName(cluster.Name)) {
+		t.Error("manager-only cluster has a scheduler certificate HelmOp")
+	}
+	if controller.bundles.(*fakeHelmOpStore).has("fleet-default/" + helmop.SchedulerBundleName(cluster.Name)) {
+		t.Error("manager-only cluster has a legacy scheduler Bundle")
 	}
 	if _, err := controller.secrets.Get(cluster.Namespace, "dragonfly-p2p-mtls", metav1.GetOptions{}); err == nil {
 		t.Error("manager-only cluster replicated the client identity")
@@ -294,17 +351,13 @@ func TestLegacyTrustPhaseAThenPhaseB(t *testing.T) {
 	}
 }
 
-func getBundle(t *testing.T, controller *Controller, namespace, name string) *fleetv1alpha1.Bundle {
+func nestedString(t *testing.T, obj *unstructured.Unstructured, fields ...string) string {
 	t.Helper()
-	raw := &unstructured.Unstructured{}
-	if err := controller.bundles.Get(controller.ctx, namespace, name, raw, metav1.GetOptions{}); err != nil {
-		t.Fatalf("get Bundle %s/%s: %v", namespace, name, err)
+	value, _, err := unstructured.NestedString(obj.Object, fields...)
+	if err != nil {
+		t.Fatalf("read %v: %v", fields, err)
 	}
-	bundle := &fleetv1alpha1.Bundle{}
-	if err := runtime.DefaultUnstructuredConverter.FromUnstructured(raw.Object, bundle); err != nil {
-		t.Fatalf("decode Bundle %s/%s: %v", namespace, name, err)
-	}
-	return bundle
+	return value
 }
 
 func certHasIP(ips []net.IP, want string) bool {
@@ -336,7 +389,7 @@ func TestPKICAGuardSeesOtherSeedLeaf(t *testing.T) {
 	}
 }
 
-func TestSchedulerRevisionAnnotatedOnlyAfterBundleReady(t *testing.T) {
+func TestSchedulerRevisionAnnotatedOnlyAfterCertReady(t *testing.T) {
 	controller, _, _ := newTestController(t)
 	cluster := pkiSeed("c1", "c-m-a")
 	controller.clusters.(*fakeClusterStore).set(cluster)
@@ -344,28 +397,14 @@ func TestSchedulerRevisionAnnotatedOnlyAfterBundleReady(t *testing.T) {
 		t.Fatalf("reconcile() error = %v", err)
 	}
 	if got := controller.clusters.(*fakeClusterStore).annotation(helmop.AnnotationMTLSCertRevision); got != "" {
-		t.Errorf("scheduler revision = %q, want empty until the Bundle is ready", got)
+		t.Errorf("scheduler revision = %q, want empty until the HelmOp Bundle is ready", got)
 	}
-
-	bundle := controller.bundles.(*fakeHelmOpStore).object("fleet-default/" + helmop.SchedulerBundleName("c1"))
-	if bundle == nil {
-		t.Fatal("scheduler Bundle is missing")
-	}
-	bundle.SetGeneration(1)
-	if err := unstructured.SetNestedField(bundle.Object, int64(1), "status", "observedGeneration"); err != nil {
-		t.Fatal(err)
-	}
-	if err := unstructured.SetNestedField(bundle.Object, int64(1), "status", "summary", "ready"); err != nil {
-		t.Fatal(err)
-	}
-	if err := unstructured.SetNestedField(bundle.Object, int64(1), "status", "summary", "desiredReady"); err != nil {
-		t.Fatal(err)
-	}
+	markSchedulerCertReady(t, controller, cluster.Name)
 	if _, err := controller.reconcile("", cluster); err != nil {
 		t.Fatalf("reconcile(ready) error = %v", err)
 	}
 	if got := controller.clusters.(*fakeClusterStore).annotation(helmop.AnnotationMTLSCertRevision); got == "" {
-		t.Error("scheduler revision was not set after Bundle readiness")
+		t.Error("scheduler revision was not set after HelmOp Bundle readiness")
 	}
 }
 
@@ -521,7 +560,10 @@ func TestDeleteSchedulerPKIRespectsBundleOwnership(t *testing.T) {
 		t.Fatalf("deleteSchedulerPKI() error = %v", err)
 	}
 	if !store.has("fleet-default/" + helmop.SchedulerBundleName("c1")) {
-		t.Error("deleteSchedulerPKI removed a Bundle it does not own")
+		t.Error("deleteSchedulerPKI removed a legacy Bundle it does not own")
+	}
+	if controller.helmops.(*fakeHelmOpStore).has("fleet-default/" + helmop.SchedulerCertName("c1")) {
+		t.Error("deleteSchedulerPKI left the scheduler certificate HelmOp")
 	}
 }
 
@@ -548,11 +590,20 @@ func TestInvalidTrustDeadlineKeepsPhaseAAndEvents(t *testing.T) {
 	}
 }
 
-func markSchedulerBundleReady(t *testing.T, controller *Controller, clusterName string) {
+func markSchedulerCertReady(t *testing.T, controller *Controller, clusterName string) {
 	t.Helper()
-	bundle := controller.bundles.(*fakeHelmOpStore).object("fleet-default/" + helmop.SchedulerBundleName(clusterName))
+	name := helmop.SchedulerCertName(clusterName)
+	bundle := controller.bundles.(*fakeHelmOpStore).object("fleet-default/" + name)
 	if bundle == nil {
-		t.Fatalf("Bundle %s is missing", clusterName)
+		bundle = &unstructured.Unstructured{Object: map[string]any{
+			"apiVersion": "fleet.cattle.io/v1alpha1",
+			"kind":       "Bundle",
+			"metadata": map[string]any{
+				"name":      name,
+				"namespace": "fleet-default",
+			},
+		}}
+		controller.bundles.(*fakeHelmOpStore).objects["fleet-default/"+name] = bundle
 	}
 	bundle.SetGeneration(1)
 	_ = unstructured.SetNestedField(bundle.Object, int64(1), "status", "observedGeneration")
@@ -580,7 +631,7 @@ func TestSchedulerRevisionOnlyChangesForAffectedCluster(t *testing.T) {
 	if _, err := controller.reconcile("", clusterA); err != nil {
 		t.Fatalf("reconcile A: %v", err)
 	}
-	markSchedulerBundleReady(t, controller, clusterA.Name)
+	markSchedulerCertReady(t, controller, clusterA.Name)
 	updatedA, err := controller.reconcile("", clusterA)
 	if err != nil {
 		t.Fatalf("reconcile A ready: %v", err)
@@ -594,7 +645,7 @@ func TestSchedulerRevisionOnlyChangesForAffectedCluster(t *testing.T) {
 	if _, err := controller.reconcile("", clusterB); err != nil {
 		t.Fatalf("reconcile B: %v", err)
 	}
-	markSchedulerBundleReady(t, controller, clusterB.Name)
+	markSchedulerCertReady(t, controller, clusterB.Name)
 	updatedB, err := controller.reconcile("", clusterB)
 	if err != nil {
 		t.Fatalf("reconcile B ready: %v", err)
@@ -610,7 +661,7 @@ func TestSchedulerRevisionOnlyChangesForAffectedCluster(t *testing.T) {
 	if _, err := controller.reconcile("", clusterA); err != nil {
 		t.Fatalf("reconcile A rotation: %v", err)
 	}
-	markSchedulerBundleReady(t, controller, clusterA.Name)
+	markSchedulerCertReady(t, controller, clusterA.Name)
 	rotatedA, err := controller.reconcile("", clusterA)
 	if err != nil {
 		t.Fatalf("reconcile A rotated: %v", err)
@@ -648,16 +699,19 @@ func TestDeleteSchedulerPKICleanup(t *testing.T) {
 	cluster := pkiSeed("c1", "c-m-a")
 	cluster.Annotations[AnnotationManager] = "true"
 	reconcileCluster(t, controller, cluster)
-	if !controller.bundles.(*fakeHelmOpStore).has("fleet-default/" + helmop.SchedulerBundleName("c1")) {
-		t.Fatal("scheduler Bundle was not created")
+	if !controller.helmops.(*fakeHelmOpStore).has("fleet-default/" + helmop.SchedulerCertName("c1")) {
+		t.Fatal("scheduler certificate HelmOp was not created")
 	}
 	delete(cluster.Annotations, AnnotationSeed)
 	cluster.Annotations[AnnotationManager] = "true"
 	if _, err := controller.reconcile("", cluster); err != nil {
 		t.Fatalf("reconcile(seed removed) error = %v", err)
 	}
+	if controller.helmops.(*fakeHelmOpStore).has("fleet-default/" + helmop.SchedulerCertName("c1")) {
+		t.Error("scheduler certificate HelmOp was not deleted with the seed role")
+	}
 	if controller.bundles.(*fakeHelmOpStore).has("fleet-default/" + helmop.SchedulerBundleName("c1")) {
-		t.Error("scheduler Bundle was not deleted with the seed role")
+		t.Error("legacy scheduler Bundle was not deleted with the seed role")
 	}
 	if _, err := controller.secrets.Get("dragonfly-system", helmop.SchedulerSourceSecretName("c1"), metav1.GetOptions{}); err == nil {
 		t.Error("scheduler source Secret was not deleted with the seed role")

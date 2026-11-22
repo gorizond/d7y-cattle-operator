@@ -18,10 +18,12 @@ Pod image-mutation admission, Harbor, and registry-proxy add-ons are out of scop
   identities: the shared client `dragonfly-p2p-mtls` (ClientAuth, no SANs), the
   manager `dragonfly-p2p-manager` (manager DNS/IP SANs), and one
   `<cluster>-p2p-scheduler` leaf per seed (scheduler host, Service, and current
-  public node IPs). The per-seed leaf is delivered as a raw Fleet Bundle with
-  an inline Secret named `dragonfly-p2p-scheduler`; the control HelmOp depends
-  on that Bundle and receives the target's `mtls-cert-revision` through Fleet
-  template values. The CA is never regenerated automatically.
+  public node IPs). The leaf is delivered by a per-seed
+  `<cluster>-p2p-scheduler-cert` HelmOp using the `p2p-scheduler-cert` chart;
+  the Secret keeps the name `dragonfly-p2p-scheduler` and the `tls.crt`/
+  `tls.key`/`ca.crt` keys. The control HelmOp depends on the scheduler-cert
+  label and receives the target's `mtls-cert-revision` through Fleet template
+  values. The CA is never regenerated automatically.
 - Reconciles `provisioning.cattle.io/v1` Clusters selected by the
   `d7y-operator-cattle: "true"` label.
 - Creates a singleton `p2p-static` HelmOp on the manager-labeled Cluster,
@@ -219,6 +221,9 @@ and JWT signing key; see [Manager root credentials](#manager-root-credentials).
 | `hostSync.chart.repo` | `HOST_SYNC_CHART_REPO` | Helm repository URL of the p2p-host-sync chart |
 | `hostSync.chart.name` | `HOST_SYNC_CHART_NAME` | p2p-host-sync chart name |
 | `hostSync.chart.version` | `HOST_SYNC_CHART_VERSION` | p2p-host-sync chart version |
+| `schedulerCert.chart.repo` | `SCHEDULER_CERT_CHART_REPO` | Helm repository URL of the p2p-scheduler-cert chart |
+| `schedulerCert.chart.name` | `SCHEDULER_CERT_CHART_NAME` | p2p-scheduler-cert chart name |
+| `schedulerCert.chart.version` | `SCHEDULER_CERT_CHART_VERSION` | p2p-scheduler-cert chart version; default `0.1.0` |
 | `static.chart.repo` / `.name` / `.version` | `STATIC_CHART_REPO` / `STATIC_CHART_NAME` / `STATIC_CHART_VERSION` | p2p-static chart location; default `p2p-static 0.1.12` |
 | `static.releaseName` | `STATIC_RELEASE_NAME` | Helm release name for the singleton p2p-static release; default `p2p-static` |
 | `releases.client` / `.nydus` / `.snapshotter` | `CLIENT_RELEASE_REPO` / `NYDUS_RELEASE_REPO` / `NYDUS_SNAPSHOTTER_RELEASE_REPO` | GitHub release repositories |
@@ -235,7 +240,8 @@ Defaults: `mtlsSecretName=dragonfly-p2p-mtls`, `dragonfly.chart.name=dragonfly`,
 `dragonfly.chart.repo=https://gorizond.github.io/dragonflyoss-helm-charts`,
 `dragonfly.chart.version=1.10.1-patch.2`, `extras.chart.name=dragonfly-extras`,
 `extras.chart.version=0.1.10`, `hostSync.chart.name=p2p-host-sync`,
-`hostSync.chart.version=0.1.5`, `static.chart.name=p2p-static`,
+`hostSync.chart.version=0.1.5`, `schedulerCert.chart.name=p2p-scheduler-cert`,
+`schedulerCert.chart.version=0.1.0`, `static.chart.name=p2p-static`,
 `static.chart.version=0.1.12`, `static.releaseName=p2p-static`,
 `extras.ingress.controller=nginx`,
 `extras.ingress.grpcEnabled=true`, `extras.ingress.restEnabled=true`,
@@ -333,8 +339,9 @@ role labels.
 Every gated Cluster (`d7y-operator-cattle: "true"`) gets the
 `p2p.dragonfly.io/finalizer`. On `DeletionTimestamp`, the operator runs the
 same idempotent cleanup as a disabled gate and `deleteSchedulerPKI`: it removes
-the per-cluster HelmOps/Bundles and the `<cluster>-p2p-scheduler` Bundle in the
-Cluster namespace, plus the scheduler source Secret in the operator namespace.
+the per-cluster HelmOps/Bundles, the `<cluster>-p2p-scheduler-cert` HelmOp, and
+any legacy `<cluster>-p2p-scheduler` raw Bundle in the Cluster namespace, plus
+the scheduler source Secret in the operator namespace.
 Only then is the finalizer removed.
 
 The scheduler Secret is in the operator namespace, a different namespace from
@@ -476,8 +483,9 @@ The PKI layout is:
 - `dragonfly-p2p-manager`: manager server identity, ServerAuth+ClientAuth,
   manager gRPC/API/dragonfly-system/localhost SANs.
 - `<cluster>-p2p-scheduler` source Secret in the operator namespace; its
-  contents are embedded as `dragonfly-p2p-scheduler` in the per-seed raw
-  Fleet Bundle in the Cluster namespace. It carries the scheduler hostname,
+  contents are rendered as `dragonfly-p2p-scheduler` by the per-seed
+  `<cluster>-p2p-scheduler-cert` HelmOp in the Cluster's downstream
+  `dragonfly-system` namespace. It carries the scheduler hostname,
   `<cluster>-control-scheduler.dragonfly-system.svc`, the current seed public
   IPs, and loopbacks.
 
@@ -634,6 +642,15 @@ scheduler rolls. A stable SAN set keeps the revision stable. Leaf Secret
 updates remove `kubectl.kubernetes.io/last-applied-configuration` because it can
 contain a copy of `tls.key`.
 
+### Scheduler certificate chart
+
+`charts/p2p-scheduler-cert` (0.1.0) is a minimal chart that renders only the
+`dragonfly-p2p-scheduler` `kubernetes.io/tls` Secret in `dragonfly-system`.
+The operator creates one `<cluster>-p2p-scheduler-cert` HelmOp per seed and
+renders the leaf, key, and CA bundle from the operator-namespace
+`<cluster>-p2p-scheduler` Secret. The chart is packaged by the release workflow
+(`cr package charts/*`); there is no separate publication step.
+
 ### Host sync DaemonSet
 
 `p2p-host-sync` 0.1.5 is a per-seed HelmOp (`<cluster>-p2p-host-sync`) rendered
@@ -699,9 +716,23 @@ All releases target `dragonfly-system` and depend on each other through
 `spec.dependsOn`: the shared control depends on shared KeyDB, shared data
 depends on shared control, KeyDB, and extras, and the per-seed host-sync depends
 on shared control. The shared control additionally depends on the per-seed
-scheduler certificate Bundle by label selector. The shared mirror depends on
+scheduler certificate HelmOp Bundles by the `p2p.dragonfly.io/scheduler-cert`
+label selector. The shared mirror depends on
 shared data, and the shared manager depends on shared KeyDB. The per-seed
-scheduler Secret is delivered by its raw Bundle.
+scheduler Secret is delivered by the `p2p-scheduler-cert` HelmOp.
+
+#### Scheduler certificate migration
+
+On operator upgrade, the first seed reconcile creates the
+`<cluster>-p2p-scheduler-cert` HelmOp and leaves the legacy raw
+`<cluster>-p2p-scheduler` Bundle in place. Once Fleet reports the generated
+Bundle ready, the operator sets `p2p.dragonfly.io/mtls-cert-revision` and
+deletes the legacy Bundle. The Secret name and keys are unchanged, so pods
+keep mounting the same path and there is no window where it disappears. The
+migration is idempotent; deleting the seed or Cluster removes both the HelmOp
+and any lingering legacy Bundle. The HelmOp name carries the `-cert` suffix
+because Fleet names the generated Bundle after the HelmOp and the legacy raw
+Bundle still owns `<cluster>-p2p-scheduler` until migration completes.
 
 Fleet `spec.downstreamResources` copies Secrets into the release namespace.
 Each copied Secret must have exactly one owning HelmOp per target cluster:

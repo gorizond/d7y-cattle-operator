@@ -31,9 +31,10 @@ import (
 const (
 	controllerName = "d7y-cattle-operator"
 	// clusterFinalizer holds a deleting Cluster until the operator has removed
-	// the per-seed scheduler Bundle and the scheduler Secret in the operator
-	// namespace. The Secret is in a different namespace from the Cluster, so
-	// Kubernetes ownerRef garbage collection cannot clean it up.
+	// the per-seed scheduler certificate HelmOp, its legacy raw Bundle, and the
+	// scheduler Secret in the operator namespace. The Secret is in a different
+	// namespace from the Cluster, so Kubernetes ownerRef garbage collection
+	// cannot clean it up.
 	clusterFinalizer = "p2p.dragonfly.io/finalizer"
 )
 
@@ -58,6 +59,7 @@ type Options struct {
 	ExtrasChart                  helmop.Chart
 	MirrorChart                  helmop.Chart
 	HostSyncChart                helmop.Chart
+	SchedulerCertChart           helmop.Chart
 	ExtrasIngressController      string
 	ExtrasIngressClassName       string
 	ExtrasIngressGRPCEnabled     bool
@@ -128,8 +130,8 @@ func Register(ctx context.Context, clusters provctl.ClusterController, machines 
 	if watcher, ok := helmops.(helmOpWatcher); ok {
 		go c.watchHelmOps(watcher)
 	}
-	// A raw scheduler Bundle can be changed by Fleet; re-enqueue only the
-	// owning Cluster so the Bundle-ready gate and dependent HelmOp converge.
+	// A scheduler certificate Bundle can be changed by Fleet; re-enqueue only
+	// the owning Cluster so the HelmOp-ready gate and dependents converge.
 	if watcher, ok := bundles.(helmOpWatcher); ok {
 		go c.watchBundles(watcher)
 	}
@@ -350,6 +352,7 @@ func (c *Controller) helmopCluster(cluster *provv1.Cluster) helmop.Cluster {
 		ExtrasChart:                        c.opts.ExtrasChart,
 		MirrorChart:                        c.opts.MirrorChart,
 		HostSyncChart:                      c.opts.HostSyncChart,
+		SchedulerCertChart:                 c.opts.SchedulerCertChart,
 		StaticChart:                        c.opts.StaticChart,
 		StaticReleaseName:                  c.opts.StaticReleaseName,
 		StaticClientVersion:                c.opts.ClientVersion,

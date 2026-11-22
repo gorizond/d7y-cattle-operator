@@ -54,12 +54,16 @@ jobs:
           helm template p2p-static charts/p2p-static --values scripts/testdata/p2p-static-operator-values.yaml > /dev/null
           helm template containerd-mirror charts/containerd-mirror > /dev/null
           helm template p2p-host-sync charts/p2p-host-sync --values scripts/testdata/p2p-host-sync-operator-values.yaml --set 'schedulerIPs[0]=203.0.113.10:8002' > /dev/null
+          helm template c1-p2p-scheduler-cert charts/p2p-scheduler-cert --values scripts/testdata/p2p-scheduler-cert-values.yaml > /dev/null
 
       - name: Render extras ingress modes
         run: bash scripts/test-extras-ingress.sh
 
       - name: Render p2p host-sync and updater coupling
         run: bash scripts/test-p2p-host-sync.sh
+
+      - name: Render p2p scheduler certificate
+        run: bash scripts/test-p2p-scheduler-cert.sh
 
       - name: Render fork chart TLS probes
         run: bash scripts/test-fork-chart-tls.sh
