@@ -27,12 +27,18 @@ type fakeMachineCache struct {
 }
 
 type fakeSchedulerPodLister struct {
-	pods []schedulerPod
-	err  error
+	pods          []schedulerPod
+	err           error
+	secretMissing bool
+	secretErr     error
 }
 
 func (f *fakeSchedulerPodLister) ListSchedulerPods(_ context.Context, _ []byte) ([]schedulerPod, error) {
 	return f.pods, f.err
+}
+
+func (f *fakeSchedulerPodLister) SecretExists(_ context.Context, _ []byte, _, _ string) (bool, error) {
+	return !f.secretMissing, f.secretErr
 }
 
 func (f *fakeMachineCache) List(_ string, _ labels.Selector) ([]*capiv1beta2.Machine, error) {

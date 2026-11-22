@@ -6,8 +6,11 @@ resources.
 
 The operator creates one `<cluster>-p2p-scheduler-cert` HelmOp per seed and
 supplies the leaf certificate, key, and CA bundle from the operator-namespace
-`<cluster>-p2p-scheduler` Secret. The Secret name and keys are fixed so the
-control release can keep mounting them.
+`<cluster>-p2p-scheduler` Secret. The HelmOp sets `takeOwnership`, so it adopts
+the Secret delivered by the legacy raw Bundle during migration. The operator
+marks the legacy Bundle `keepResources` and waits for its forced redeploy
+before deleting it, so the Secret is orphaned rather than removed. The Secret
+name and keys are fixed so the control release can keep mounting them.
 
 ## Values
 

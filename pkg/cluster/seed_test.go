@@ -407,7 +407,8 @@ func (f *fakeEventStore) Create(event *corev1.Event) (*corev1.Event, error) {
 }
 
 type fakeHelmOpStore struct {
-	objects map[string]*unstructured.Unstructured
+	objects    map[string]*unstructured.Unstructured
+	deleteHook func(*unstructured.Unstructured)
 }
 
 func newFakeHelmOpStore() *fakeHelmOpStore {
@@ -464,7 +465,11 @@ func (f *fakeHelmOpStore) Update(_ context.Context, namespace string, obj, resul
 }
 
 func (f *fakeHelmOpStore) Delete(_ context.Context, namespace, name string, _ metav1.DeleteOptions) error {
-	delete(f.objects, namespace+"/"+name)
+	key := namespace + "/" + name
+	if object := f.objects[key]; object != nil && f.deleteHook != nil {
+		f.deleteHook(object)
+	}
+	delete(f.objects, key)
 	return nil
 }
 

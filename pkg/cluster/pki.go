@@ -7,6 +7,7 @@ import (
 	"strings"
 	"time"
 
+	fleetv1alpha1 "github.com/rancher/fleet/pkg/apis/fleet.cattle.io/v1alpha1"
 	provv1 "github.com/rancher/rancher/pkg/apis/provisioning.cattle.io/v1"
 	corev1 "k8s.io/api/core/v1"
 	apierrors "k8s.io/apimachinery/pkg/api/errors"
@@ -169,13 +170,26 @@ func (c *Controller) ensurePKI(cluster *provv1.Cluster, roles Roles, seedIPs []s
 			return cluster, false, err
 		}
 		if certReady {
-			cluster, err = c.setClusterAnnotation(cluster, helmop.AnnotationMTLSCertRevision, pki.SecretRevision(scheduler.Data))
+			deleted, pending, err := c.prepareLegacySchedulerBundle(cluster)
 			if err != nil {
 				return cluster, false, err
 			}
-			// The new HelmOp release is ready, so the legacy raw Bundle can
-			// be removed without a window where the Secret is absent.
-			if err := c.deleteLegacySchedulerBundle(cluster); err != nil {
+			if pending {
+				return cluster, true, nil
+			}
+			if deleted {
+				present, known, err := c.schedulerSecretPresent(cluster)
+				if err != nil || !known || !present {
+					if err := c.applySchedulerCert(cluster, scheduler, true); err != nil {
+						return cluster, false, err
+					}
+					c.event(cluster, corev1.EventTypeWarning, "SchedulerCertRecreating",
+						"downstream scheduler Secret is missing after legacy Bundle removal; forced HelmOp redeploy")
+					return cluster, true, nil
+				}
+			}
+			cluster, err = c.setClusterAnnotation(cluster, helmop.AnnotationMTLSCertRevision, pki.SecretRevision(scheduler.Data))
+			if err != nil {
 				return cluster, false, err
 			}
 		}
@@ -575,29 +589,123 @@ func (c *Controller) setClusterAnnotation(cluster *provv1.Cluster, key, value st
 	return c.clusters.Update(updated)
 }
 
-func (c *Controller) ensureSchedulerCert(cluster *provv1.Cluster, secret *corev1.Secret) (bool, error) {
-	if c.helmops == nil || c.bundles == nil || secret == nil {
-		return false, fmt.Errorf("scheduler certificate stores are not configured")
-	}
+func (c *Controller) schedulerCertOp(cluster *provv1.Cluster, secret *corev1.Secret, force bool) *fleetv1alpha1.HelmOp {
 	op := helmop.SchedulerCert(helmop.Cluster{
 		Name:               cluster.Name,
 		Namespace:          cluster.Namespace,
 		SchedulerCertChart: c.opts.SchedulerCertChart,
 	}, string(secret.Data[corev1.TLSCertKey]), string(secret.Data[corev1.TLSPrivateKeyKey]), string(secret.Data["ca.crt"]))
+	if force {
+		op.Spec.ForceSyncGeneration = time.Now().UnixNano()
+	}
+	return op
+}
+
+func (c *Controller) applySchedulerCert(cluster *provv1.Cluster, secret *corev1.Secret, force bool) error {
+	if c.helmops == nil {
+		return fmt.Errorf("scheduler certificate HelmOp store is not configured")
+	}
+	op := c.schedulerCertOp(cluster, secret, force)
 	if _, err := apply.Ensure(c.ctx, c.helmops, op); err != nil {
-		return false, fmt.Errorf("apply scheduler certificate HelmOp %s/%s: %w", cluster.Namespace, op.Name, err)
+		return fmt.Errorf("apply scheduler certificate HelmOp %s/%s: %w", cluster.Namespace, op.Name, err)
+	}
+	return nil
+}
+
+// schedulerSecretPresent checks the downstream Secret through the Cluster
+// kubeconfig. known=false means the kubeconfig is not available yet; callers
+// must not use that state to justify deleting the legacy Bundle.
+func (c *Controller) schedulerSecretPresent(cluster *provv1.Cluster) (present, known bool, err error) {
+	checker, ok := c.downstream.(schedulerSecretChecker)
+	if !ok {
+		return false, false, fmt.Errorf("downstream Secret checker is not configured")
+	}
+	if c.secrets == nil {
+		return false, false, fmt.Errorf("Secret store is not configured")
+	}
+	kubeconfigSecret, err := c.secrets.Get(cluster.Namespace, cluster.Name+"-kubeconfig", metav1.GetOptions{})
+	if apierrors.IsNotFound(err) {
+		return false, false, nil
+	}
+	if err != nil {
+		return false, false, fmt.Errorf("read kubeconfig Secret %s/%s: %w", cluster.Namespace, cluster.Name+"-kubeconfig", err)
+	}
+	kubeconfig := kubeconfigSecret.Data["value"]
+	if len(kubeconfig) == 0 {
+		return false, false, nil
+	}
+	present, err = checker.SecretExists(c.ctx, kubeconfig, helmop.TargetNamespace, helmop.SchedulerMTLSSecretName)
+	if err != nil {
+		return false, false, err
+	}
+	return present, true, nil
+}
+
+func (c *Controller) ensureSchedulerCert(cluster *provv1.Cluster, secret *corev1.Secret) (bool, error) {
+	if c.helmops == nil || c.bundles == nil || secret == nil {
+		return false, fmt.Errorf("scheduler certificate stores are not configured")
+	}
+	// Keep a forced redeploy stable across retries: applying the normal spec
+	// on every pass would reset forceSyncGeneration and churn Fleet. Retry a
+	// stuck forced deploy after five minutes.
+	currentOp := &unstructured.Unstructured{}
+	opErr := c.helmops.Get(c.ctx, cluster.Namespace, helmop.SchedulerCertName(cluster.Name), currentOp, metav1.GetOptions{})
+	if opErr != nil && !apierrors.IsNotFound(opErr) {
+		return false, fmt.Errorf("read scheduler certificate HelmOp: %w", opErr)
+	}
+	force, _, _ := unstructured.NestedInt64(currentOp.Object, "spec", "forceSyncGeneration")
+	if force == 0 {
+		if err := c.applySchedulerCert(cluster, secret, false); err != nil {
+			return false, err
+		}
 	}
 	// Fleet creates the Bundle after the HelmOp. Treat absence as not ready
 	// instead of an error so the first reconcile can finish and requeue.
 	current := &unstructured.Unstructured{}
-	err := c.bundles.Get(c.ctx, cluster.Namespace, op.Name, current, metav1.GetOptions{})
+	err := c.bundles.Get(c.ctx, cluster.Namespace, helmop.SchedulerCertName(cluster.Name), current, metav1.GetOptions{})
 	if apierrors.IsNotFound(err) {
 		return false, nil
 	}
 	if err != nil {
-		return false, fmt.Errorf("read scheduler certificate Bundle %s/%s: %w", cluster.Namespace, op.Name, err)
+		return false, fmt.Errorf("read scheduler certificate Bundle %s/%s: %w", cluster.Namespace, helmop.SchedulerCertName(cluster.Name), err)
 	}
-	return bundleReady(current), nil
+	if !bundleReady(current) {
+		if force != 0 && time.Since(time.Unix(0, force)) > 5*time.Minute {
+			if err := c.applySchedulerCert(cluster, secret, true); err != nil {
+				return false, err
+			}
+		}
+		return false, nil
+	}
+	present, known, err := c.schedulerSecretPresent(cluster)
+	if err != nil {
+		// A transient downstream read failure must not flap registration or
+		// the scheduler revision. Defer migration and retry on the next pass.
+		c.event(cluster, corev1.EventTypeWarning, "SchedulerSecretCheckFailed", err.Error())
+		return false, nil
+	}
+	if !known {
+		return false, nil
+	}
+	if !present {
+		// The Helm release is Ready but its Secret is gone (for example after
+		// a bad legacy cleanup). Force Fleet to redeploy the chart before any
+		// further migration step. Reuse an in-flight force generation.
+		if force == 0 || time.Since(time.Unix(0, force)) > 5*time.Minute {
+			if err := c.applySchedulerCert(cluster, secret, true); err != nil {
+				return false, err
+			}
+		}
+		return false, nil
+	}
+	if force != 0 {
+		// Reset the force marker after recovery so a later deletion starts a
+		// fresh, single forced redeploy.
+		if err := c.applySchedulerCert(cluster, secret, false); err != nil {
+			return false, err
+		}
+	}
+	return true, nil
 }
 
 func bundleReady(bundle *unstructured.Unstructured) bool {
@@ -612,6 +720,57 @@ func bundleReady(bundle *unstructured.Unstructured) bool {
 	ready, _, _ := unstructured.NestedInt64(bundle.Object, "status", "summary", "ready")
 	desired, _, _ := unstructured.NestedInt64(bundle.Object, "status", "summary", "desiredReady")
 	return observed == generation && desired > 0 && ready == desired
+}
+
+// prepareLegacySchedulerBundle makes the legacy raw Bundle orphan its
+// resources before deletion. Patching keepResources alone is not enough: Fleet
+// records that option in the Helm release only on the next deploy, so the
+// patch also bumps forceSyncGeneration and the caller waits for the legacy
+// Bundle to become Ready again before deleting it. pending=true means the next
+// reconcile must re-check; the legacy Bundle is never deleted in the same pass
+// that still needs the orphan flag applied.
+func (c *Controller) prepareLegacySchedulerBundle(cluster *provv1.Cluster) (deleted, pending bool, err error) {
+	if c.bundles == nil || cluster == nil {
+		return false, false, nil
+	}
+	name := helmop.SchedulerBundleName(cluster.Name)
+	current := &unstructured.Unstructured{}
+	err = c.bundles.Get(c.ctx, cluster.Namespace, name, current, metav1.GetOptions{})
+	if apierrors.IsNotFound(err) {
+		return false, false, nil
+	}
+	if err != nil {
+		return false, false, fmt.Errorf("get legacy scheduler Bundle %s/%s: %w", cluster.Namespace, name, err)
+	}
+	labels := current.GetLabels()
+	if labels["p2p-dragonfly-io"] != "p2p-mtls" || labels["p2p.dragonfly.io/cluster-name"] != cluster.Name {
+		return false, false, nil
+	}
+	keep, _, _ := unstructured.NestedBool(current.Object, "spec", "keepResources")
+	force, _, _ := unstructured.NestedInt64(current.Object, "spec", "forceSyncGeneration")
+	if !keep || force == 0 {
+		updated := current.DeepCopy()
+		if err := unstructured.SetNestedField(updated.Object, true, "spec", "keepResources"); err != nil {
+			return false, false, fmt.Errorf("set legacy scheduler Bundle keepResources: %w", err)
+		}
+		// Force Fleet to deploy the updated BundleDeployment options before the
+		// Bundle is deleted. The Helm release stores keepResources in its chart
+		// metadata during this deploy.
+		if err := unstructured.SetNestedField(updated.Object, time.Now().UnixNano(), "spec", "forceSyncGeneration"); err != nil {
+			return false, false, fmt.Errorf("force legacy scheduler Bundle redeploy: %w", err)
+		}
+		if err := c.bundles.Update(c.ctx, cluster.Namespace, updated, &unstructured.Unstructured{}, metav1.UpdateOptions{}); err != nil {
+			return false, false, fmt.Errorf("update legacy scheduler Bundle %s/%s: %w", cluster.Namespace, name, err)
+		}
+		return false, true, nil
+	}
+	if !bundleReady(current) {
+		return false, true, nil
+	}
+	if _, err := apply.Delete(c.ctx, c.bundles, cluster.Namespace, name); err != nil {
+		return false, false, fmt.Errorf("delete legacy scheduler Bundle: %w", err)
+	}
+	return true, false, nil
 }
 
 // deleteLegacySchedulerBundle removes the pre-HelmOp raw scheduler Bundle only

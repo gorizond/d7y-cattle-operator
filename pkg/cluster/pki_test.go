@@ -177,12 +177,51 @@ func TestSchedulerCertMigratesLegacyBundleOnlyWhenReady(t *testing.T) {
 	}
 
 	markSchedulerCertReady(t, controller, cluster.Name)
+	keepObserved := false
+	controller.bundles.(*fakeHelmOpStore).deleteHook = func(object *unstructured.Unstructured) {
+		if object.GetName() != legacyName {
+			return
+		}
+		keep, _, _ := unstructured.NestedBool(object.Object, "spec", "keepResources")
+		keepObserved = keep
+		if !keep {
+			// A Bundle without keepResources deletes the Secret on removal.
+			controller.downstream.(*fakeSchedulerPodLister).secretMissing = true
+		}
+	}
 	reconcileCluster(t, controller, cluster)
+	if bundle := controller.bundles.(*fakeHelmOpStore).object("fleet-default/" + legacyName); bundle == nil {
+		t.Fatal("legacy Bundle disappeared before it was orphaned")
+	} else {
+		if keep, _, _ := unstructured.NestedBool(bundle.Object, "spec", "keepResources"); !keep {
+			t.Fatal("legacy Bundle keepResources was not patched before deletion")
+		}
+		if force, _, _ := unstructured.NestedInt64(bundle.Object, "spec", "forceSyncGeneration"); force == 0 {
+			t.Fatal("legacy Bundle redeploy was not forced after the keepResources patch")
+		}
+	}
+	// A redeploy still in progress must not allow deletion.
+	reconcileCluster(t, controller, cluster)
+	if !controller.bundles.(*fakeHelmOpStore).has("fleet-default/" + legacyName) {
+		t.Fatal("legacy Bundle was deleted before its orphan redeploy was ready")
+	}
+	markLegacySchedulerBundleReady(t, controller, cluster.Name)
+	reconcileCluster(t, controller, cluster)
+	if !keepObserved {
+		t.Error("legacy scheduler Bundle was deleted without keepResources")
+	}
 	if controller.bundles.(*fakeHelmOpStore).has("fleet-default/" + legacyName) {
 		t.Error("legacy scheduler Bundle remains after the HelmOp Bundle is ready")
 	}
+	op := controller.helmops.(*fakeHelmOpStore).object("fleet-default/" + helmop.SchedulerCertName("c1"))
+	if take, _, _ := unstructured.NestedBool(op.Object, "spec", "helm", "takeOwnership"); !take {
+		t.Error("scheduler certificate HelmOp does not take ownership of the Secret")
+	}
 	if !controller.helmops.(*fakeHelmOpStore).has("fleet-default/" + helmop.SchedulerCertName("c1")) {
 		t.Error("scheduler certificate HelmOp disappeared during migration")
+	}
+	if controller.downstream.(*fakeSchedulerPodLister).secretMissing {
+		t.Error("downstream scheduler Secret disappeared during migration")
 	}
 	if got := controller.clusters.(*fakeClusterStore).annotation(helmop.AnnotationMTLSCertRevision); got == "" {
 		t.Error("scheduler revision was not set after migration")
@@ -196,6 +235,106 @@ func TestSchedulerCertMigratesLegacyBundleOnlyWhenReady(t *testing.T) {
 	}
 	if !controller.helmops.(*fakeHelmOpStore).has("fleet-default/" + helmop.SchedulerCertName("c1")) {
 		t.Error("scheduler certificate HelmOp was removed on a repeated reconcile")
+	}
+}
+
+func TestSchedulerCertWaitsForSecretBeforeMigration(t *testing.T) {
+	controller, _, _ := newTestController(t)
+	cluster := pkiSeed("c1", "c-m-a")
+	legacyName := helmop.SchedulerBundleName(cluster.Name)
+	controller.bundles.(*fakeHelmOpStore).objects["fleet-default/"+legacyName] = &unstructured.Unstructured{Object: map[string]any{
+		"apiVersion": "fleet.cattle.io/v1alpha1",
+		"kind":       "Bundle",
+		"metadata": map[string]any{
+			"name":      legacyName,
+			"namespace": "fleet-default",
+			"labels": map[string]any{
+				"p2p-dragonfly-io":              "p2p-mtls",
+				"p2p.dragonfly.io/cluster-name": "c1",
+			},
+		},
+	}}
+	controller.downstream.(*fakeSchedulerPodLister).secretMissing = true
+
+	reconcileCluster(t, controller, cluster)
+	markSchedulerCertReady(t, controller, cluster.Name)
+	reconcileCluster(t, controller, cluster)
+
+	if !controller.bundles.(*fakeHelmOpStore).has("fleet-default/" + legacyName) {
+		t.Fatal("legacy Bundle was deleted while the downstream Secret was missing")
+	}
+	op := controller.helmops.(*fakeHelmOpStore).object("fleet-default/" + helmop.SchedulerCertName("c1"))
+	force, _, _ := unstructured.NestedInt64(op.Object, "spec", "forceSyncGeneration")
+	if force == 0 {
+		t.Error("missing Secret did not force a HelmOp redeploy")
+	}
+	reconcileCluster(t, controller, cluster)
+	op = controller.helmops.(*fakeHelmOpStore).object("fleet-default/" + helmop.SchedulerCertName("c1"))
+	again, _, _ := unstructured.NestedInt64(op.Object, "spec", "forceSyncGeneration")
+	if again != force {
+		t.Errorf("forceSyncGeneration changed from %d to %d while the Secret was still missing", force, again)
+	}
+	if got := controller.clusters.(*fakeClusterStore).annotation(helmop.AnnotationMTLSCertRevision); got != "" {
+		t.Errorf("scheduler revision = %q while the Secret is missing", got)
+	}
+
+	controller.downstream.(*fakeSchedulerPodLister).secretMissing = false
+	reconcileCluster(t, controller, cluster)
+	markLegacySchedulerBundleReady(t, controller, cluster.Name)
+	reconcileCluster(t, controller, cluster)
+	if controller.bundles.(*fakeHelmOpStore).has("fleet-default/" + legacyName) {
+		t.Error("legacy Bundle remains after the Secret returned")
+	}
+	if got := controller.clusters.(*fakeClusterStore).annotation(helmop.AnnotationMTLSCertRevision); got == "" {
+		t.Error("scheduler revision was not set after the Secret returned")
+	}
+}
+
+func TestSchedulerCertRecreatesSecretAfterLegacyDelete(t *testing.T) {
+	controller, _, _ := newTestController(t)
+	cluster := pkiSeed("c1", "c-m-a")
+	legacyName := helmop.SchedulerBundleName(cluster.Name)
+	controller.bundles.(*fakeHelmOpStore).objects["fleet-default/"+legacyName] = &unstructured.Unstructured{Object: map[string]any{
+		"apiVersion": "fleet.cattle.io/v1alpha1",
+		"kind":       "Bundle",
+		"metadata": map[string]any{
+			"name":      legacyName,
+			"namespace": "fleet-default",
+			"labels": map[string]any{
+				"p2p-dragonfly-io":              "p2p-mtls",
+				"p2p.dragonfly.io/cluster-name": "c1",
+			},
+		},
+	}}
+	controller.bundles.(*fakeHelmOpStore).deleteHook = func(object *unstructured.Unstructured) {
+		// Simulate a legacy cleanup that still removes the Secret despite
+		// keepResources; the operator must force the new HelmOp to recreate it.
+		if object.GetName() == legacyName {
+			controller.downstream.(*fakeSchedulerPodLister).secretMissing = true
+		}
+	}
+
+	reconcileCluster(t, controller, cluster)
+	markSchedulerCertReady(t, controller, cluster.Name)
+	reconcileCluster(t, controller, cluster)
+	markLegacySchedulerBundleReady(t, controller, cluster.Name)
+	reconcileCluster(t, controller, cluster)
+
+	if controller.bundles.(*fakeHelmOpStore).has("fleet-default/" + legacyName) {
+		t.Fatal("legacy Bundle was not deleted after the new Bundle was ready")
+	}
+	op := controller.helmops.(*fakeHelmOpStore).object("fleet-default/" + helmop.SchedulerCertName("c1"))
+	if force, _, _ := unstructured.NestedInt64(op.Object, "spec", "forceSyncGeneration"); force == 0 {
+		t.Error("missing Secret after legacy delete did not force a HelmOp redeploy")
+	}
+	if got := controller.clusters.(*fakeClusterStore).annotation(helmop.AnnotationMTLSCertRevision); got != "" {
+		t.Errorf("scheduler revision = %q before the Secret was recreated", got)
+	}
+
+	controller.downstream.(*fakeSchedulerPodLister).secretMissing = false
+	reconcileCluster(t, controller, cluster)
+	if got := controller.clusters.(*fakeClusterStore).annotation(helmop.AnnotationMTLSCertRevision); got == "" {
+		t.Error("scheduler revision was not set after the Secret was recreated")
 	}
 }
 
@@ -607,6 +746,22 @@ func markSchedulerCertReady(t *testing.T, controller *Controller, clusterName st
 	}
 	bundle.SetGeneration(1)
 	_ = unstructured.SetNestedField(bundle.Object, int64(1), "status", "observedGeneration")
+	_ = unstructured.SetNestedField(bundle.Object, int64(1), "status", "summary", "ready")
+	_ = unstructured.SetNestedField(bundle.Object, int64(1), "status", "summary", "desiredReady")
+}
+
+func markLegacySchedulerBundleReady(t *testing.T, controller *Controller, clusterName string) {
+	t.Helper()
+	name := helmop.SchedulerBundleName(clusterName)
+	bundle := controller.bundles.(*fakeHelmOpStore).object("fleet-default/" + name)
+	if bundle == nil {
+		t.Fatalf("legacy Bundle %s is missing", name)
+	}
+	if bundle.GetGeneration() == 0 {
+		bundle.SetGeneration(1)
+	}
+	generation := bundle.GetGeneration()
+	_ = unstructured.SetNestedField(bundle.Object, generation, "status", "observedGeneration")
 	_ = unstructured.SetNestedField(bundle.Object, int64(1), "status", "summary", "ready")
 	_ = unstructured.SetNestedField(bundle.Object, int64(1), "status", "summary", "desiredReady")
 }

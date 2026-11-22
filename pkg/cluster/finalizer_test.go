@@ -5,8 +5,10 @@ import (
 	"testing"
 	"time"
 
+	fleetv1alpha1 "github.com/rancher/fleet/pkg/apis/fleet.cattle.io/v1alpha1"
 	apierrors "k8s.io/apimachinery/pkg/api/errors"
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
+	"k8s.io/apimachinery/pkg/apis/meta/v1/unstructured"
 
 	"github.com/gorizond/d7y-cattle-operator/pkg/helmop"
 )
@@ -44,6 +46,16 @@ func TestReconcileAddsFinalizerAndCleansPKIOnDeletion(t *testing.T) {
 	if controller.bundles.(*fakeHelmOpStore).has("fleet-default/" + helmop.SchedulerBundleName("c1")) {
 		t.Error("normal reconcile created a legacy raw scheduler Bundle")
 	}
+	certBundle := helmop.SchedulerCertName("c1")
+	controller.bundles.(*fakeHelmOpStore).objects["fleet-default/"+certBundle] = &unstructured.Unstructured{Object: map[string]any{
+		"apiVersion": "fleet.cattle.io/v1alpha1",
+		"kind":       "Bundle",
+		"metadata": map[string]any{
+			"name":      certBundle,
+			"namespace": "fleet-default",
+			"labels":    map[string]any{fleetv1alpha1.HelmOpLabel: certBundle},
+		},
+	}}
 
 	deleting := clusterStore.get()
 	now := metav1.NewTime(time.Now())
@@ -65,6 +77,9 @@ func TestReconcileAddsFinalizerAndCleansPKIOnDeletion(t *testing.T) {
 	}
 	if controller.bundles.(*fakeHelmOpStore).has("fleet-default/" + helmop.SchedulerBundleName("c1")) {
 		t.Error("legacy scheduler Bundle still exists after deletion")
+	}
+	if controller.bundles.(*fakeHelmOpStore).has("fleet-default/" + certBundle) {
+		t.Error("scheduler certificate Bundle still exists after deletion")
 	}
 	if store.has("fleet-default/" + helmop.HostSyncName("c1")) {
 		t.Error("host-sync HelmOp still exists after deletion")

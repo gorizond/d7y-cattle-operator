@@ -15,6 +15,9 @@ func TestSchedulerCertHelmOp(t *testing.T) {
 	if op.Spec.Helm.Chart != "p2p-scheduler-cert" || op.Spec.Helm.Version != "0.1.0" {
 		t.Errorf("chart = %s@%s", op.Spec.Helm.Chart, op.Spec.Helm.Version)
 	}
+	if !op.Spec.Helm.TakeOwnership {
+		t.Error("scheduler certificate HelmOp must take ownership of the Secret")
+	}
 	values := op.Spec.Helm.Values.Data
 	if got := valueAt(t, values, "tls", "crt"); got != "crt" {
 		t.Errorf("tls.crt = %v", got)
