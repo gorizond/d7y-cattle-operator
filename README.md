@@ -11,7 +11,7 @@ webhooks are out of scope.
 
 ## What it does today
 
-Pod image-mutation admission, Harbor, and registry-proxy add-ons are out of scope. The operator injects a short p2p bootstrap command plus a base64url env payload into the Rancher machine-bootstrap Secret; the script and payload are served by `p2p-static`.
+Pod image-mutation admission, Harbor, and registry-proxy add-ons are out of scope. The operator injects a short p2p bootstrap command plus the shell-quoted bootstrap env into the Rancher machine-bootstrap Secret; the script itself is served by `p2p-static` at a plain URL.
 
 - Parses and validates the operator configuration from flags/environment variables.
 - Maintains a stable CA Secret (`dragonfly-p2p-ca`, Opaque) and split leaf
@@ -149,7 +149,7 @@ Color legend: gray = workload pods, blue = dfdaemon, green = scheduler, purple =
 ### At a glance
 
 - The operator runs on the local Rancher/Fleet cluster. It reconciles every Cluster labelled `d7y-operator-cattle: "true"` and creates the Fleet HelmOps for KeyDB, manager, scheduler/seed, extras, the
-containerd mirror, the singleton p2p-static server, and per-seed host-sync. Its machine-bootstrap Secret controller inserts a short p2p bootstrap block (script and payload served by `p2p-static`) into the node-driver bootstrap script that Rancher merges into cloud-init, before the Rancher `do_install "$@"` call.
+containerd mirror, the singleton p2p-static server, and per-seed host-sync. Its machine-bootstrap Secret controller inserts a short p2p bootstrap block (env in the Secret, script served by `p2p-static`) into the node-driver bootstrap script that Rancher merges into cloud-init, before the Rancher `do_install "$@"` call.
 - Every running downstream node has a dfdaemon pod, with nydus on the host; pods pull through the node-local proxy and Dragonfly distributes blobs P2P. The diagram shows a scheduler pod per seed cluster and the manager pod on a node in downstream cluster B.
 - The orange dashed node in downstream cluster A consumes that bootstrap Secret through cloud-init before RKE2: it has only the host dfdaemon and nydus and is already joining P2P. The scheduler alias `d7y-scheduler.<cluster-id>.<domain>` is published by external-dns (or a wildcard zone) and used before RKE2 to bootstrap node/RKE2 image pulls.
 
@@ -579,24 +579,32 @@ yet:
   disables the host bootstrap while the pod is running. If the pod disappears,
   the timer re-enables the host bootstrap. The switch never touches nydus.
 
-### Short p2p delivery and payload
+### Short p2p delivery
 
-The machine bootstrap Secret contains only the marked short command:
+The machine bootstrap Secret contains the marked short block:
 
 ```sh
-curl -sfL "<static>/p2p-install.sh?cfg=<base64url(env)>" | bash || true
+set -a
+P2P_DISTRO='...'
+SCHEDULER_IPS='...'
+MANAGER_GRPC='...'
+# ... full BuildInstallEnv env ...
+set +a
+curl -sfL "<static>/p2p-install.sh" | bash || true
 ```
 
-`p2p-static` serves the script and substitutes `__CFG__` with the query value;
-the env payload includes `P2P_DISTRO`, `SCHEDULER_IPS`, the manager/static URLs,
-scheduler host/ID, versions, and the CA, client certificate, and **client key**
-(mTLS needs all three). The encoded payload is capped at 8 KiB. Existing
-v0.3.23 Secrets are migrated from the inline heredoc block on the next
-reconcile; nodes apply the new block only after their next
-bootstrap/cloud-init run (normally a reboot). **Security:** the client key is in
-the `cfg` query string; `p2p-static` sets `access_log off` for
-`/p2p-install.sh`, never put the payload in public artifacts, and treat the
-bootstrap Secret as sensitive.
+The env is shell-quoted in the Secret and exported to the piped `bash` with
+`set -a`/`set +a`; it includes `P2P_DISTRO`, `SCHEDULER_IPS`, the
+manager/static URLs, scheduler host/ID, versions, and the CA, client
+certificate, and **client key** (mTLS needs all three). The plain
+`p2p-static` URL carries no payload/query. The full block is far below
+Hetzner's 32 KiB `user_data` limit. Existing v0.3.23 Secrets are migrated from
+the inline heredoc block on the next reconcile; nodes apply the new block only
+after their next bootstrap/cloud-init run (normally a reboot). **Security:** the
+client key is in the Secret and provider-visible `user_data`, but not in HTTP
+URLs/access logs; `p2p-static` sets `access_log off` for `/p2p-install.sh`,
+never put the Secret or env in public artifacts, and treat the bootstrap Secret
+as sensitive.
 
 ### Pre-install bootstrap annotation
 
@@ -914,12 +922,11 @@ registry so RKE2 can still start.
 
 `charts/p2p-static` serves the static `/bin`, `/nydus`, `/client`, and
 `/snapshotter` asset volume through Nginx. It also serves `/p2p-install.sh`,
-the host script with an `__CFG__` placeholder that Nginx replaces from the
-`cfg` query value. The machine bootstrap Secret contains only the short `curl`
-command; its payload is a base64url env-file (no JSON, no `jq`, no python on
-the node), capped at 8 KiB encoded. The nginx endpoint uses 32 KiB header
-buffers, and the Secret stays below Hetzner's 32 KiB `user_data` limit. The
-script installs the host-only upstream nydus
+a byte-identical copy of the host installer script (no query/substitution).
+The machine bootstrap Secret contains the short `curl` command plus the
+shell-quoted env-file (no JSON, no `jq`, no python on the node); the Secret
+stays below Hetzner's 32 KiB `user_data` limit. The script installs the
+host-only upstream nydus
 snapshotter (`v0.16.0`) plus the static `v2.4.5` daemon assets
 (including `nydus-overlayfs`), writes the global nydus containerd drop-in
 `config-v3.toml.d/90-nydus.toml`, starts it before RKE2, and installs a daily
@@ -927,7 +934,7 @@ host updater. There is no in-cluster nydus DaemonSet or HelmOp. The injector
 does not wait for `p2p.dragonfly.io/scheduler-cluster-id`: if it is still
 empty, the block carries the `SCHEDULER_CLUSTER_ID=0` placeholder and a
 `SchedulerClusterIDPlaceholder` warning until manager registration writes the
-real ID. See `pkg/machinebootstrap/README.md` for the short delivery and payload and
+real ID. See `pkg/machinebootstrap/README.md` for the short delivery and env and
 `charts/p2p-static/README.md` for the static chart values and risks.
 
 A `populate-static` init container makes the volume self-populating from pinned

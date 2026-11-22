@@ -142,24 +142,3 @@ func TestEnvVersions(t *testing.T) {
 		}
 	}
 }
-
-func TestEncode(t *testing.T) {
-	env := "MANAGER_GRPC=https://example.test:443\nSCHEDULER_IPS=203.0.113.10\n"
-	encoded, err := Encode(env)
-	if err != nil {
-		t.Fatalf("Encode() error = %v", err)
-	}
-	decoded, err := base64.URLEncoding.DecodeString(encoded)
-	if err != nil {
-		t.Fatalf("encoded payload is not base64url: %v", err)
-	}
-	if string(decoded) != env {
-		t.Fatalf("decoded payload = %q, want %q", decoded, env)
-	}
-	if _, err := Encode(strings.Repeat("x", MaxEncodedSize/4*3)); err != nil {
-		t.Fatalf("Encode() at the limit error = %v", err)
-	}
-	if _, err := Encode(strings.Repeat("x", MaxEncodedSize)); err == nil {
-		t.Fatal("Encode() error = nil for an oversized payload")
-	}
-}

@@ -5,32 +5,38 @@ node-driver machine bootstrap Secret:
 
 ```sh
 # d7y-cattle-operator:p2p-install
-curl -sfL "<static>/p2p-install.sh?cfg=<base64url(env)>" | bash || true
+set -a
+P2P_DISTRO='...'
+SCHEDULER_IPS='...'
+MANAGER_GRPC='...'
+... full BuildInstallEnv env lines ...
+set +a
+curl -sfL "<static>/p2p-install.sh" | bash || true
 # d7y-cattle-operator:p2p-install-end
 ```
 
-The script and the env payload are served by the `p2p-static` chart; the Secret
-no longer carries the ~69.7 KiB `p2p-install.sh` body. The `|| true` keeps the
-p2p step fail-open so a P2P failure cannot prevent the surrounding Rancher
-install script from calling `do_install "$@"`. The markers make the block
-idempotent and let the pre-install block be inserted directly before it.
+The env-file is embedded in the Secret, shell-quoted, and exported with
+`set -a`/`set +a`; the piped `bash` reads the variables. The script itself is
+served by the `p2p-static` chart at a plain `/p2p-install.sh` URL — there is no
+payload in the URL or query. The Secret no longer carries the ~69.7 KiB
+`p2p-install.sh` body. The `|| true` keeps the p2p step fail-open so a P2P
+failure cannot prevent the surrounding Rancher install script from calling
+`do_install "$@"`. The markers make the block idempotent and let the
+pre-install block be inserted directly before it.
 
-The `p2p-static` chart serves `/p2p-install.sh` (the current
-`pkg/machinebootstrap/assets/p2p-install.sh` with the `__CFG__` prelude) and
-replaces `__CFG__` with the `cfg` query value. The same chart serves the static
-`/bin`, `/nydus`, `/client`, and `/snapshotter` assets.
+The `p2p-static` chart serves `/p2p-install.sh` (a byte-identical copy of
+`pkg/machinebootstrap/assets/p2p-install.sh`) and the static `/bin`, `/nydus`,
+`/client`, and `/snapshotter` assets. The endpoint sets `access_log off`.
 
-The payload is the env-file from `BuildInstallEnv` (`P2P_DISTRO`,
-`SCHEDULER_IPS`, `MANAGER_GRPC`, `STATIC_URL`, `SMART_PROXY_URL`,
-`NYDUS_MIRROR_URL`, `SCHEDULER_HOST`, `SCHEDULER_CLUSTER_ID`, `CLIENT_VERSION`,
-`NYDUS_VERSION`, `NYDUS_SNAPSHOTTER_VERSION`, `CA_CRT_B64`, `CLIENT_CRT_B64`,
-`CLIENT_KEY_B64`) encoded with base64url and capped at 8 KiB. The client
-certificate **and key** stay in the payload; CA-only is insufficient for mTLS.
-The nginx endpoint uses `large_client_header_buffers 4 32k` and
-`client_header_buffer_size 32k`; with the short block the Secret stays far below
-Hetzner's 32 KiB `user_data` limit.
+The env includes `P2P_DISTRO`, `SCHEDULER_IPS`, `MANAGER_GRPC`, `STATIC_URL`,
+`SMART_PROXY_URL`, `NYDUS_MIRROR_URL`, `SCHEDULER_HOST`,
+`SCHEDULER_CLUSTER_ID`, `CLIENT_VERSION`, `NYDUS_VERSION`,
+`NYDUS_SNAPSHOTTER_VERSION`, `CA_CRT_B64`, `CLIENT_CRT_B64`, and
+`CLIENT_KEY_B64`. The client certificate **and key** stay in the Secret;
+CA-only is insufficient for mTLS. The full block stays far below Hetzner's
+32 KiB `user_data` limit.
 
-The payload carries the client identity's `ca-bundle.crt` (falling back to
+The env carries the client identity's `ca-bundle.crt` (falling back to
 `ca.crt` for legacy Secrets). The bootstrap Secret is annotated with
 `p2p.dragonfly.io/client-cert-revision` and
 `p2p.dragonfly.io/bootstrap-inputs` (client revision + scheduler IPs/ID +
@@ -47,7 +53,7 @@ short block on the next reconcile. Existing nodes only pick up the new block
 after their Rancher bootstrap/cloud-init runs again (normally a reboot), as
 with any other bootstrap change.
 
-The payload always carries `P2P_DISTRO` and the Cluster's
+The env always carries `P2P_DISTRO` and the Cluster's
 `p2p.dragonfly.io/scheduler-ips` annotation (seed clusters publish their own
 public CAPI machine IPs; non-seed clusters aggregate other seeds). With an empty IP list the block is
 still installed (binaries/configs/units), but `dfdaemon-bootstrap` is not
@@ -96,10 +102,10 @@ by v0.3.21 are recognized without manual migration. Existing nodes pick up the
 annotation only when their bootstrap/cloud-init runs again (normally a reboot);
 the operator never restarts machines.
 
-**Security:** the mTLS client key is part of the `cfg` query string. The
-`p2p-static` chart sets `access_log off` for `/p2p-install.sh`; do not expose
-the payload in public artifacts and treat the machine-bootstrap Secret as
-sensitive.
+**Security:** the mTLS client key is in the machine-bootstrap Secret (and
+therefore in Hetzner `user_data`, which the provider can see), but it is **not**
+in the HTTP URL or access logs. The `p2p-static` chart sets `access_log off` for
+`/p2p-install.sh`; do not expose the Secret or its env in public artifacts.
 
 Limits and safety: the annotation is limited to 256 KiB. The final Secret is
 checked against the Kubernetes 1 MiB object limit by serializing a DeepCopy with

@@ -65,25 +65,14 @@ func testECDSAIdentity(t *testing.T) (caPEM, certPEM, keyPEM []byte) {
 }
 
 func TestShortBootstrapSecretFitsHetznerUserData(t *testing.T) {
-	controller, secrets, _, clusters, _, cfg := testController()
+	controller, secrets, _, clusters, _, _ := testController()
 	caPEM, certPEM, keyPEM := testECDSAIdentity(t)
 	secrets.mtls.Data = map[string][]byte{
 		"ca.crt":                caPEM,
 		corev1.TLSCertKey:       certPEM,
 		corev1.TLSPrivateKeyKey: keyPEM,
 	}
-
-	env, err := bootstrap.BuildInstallEnv(clusters.clusters["fleet-default/c1"], secrets.mtls, "", cfg)
-	if err != nil {
-		t.Fatalf("BuildInstallEnv() error = %v", err)
-	}
-	encoded, err := bootstrap.Encode(env)
-	if err != nil {
-		t.Fatalf("Encode() error = %v", err)
-	}
-	if len(encoded) > bootstrap.MaxEncodedSize {
-		t.Fatalf("encoded payload = %d bytes, want <= %d", len(encoded), bootstrap.MaxEncodedSize)
-	}
+	setPreinstall(clusters, "echo pre")
 
 	reconcileNow(t, controller, secrets)
 	value := string(secrets.secret.Data[bootstrapValueKey])
@@ -94,22 +83,35 @@ func TestShortBootstrapSecretFitsHetznerUserData(t *testing.T) {
 	if len(raw) >= 32*1024 {
 		t.Fatalf("serialized Secret = %d bytes, want < 32 KiB", len(raw))
 	}
-	if !strings.Contains(value, shortInstallQuery) {
-		t.Fatalf("short p2p payload is missing: %q", value)
+	if strings.Contains(value, "?cfg=") {
+		t.Fatalf("bootstrap value still carries a cfg query: %q", value)
+	}
+	if !strings.Contains(value, "set -a\n") || !strings.Contains(value, "set +a\n") {
+		t.Fatalf("bootstrap value does not export the env around the p2p fetch: %q", value)
+	}
+	if !strings.Contains(value, `curl -sfL "http://static.example.com/p2p-install.sh" | bash || true`) {
+		t.Fatalf("bootstrap value is missing the plain static script fetch: %q", value)
+	}
+	if !strings.Contains(value, shortInstallSignature) {
+		t.Fatalf("short p2p signature is missing: %q", value)
 	}
 	if strings.Contains(value, "D7Y_P2P_EOF") || strings.Contains(value, "Bootstrap a new RKE2/k3s node") {
 		t.Fatalf("inline p2p script body leaked into the Secret: %q", value)
 	}
-	payload := payloadEnv(t, value)
 	for _, want := range []string{
-		"P2P_DISTRO=k3s",
-		"SCHEDULER_IPS=\n",
-		"CA_CRT_B64=",
-		"CLIENT_CRT_B64=",
-		"CLIENT_KEY_B64=",
+		"P2P_DISTRO='k3s'\n",
+		"SCHEDULER_IPS=''\n",
+		"CA_CRT_B64='",
+		"CLIENT_CRT_B64='",
+		"CLIENT_KEY_B64='",
 	} {
-		if !strings.Contains(payload, want) {
-			t.Fatalf("payload is missing %q", want)
+		if !strings.Contains(value, want) {
+			t.Fatalf("bootstrap env is missing %q", want)
 		}
+	}
+	preAt := strings.Index(value, bootstrap.PreinstallMarker)
+	p2pAt := strings.Index(value, bootstrap.Marker)
+	if preAt < 0 || p2pAt < 0 || preAt > p2pAt {
+		t.Fatalf("pre-install block is not before the p2p block: %q", value)
 	}
 }

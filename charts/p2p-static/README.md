@@ -5,29 +5,26 @@ asset volume under `/bin/`, `/nydus/<version>/`, `/client/<version>/<arch>/`,
 and `/snapshotter/<version>/<arch>/`, plus the host bootstrap script endpoint
 `/p2p-install.sh`.
 
-## Script endpoint and payload
+## Script endpoint
 
-The chart renders `files/p2p-install.sh` into a ConfigMap as
-`p2p-install.sh.tmpl`. The `/p2p-install.sh` location serves it with
-`sub_filter '__CFG__' "$arg_cfg"`: the node fetches
-`/p2p-install.sh?cfg=<base64url(env)>` and Nginx substitutes the payload
-placeholder. The script decodes the payload and validates the required keys.
-The location sets `large_client_header_buffers 4 32k` and
-`client_header_buffer_size 32k`, and the manager IngressRoute includes
-`/p2p-install.sh` next to `/bin`, `/nydus`, `/client`, and `/snapshotter`.
+The chart renders `files/p2p-install.sh` into a ConfigMap and serves it
+directly at `/p2p-install.sh` (no query parameters, no `sub_filter`). The file
+is a byte-identical copy of `pkg/machinebootstrap/assets/p2p-install.sh`; the
+self-test fails if the two drift. The location sets `access_log off` and
+`Cache-Control: no-store`.
 
-The payload is an env-file with `P2P_DISTRO`, `SCHEDULER_IPS`, `MANAGER_GRPC`,
-`STATIC_URL`, `SMART_PROXY_URL`, `NYDUS_MIRROR_URL`, `SCHEDULER_HOST`,
-`SCHEDULER_CLUSTER_ID`, the client/nydus/snapshotter versions, and the CA,
-client certificate, and client key (base64). The operator caps the encoded
-payload at 8 KiB; the resulting machine-bootstrap Secret is far below
-Hetzner's 32 KiB `user_data` limit.
+The node-side env is embedded in the machine-bootstrap Secret by the operator
+and exported to the piped `bash` with `set -a`/`set +a`: `P2P_DISTRO`,
+`SCHEDULER_IPS`, `MANAGER_GRPC`, `STATIC_URL`, `SMART_PROXY_URL`,
+`NYDUS_MIRROR_URL`, `SCHEDULER_HOST`, `SCHEDULER_CLUSTER_ID`, the
+client/nydus/snapshotter versions, and the CA, client certificate, and client
+key (base64). The Secret stays below Hetzner's 32 KiB `user_data` limit.
 
-**Security:** the mTLS client key is part of the `cfg` query string. The
-endpoint sets `access_log off`; do not re-enable access logs for it, do not put
-the payload in public artifacts or tickets, and treat the machine-bootstrap
-Secret as sensitive. The endpoint is reachable wherever the
-static URL is published; restrict it like the bootstrap configuration.
+**Security:** the mTLS client key is in the Secret (and provider-visible
+`user_data`), but **not** in the HTTP URL/access logs. Do not expose the Secret
+or its env in public artifacts or tickets, and treat the machine-bootstrap
+Secret as sensitive. The endpoint is reachable wherever the static URL is
+published; restrict it like the bootstrap configuration.
 
 ## Install
 
@@ -154,5 +151,5 @@ script, including env injection, certificate files/modes, dfget/dynconfig,
 scheduler ID, fscache/fusedev selection, nydus update, fail-open fallback, and
 the selector matrix. `scripts/test-p2p-static.sh` also renders this chart and
 checks that `/bin`, `/nydus`, `/client`, `/snapshotter`, and `/p2p-install.sh`
-are served, the manager route forwards all five prefixes, and the script
-endpoint carries the `__CFG__` sub_filter and 32 KiB header buffers.
+are served, the manager route forwards all five prefixes, the script endpoint
+has `access_log off`, and the chart script matches the embedded asset.

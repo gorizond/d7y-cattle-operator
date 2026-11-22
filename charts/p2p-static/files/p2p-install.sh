@@ -2,59 +2,6 @@
 set -Eeuo pipefail
 IFS=$'\n\t'
 
-TMP="$(mktemp -d)"
-trap 'rm -rf "$TMP"' EXIT
-
-log() {
-  printf 'p2p-install: %s\n' "$*" >&2
-}
-
-die() {
-  log "ERROR: $*"
-  exit 1
-}
-
-# The nginx sub_filter replaces the single placeholder below with $arg_cfg.
-# Keep exactly one placeholder so sub_filter_once produces one payload insertion.
-if [ "$#" -ge 1 ] && [ -n "${1:-}" ]; then
-  CFG="$1"
-elif [ -n "${QUERY_STRING:-}" ]; then
-  CFG="${QUERY_STRING##*cfg=}"
-  CFG="${CFG%%&*}"
-else
-  CFG="__CFG__"
-fi
-
-if [ -z "$CFG" ]; then
-  die "missing cfg payload"
-fi
-if ! printf '%s' "$CFG" | tr '_-' '/+' | base64 -d > "$TMP/payload.env" 2>/dev/null; then
-  die "cfg is not valid base64url"
-fi
-if [ ! -s "$TMP/payload.env" ]; then
-  die "cfg decoded to an empty payload"
-fi
-
-while IFS= read -r line || [ -n "$line" ]; do
-  case "$line" in
-    ""|\#*) continue ;;
-  esac
-  key="${line%%=*}"
-  value="${line#*=}"
-  value="${value%$'\r'}"
-  case "$key" in
-    MANAGER_GRPC|STATIC_URL|SMART_PROXY_URL|NYDUS_MIRROR_URL|NYDUS_CLUSTER_ID|SCHEDULER_HOST|SCHEDULER_CLUSTER_ID|SCHEDULER_IPS|P2P_DISTRO|CLIENT_VERSION|NYDUS_VERSION|NYDUS_SNAPSHOTTER_VERSION|SNAPSHOTTER_VERSION|CA_CRT_B64|CLIENT_CRT_B64|CLIENT_KEY_B64)
-      printf -v "$key" '%s' "$value"
-      ;;
-  esac
-done < "$TMP/payload.env"
-
-for key in MANAGER_GRPC STATIC_URL SCHEDULER_HOST SCHEDULER_CLUSTER_ID CA_CRT_B64 CLIENT_CRT_B64 CLIENT_KEY_B64; do
-  if [ -z "${!key:-}" ]; then
-    die "cfg is missing $key"
-  fi
-done
-
 P2P_ROOT="${P2P_ROOT:-/}"
 REAL_ROOT=0
 if [ "$P2P_ROOT" = "/" ]; then
@@ -145,6 +92,18 @@ SERVICE_DIR="${ROOT}/etc/systemd/system"
 RKE2_CONTAINERD_DIR="${ROOT}/var/lib/rancher/${DISTRO}/agent/etc/containerd"
 NYDUS_DROPIN_DIR="${RKE2_CONTAINERD_DIR}/config-v3.toml.d"
 NYDUS_DROPIN="${NYDUS_DROPIN_DIR}/90-nydus.toml"
+
+TMP="$(mktemp -d)"
+trap 'rm -rf "$TMP"' EXIT
+
+log() {
+  printf 'p2p-install: %s\n' "$*" >&2
+}
+
+die() {
+  log "ERROR: $*"
+  exit 1
+}
 
 write_file() {
   local path mode dir tmp

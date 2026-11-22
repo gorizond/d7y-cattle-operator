@@ -29,16 +29,20 @@ func inlineInstallBlockFor(rawBody, env string) string {
 		bootstrap.EndMarker + "\n"
 }
 
-// shortInstallQuery identifies the short static-delivery p2p block.
-const shortInstallQuery = "p2p-install.sh?cfg="
+// shortInstallSignature identifies the short static-delivery p2p block without
+// matching the legacy inline script body.
+const shortInstallSignature = `p2p-install.sh" | bash`
 
-// shortInstallBlock returns the marked short p2p block. The script and its
-// base64url env payload are fetched from the static server; the marker stays
-// on its own line so the pre-install block can be inserted before it.
-func shortInstallBlock(staticURL, payload string) string {
+// shortInstallBlock returns the marked short p2p block. The env-file lines are
+// exported to the piped bash with set -a/set +a; the static script itself is
+// fetched without query parameters, so no bootstrap value appears in the URL.
+func shortInstallBlock(staticURL, env string) string {
 	base := strings.TrimRight(strings.TrimSpace(staticURL), "/")
 	return bootstrap.Marker + "\n" +
-		"curl -sfL \"" + base + "/" + shortInstallQuery + payload + "\" | bash || true\n" +
+		"set -a\n" +
+		quoteEnv(env) +
+		"set +a\n" +
+		"curl -sfL \"" + base + "/p2p-install.sh\" | bash || true\n" +
 		bootstrap.EndMarker + "\n"
 }
 
