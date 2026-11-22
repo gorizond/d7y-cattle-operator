@@ -59,8 +59,8 @@ func TestReconcileSeedCreatesSharedHelmOps(t *testing.T) {
 		t.Errorf("control dependsOn names = %v, want shared keydb", got)
 	}
 	refs := dependsOnRefs(control)
-	if len(refs) != 2 || refs[1].Selector == nil || refs[1].Selector.MatchLabels["p2p-dragonfly-io"] != "p2p-mtls" {
-		t.Errorf("control dependsOn = %+v, want scheduler Bundle selector", refs)
+	if len(refs) != 2 || refs[1].Selector == nil || refs[1].Selector.MatchLabels[helmop.SchedulerCertLabel] != "true" {
+		t.Errorf("control dependsOn = %+v, want scheduler cert selector", refs)
 	}
 	if got := downstreamSecretNames(control); len(got) != 1 || got[0] != "dragonfly-p2p-mtls" {
 		t.Errorf("control downstreamSecretNames = %v, want the client Secret", got)
@@ -221,7 +221,7 @@ func TestReconcileSeedRemovalAndLabelRemoval(t *testing.T) {
 	}
 	// cleanupAll removes the per-cluster objects; shared objects stay because
 	// Fleet stops targeting the unlabeled cluster.
-	for _, name := range []string{"c1-manager", "c1-keydb", "c1-control", "c1-data", "c1-extras", "c1-containerd-mirror"} {
+	for _, name := range []string{"c1-manager", "c1-keydb", "c1-control", "c1-data", "c1-extras", "c1-containerd-mirror", helmop.SchedulerCertName("c1")} {
 		if store.has("fleet-default/" + name) {
 			t.Errorf("per-cluster HelmOp %s left after label removal", name)
 		}
@@ -270,6 +270,7 @@ func newTestController(t *testing.T) (*Controller, *fakeHelmOpStore, *fakeEventS
 			ExtrasChart:                  helmop.Chart{Repo: "https://charts.example.com", Name: "dragonfly-extras", Version: "0.1.11"},
 			MirrorChart:                  helmop.Chart{Repo: "https://charts.example.com", Name: "containerd-mirror", Version: "0.1.0"},
 			HostSyncChart:                helmop.Chart{Repo: "https://charts.example.com", Name: "p2p-host-sync", Version: "0.1.0"},
+			SchedulerCertChart:           helmop.Chart{Repo: "https://charts.example.com", Name: "p2p-scheduler-cert", Version: "0.1.0"},
 			StaticChart:                  helmop.Chart{Repo: "https://charts.example.com", Name: "p2p-static", Version: "0.1.11"},
 			StaticReleaseName:            "p2p-static",
 			StaticClientRepo:             "dragonflyoss/client",

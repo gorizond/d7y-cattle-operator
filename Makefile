@@ -30,6 +30,7 @@ helm-template:
 	helm template dragonfly-extras charts/dragonfly-extras --set ingress.enabled=true --set vpa.enabled=true --api-versions autoscaling.k8s.io/v1
 	helm template p2p-static charts/p2p-static --values scripts/testdata/p2p-static-operator-values.yaml
 	helm template p2p-host-sync charts/p2p-host-sync --values scripts/testdata/p2p-host-sync-operator-values.yaml --set 'schedulerIPs[0]=203.0.113.10:8002'
+	helm template c1-p2p-scheduler-cert charts/p2p-scheduler-cert --values scripts/testdata/p2p-scheduler-cert-values.yaml
 	helm template containerd-mirror charts/containerd-mirror
 
 chart-test:
@@ -37,3 +38,4 @@ chart-test:
 	bash scripts/test-fork-chart-tls.sh
 	bash scripts/test-p2p-static.sh
 	bash scripts/test-p2p-host-sync.sh
+	bash scripts/test-p2p-scheduler-cert.sh

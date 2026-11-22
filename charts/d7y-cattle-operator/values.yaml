@@ -90,6 +90,13 @@ hostSync:
     name: p2p-host-sync
     version: 0.1.5
 
+# Per-seed scheduler certificate delivery.
+schedulerCert:
+  chart:
+    repo: https://gorizond.github.io/d7y-cattle-operator
+    name: p2p-scheduler-cert
+    version: 0.1.0
+
 # Operator-managed p2p-static release on the manager-labeled cluster.
 static:
   chart:

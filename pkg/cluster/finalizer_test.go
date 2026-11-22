@@ -38,8 +38,11 @@ func TestReconcileAddsFinalizerAndCleansPKIOnDeletion(t *testing.T) {
 	if len(secret.OwnerReferences) != 0 {
 		t.Errorf("scheduler Secret ownerReferences = %+v; cleanup must not rely on a cross-namespace ownerRef", secret.OwnerReferences)
 	}
-	if !controller.bundles.(*fakeHelmOpStore).has("fleet-default/" + helmop.SchedulerBundleName("c1")) {
-		t.Error("normal reconcile did not create the scheduler Bundle")
+	if !controller.helmops.(*fakeHelmOpStore).has("fleet-default/" + helmop.SchedulerCertName("c1")) {
+		t.Error("normal reconcile did not create the scheduler certificate HelmOp")
+	}
+	if controller.bundles.(*fakeHelmOpStore).has("fleet-default/" + helmop.SchedulerBundleName("c1")) {
+		t.Error("normal reconcile created a legacy raw scheduler Bundle")
 	}
 
 	deleting := clusterStore.get()
@@ -57,8 +60,11 @@ func TestReconcileAddsFinalizerAndCleansPKIOnDeletion(t *testing.T) {
 	if _, err := controller.secrets.Get("dragonfly-system", schedulerName, metav1.GetOptions{}); !apierrors.IsNotFound(err) {
 		t.Errorf("scheduler Secret still exists after deletion: %v", err)
 	}
+	if controller.helmops.(*fakeHelmOpStore).has("fleet-default/" + helmop.SchedulerCertName("c1")) {
+		t.Error("scheduler certificate HelmOp still exists after deletion")
+	}
 	if controller.bundles.(*fakeHelmOpStore).has("fleet-default/" + helmop.SchedulerBundleName("c1")) {
-		t.Error("scheduler Bundle still exists after deletion")
+		t.Error("legacy scheduler Bundle still exists after deletion")
 	}
 	if store.has("fleet-default/" + helmop.HostSyncName("c1")) {
 		t.Error("host-sync HelmOp still exists after deletion")

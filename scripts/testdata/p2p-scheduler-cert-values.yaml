@@ -1,0 +1,14 @@
+# Dummy values for chart render tests only.
+tls:
+  crt: |
+    -----BEGIN CERTIFICATE-----
+    dGVzdC1jZXJ0
+    -----END CERTIFICATE-----
+  key: |
+    -----BEGIN PRIVATE KEY-----
+    dGVzdC1rZXk=
+    -----END PRIVATE KEY-----
+  ca: |
+    -----BEGIN CERTIFICATE-----
+    dGVzdC1jYQ==
+    -----END CERTIFICATE-----

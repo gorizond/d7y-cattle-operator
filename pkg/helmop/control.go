@@ -11,7 +11,7 @@ import (
 func Control(c Cluster) *fleetv1alpha1.HelmOp {
 	names := ClusterNames(c.Name)
 	op := newHelmOp(ControlName(c.Name), c, c.Chart, "control", controlValues(c, names), []string{names.KeyDB})
-	withBundleDependency(op, SchedulerBundleName(c.Name))
+	withBundleDependency(op, SchedulerCertName(c.Name))
 	return withMTLS(op, c.MTLSSecretName)
 }
 
@@ -25,7 +25,7 @@ func SharedControl(c Cluster) *fleetv1alpha1.HelmOp {
 	op := newSharedHelmOp(SharedControlName(), TargetNamespace, c, c.Chart, "control",
 		values, []string{SharedKeyDBName()}, SharedSelector())
 	withSchedulerCertTemplate(op, values)
-	withBundleSelector(op, map[string]string{"p2p-dragonfly-io": "p2p-mtls"})
+	withBundleSelector(op, map[string]string{SchedulerCertLabel: "true"})
 	return withMTLS(op, c.MTLSSecretName)
 }
 

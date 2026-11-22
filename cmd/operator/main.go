@@ -113,6 +113,11 @@ func run() error {
 			Name:    cfg.HostSyncChartName,
 			Version: cfg.HostSyncChartVersion,
 		},
+		SchedulerCertChart: helmop.Chart{
+			Repo:    cfg.SchedulerCertChartRepo,
+			Name:    cfg.SchedulerCertChartName,
+			Version: cfg.SchedulerCertChartVersion,
+		},
 		ExtrasIngressController:      cfg.ExtrasIngressController,
 		ExtrasIngressClassName:       cfg.ExtrasIngressClassName,
 		ExtrasIngressGRPCEnabled:     cfg.ExtrasIngressGRPCEnabled,

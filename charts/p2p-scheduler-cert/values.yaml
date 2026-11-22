@@ -1,0 +1,6 @@
+# PEM material rendered into the dragonfly-p2p-scheduler Secret. The operator
+# supplies these values per seed; do not commit real certificates.
+tls:
+  crt: ""
+  key: ""
+  ca: ""

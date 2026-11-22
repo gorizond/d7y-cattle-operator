@@ -231,8 +231,8 @@ func TestControlHelmOp(t *testing.T) {
 	if op.Name != "c1-control" {
 		t.Errorf("name = %q", op.Name)
 	}
-	if len(op.Spec.DependsOn) != 2 || op.Spec.DependsOn[0].Name != "c1-keydb" || op.Spec.DependsOn[1].Name != SchedulerBundleName("c1") {
-		t.Errorf("dependsOn = %+v, want keydb and scheduler Bundle", op.Spec.DependsOn)
+	if len(op.Spec.DependsOn) != 2 || op.Spec.DependsOn[0].Name != "c1-keydb" || op.Spec.DependsOn[1].Name != SchedulerCertName("c1") {
+		t.Errorf("dependsOn = %+v, want keydb and scheduler cert HelmOp", op.Spec.DependsOn)
 	}
 	if len(op.Spec.DownstreamResources) != 1 || op.Spec.DownstreamResources[0].Name != "dragonfly-p2p-mtls" {
 		t.Errorf("control downstreamResources = %+v, want the client Secret", op.Spec.DownstreamResources)

@@ -439,14 +439,14 @@ func TestSharedSchedulerPublicIPTemplate(t *testing.T) {
 	}
 }
 
-func TestSharedControlPerSeedSchedulerTemplateAndBundle(t *testing.T) {
+func TestSharedControlPerSeedSchedulerTemplateAndCert(t *testing.T) {
 	op := SharedControl(sharedTestCluster())
 	if len(op.Spec.DependsOn) != 2 {
-		t.Fatalf("dependsOn = %+v, want keydb + scheduler Bundle selector", op.Spec.DependsOn)
+		t.Fatalf("dependsOn = %+v, want keydb + scheduler cert selector", op.Spec.DependsOn)
 	}
 	ref := op.Spec.DependsOn[1]
-	if ref.Selector == nil || ref.Selector.MatchLabels["p2p-dragonfly-io"] != "p2p-mtls" {
-		t.Errorf("scheduler dependency = %+v, want label selector", ref)
+	if ref.Selector == nil || ref.Selector.MatchLabels[SchedulerCertLabel] != "true" {
+		t.Errorf("scheduler dependency = %+v, want scheduler cert label selector", ref)
 	}
 	if op.Labels["p2p-dragonfly-io"] != "control" {
 		t.Errorf("control component label = %q, want control (never p2p-mtls)", op.Labels["p2p-dragonfly-io"])

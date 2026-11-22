@@ -39,6 +39,9 @@ const (
 	ManagerMTLSSecretName = "dragonfly-p2p-manager"
 	// SchedulerMTLSSecretName is the downstream scheduler server identity.
 	SchedulerMTLSSecretName = "dragonfly-p2p-scheduler"
+	// SchedulerCertLabel marks HelmOp-generated Bundles that carry a seed
+	// scheduler certificate. Shared control depends on that label selector.
+	SchedulerCertLabel = "p2p.dragonfly.io/scheduler-cert"
 	// AnnotationMTLSCertRevision carries the per-seed scheduler leaf hash.
 	AnnotationMTLSCertRevision = "p2p.dragonfly.io/mtls-cert-revision"
 	// SchedulerCertRevisionTemplate resolves the per-target scheduler revision.
@@ -201,6 +204,7 @@ type Cluster struct {
 	ExtrasChart                        Chart
 	MirrorChart                        Chart
 	HostSyncChart                      Chart
+	SchedulerCertChart                 Chart
 	StaticChart                        Chart
 	StaticReleaseName                  string
 	StaticClientVersion                string
@@ -270,7 +274,9 @@ func ControlName(cluster string) string { return objectName(cluster, "control") 
 // HostSyncName returns the per-seed host-sync HelmOp and release name.
 func HostSyncName(cluster string) string { return objectName(cluster, "p2p-host-sync") }
 
-// SchedulerBundleName returns the per-seed scheduler certificate Bundle name.
+// SchedulerBundleName returns the legacy per-seed scheduler certificate raw
+// Bundle name. New releases use SchedulerCertName; this name is kept for
+// migration and cleanup.
 func SchedulerBundleName(cluster string) string { return objectName(cluster, "p2p-scheduler") }
 
 // SchedulerSourceSecretName returns the operator-namespace Secret holding the

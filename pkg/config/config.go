@@ -31,6 +31,9 @@ const (
 	DefaultHostSyncChartRepo             = "https://gorizond.github.io/d7y-cattle-operator"
 	DefaultHostSyncChartName             = "p2p-host-sync"
 	DefaultHostSyncChartVersion          = "0.1.5"
+	DefaultSchedulerCertChartRepo        = "https://gorizond.github.io/d7y-cattle-operator"
+	DefaultSchedulerCertChartName        = "p2p-scheduler-cert"
+	DefaultSchedulerCertChartVersion     = "0.1.0"
 	DefaultStaticChartRepo               = "https://gorizond.github.io/d7y-cattle-operator"
 	DefaultStaticChartName               = "p2p-static"
 	DefaultStaticChartVersion            = "0.1.12"
@@ -84,6 +87,9 @@ type Config struct {
 	HostSyncChartRepo            string
 	HostSyncChartName            string
 	HostSyncChartVersion         string
+	SchedulerCertChartRepo       string
+	SchedulerCertChartName       string
+	SchedulerCertChartVersion    string
 	StaticChartRepo              string
 	StaticChartName              string
 	StaticChartVersion           string
@@ -161,6 +167,9 @@ func Load(args []string) (*Config, error) {
 	fs.StringVar(&cfg.HostSyncChartRepo, "host-sync-chart-repo", envOr("HOST_SYNC_CHART_REPO", DefaultHostSyncChartRepo), "Helm repository URL of the p2p-host-sync chart")
 	fs.StringVar(&cfg.HostSyncChartName, "host-sync-chart-name", envOr("HOST_SYNC_CHART_NAME", DefaultHostSyncChartName), "p2p-host-sync chart name")
 	fs.StringVar(&cfg.HostSyncChartVersion, "host-sync-chart-version", envOr("HOST_SYNC_CHART_VERSION", DefaultHostSyncChartVersion), "p2p-host-sync chart version")
+	fs.StringVar(&cfg.SchedulerCertChartRepo, "scheduler-cert-chart-repo", envOr("SCHEDULER_CERT_CHART_REPO", DefaultSchedulerCertChartRepo), "Helm repository URL of the p2p-scheduler-cert chart")
+	fs.StringVar(&cfg.SchedulerCertChartName, "scheduler-cert-chart-name", envOr("SCHEDULER_CERT_CHART_NAME", DefaultSchedulerCertChartName), "p2p-scheduler-cert chart name")
+	fs.StringVar(&cfg.SchedulerCertChartVersion, "scheduler-cert-chart-version", envOr("SCHEDULER_CERT_CHART_VERSION", DefaultSchedulerCertChartVersion), "p2p-scheduler-cert chart version")
 	fs.StringVar(&cfg.StaticChartRepo, "static-chart-repo", envOr("STATIC_CHART_REPO", DefaultStaticChartRepo), "Helm repository URL of the p2p-static chart")
 	fs.StringVar(&cfg.StaticChartName, "static-chart-name", envOr("STATIC_CHART_NAME", DefaultStaticChartName), "p2p-static chart name")
 	fs.StringVar(&cfg.StaticChartVersion, "static-chart-version", envOr("STATIC_CHART_VERSION", DefaultStaticChartVersion), "p2p-static chart version")
@@ -362,6 +371,19 @@ func (c *Config) Validate() error {
 	}
 	if !chartVersionPattern.MatchString(c.HostSyncChartVersion) {
 		add("--host-sync-chart-version: %q is not a valid chart version", c.HostSyncChartVersion)
+	}
+	if c.SchedulerCertChartRepo == "" {
+		add("--scheduler-cert-chart-repo is required")
+	} else if err := validateURL(c.SchedulerCertChartRepo, "http", "https"); err != nil {
+		add("--scheduler-cert-chart-repo: %v", err)
+	}
+	if c.SchedulerCertChartName == "" {
+		add("--scheduler-cert-chart-name is required")
+	} else if msgs := validation.IsDNS1123Label(c.SchedulerCertChartName); len(msgs) > 0 {
+		add("--scheduler-cert-chart-name: %s", strings.Join(msgs, "; "))
+	}
+	if !chartVersionPattern.MatchString(c.SchedulerCertChartVersion) {
+		add("--scheduler-cert-chart-version: %q is not a valid chart version", c.SchedulerCertChartVersion)
 	}
 	switch c.ExtrasIngressController {
 	case "nginx", "traefik":

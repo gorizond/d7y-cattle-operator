@@ -23,6 +23,9 @@ var envKeys = []string{
 	"CONTAINERD_MIRROR_CHART_REPO",
 	"CONTAINERD_MIRROR_CHART_NAME",
 	"CONTAINERD_MIRROR_CHART_VERSION",
+	"SCHEDULER_CERT_CHART_REPO",
+	"SCHEDULER_CERT_CHART_NAME",
+	"SCHEDULER_CERT_CHART_VERSION",
 	"EXTRAS_INGRESS_CONTROLLER",
 	"EXTRAS_INGRESS_CLASS_NAME",
 	"EXTRAS_INGRESS_GRPC_ENABLED",
@@ -104,6 +107,9 @@ func TestLoadDefaults(t *testing.T) {
 	}
 	if cfg.StaticChartName != DefaultStaticChartName || cfg.StaticReleaseName != DefaultStaticReleaseName {
 		t.Errorf("static chart/release = %q/%q", cfg.StaticChartName, cfg.StaticReleaseName)
+	}
+	if cfg.SchedulerCertChartName != DefaultSchedulerCertChartName || cfg.SchedulerCertChartVersion != DefaultSchedulerCertChartVersion {
+		t.Errorf("scheduler cert chart = %q@%q", cfg.SchedulerCertChartName, cfg.SchedulerCertChartVersion)
 	}
 	if cfg.ClientSHA256AMD64 != DefaultClientSHA256AMD64 || cfg.SnapshotterSHA256ARM64 != DefaultSnapshotterSHA256ARM64 {
 		t.Errorf("checksum defaults = %q/%q", cfg.ClientSHA256AMD64, cfg.SnapshotterSHA256ARM64)

@@ -72,6 +72,12 @@ spec:
               value: {{ .Values.hostSync.chart.name | quote }}
             - name: HOST_SYNC_CHART_VERSION
               value: {{ .Values.hostSync.chart.version | quote }}
+            - name: SCHEDULER_CERT_CHART_REPO
+              value: {{ .Values.schedulerCert.chart.repo | quote }}
+            - name: SCHEDULER_CERT_CHART_NAME
+              value: {{ .Values.schedulerCert.chart.name | quote }}
+            - name: SCHEDULER_CERT_CHART_VERSION
+              value: {{ .Values.schedulerCert.chart.version | quote }}
             - name: STATIC_CHART_REPO
               value: {{ .Values.static.chart.repo | quote }}
             - name: STATIC_CHART_NAME
