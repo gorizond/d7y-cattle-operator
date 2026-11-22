@@ -33,8 +33,11 @@ The env includes `P2P_DISTRO`, `SCHEDULER_IPS`, `MANAGER_GRPC`, `STATIC_URL`,
 `SCHEDULER_CLUSTER_ID`, `CLIENT_VERSION`, `NYDUS_VERSION`,
 `NYDUS_SNAPSHOTTER_VERSION`, `CA_CRT_B64`, `CLIENT_CRT_B64`, and
 `CLIENT_KEY_B64`. The client certificate **and key** stay in the Secret;
-CA-only is insufficient for mTLS. The full block stays far below the
-32 KiB `user_data` limit.
+CA-only is insufficient for mTLS. The limit that matters is the effective
+`user_data` the node driver sends: gzip+base64 of the Secret value. It stays
+below the 32 KiB limit used by some providers; the raw Secret value can be
+larger (about 38 KiB on a live RKE2 node). The separate Kubernetes Secret
+object limit (1 MiB) is enforced by the operator's serialized-size guard.
 
 The env carries the client identity's `ca-bundle.crt` (falling back to
 `ca.crt` for legacy Secrets). The bootstrap Secret is annotated with

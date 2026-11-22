@@ -1,13 +1,16 @@
 package machinebootstrap
 
 import (
+	"bytes"
+	"compress/gzip"
 	"crypto/ecdsa"
 	"crypto/elliptic"
 	"crypto/rand"
 	"crypto/x509"
 	"crypto/x509/pkix"
-	"encoding/json"
+	"encoding/base64"
 	"encoding/pem"
+	"fmt"
 	"math/big"
 	"strings"
 	"testing"
@@ -64,7 +67,36 @@ func testECDSAIdentity(t *testing.T) (caPEM, certPEM, keyPEM []byte) {
 		pem.EncodeToMemory(&pem.Block{Type: "EC PRIVATE KEY", Bytes: keyDER})
 }
 
-func TestShortBootstrapSecretFitsUserDataLimit(t *testing.T) {
+// realisticRKE2Bootstrap returns a synthetic Rancher node-driver bootstrap of
+// roughly the size seen on a live RKE2 node (~38 KiB). The content is
+// deliberately varied shell/cloud-init text so the gzip ratio is not trivial.
+func realisticRKE2Bootstrap() string {
+	var builder strings.Builder
+	builder.WriteString("#!/bin/bash\nset -euo pipefail\n")
+	for i := 0; i < 100; i++ {
+		fmt.Fprintf(&builder, "# RKE2 bootstrap step %d: render /etc/rancher/rke2/config.yaml and start the agent\n", i)
+		fmt.Fprintf(&builder, "echo 'step %d: installing rke2 version v1.35.%d with the registry mirror'\n", i, i%10)
+		fmt.Fprintf(&builder, "curl -fsSL https://registry.example.test/v2/rke2/releases/%d/rke2-images-%d.tar.gz -o /tmp/rke2-%d.tar.gz\n", i, i, i)
+		fmt.Fprintf(&builder, "install -m 0644 /tmp/rke2-%d.tar.gz /var/lib/rancher/rke2/agent/images/%d.tar.gz\n", i, i)
+	}
+	builder.WriteString("do_install \"$@\"\nexit 0\n")
+	return builder.String()
+}
+
+func effectiveUserData(t *testing.T, value string) int {
+	t.Helper()
+	var compressed bytes.Buffer
+	writer := gzip.NewWriter(&compressed)
+	if _, err := writer.Write([]byte(value)); err != nil {
+		t.Fatalf("gzip bootstrap value: %v", err)
+	}
+	if err := writer.Close(); err != nil {
+		t.Fatalf("close gzip writer: %v", err)
+	}
+	return len(base64.StdEncoding.EncodeToString(compressed.Bytes()))
+}
+
+func TestShortBootstrapFitsEffectiveUserDataLimit(t *testing.T) {
 	controller, secrets, _, clusters, _, _ := testController()
 	caPEM, certPEM, keyPEM := testECDSAIdentity(t)
 	secrets.mtls.Data = map[string][]byte{
@@ -72,16 +104,18 @@ func TestShortBootstrapSecretFitsUserDataLimit(t *testing.T) {
 		corev1.TLSCertKey:       certPEM,
 		corev1.TLSPrivateKeyKey: keyPEM,
 	}
+	secrets.secret.Data[bootstrapValueKey] = []byte(realisticRKE2Bootstrap())
 	setPreinstall(clusters, "echo pre")
 
 	reconcileNow(t, controller, secrets)
 	value := string(secrets.secret.Data[bootstrapValueKey])
-	raw, err := json.Marshal(secrets.secret)
-	if err != nil {
-		t.Fatalf("json.Marshal(secret) error = %v", err)
+	if len(value) <= 32*1024 {
+		t.Fatalf("fixture bootstrap value = %d bytes, want > 32 KiB so the effective user_data metric is exercised", len(value))
 	}
-	if len(raw) >= 32*1024 {
-		t.Fatalf("serialized Secret = %d bytes, want < 32 KiB", len(raw))
+	if effective := effectiveUserData(t, value); effective >= 32*1024 {
+		t.Fatalf("effective user_data (gzip+b64) = %d bytes, want < 32 KiB", effective)
+	} else {
+		t.Logf("bootstrap value = %d bytes; effective user_data (gzip+b64) = %d bytes", len(value), effective)
 	}
 	if strings.Contains(value, "?cfg=") {
 		t.Fatalf("bootstrap value still carries a cfg query: %q", value)

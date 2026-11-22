@@ -466,9 +466,13 @@ pulled by Fleet at reconcile time and is not vendored here.
 
 Scheduler clients connect directly to the scheduler pod node IP on port
 `8002`; there is no public scheduler Traefik front. The per-seed
-`p2p.dragonfly.io/scheduler-ips` annotation is derived from downstream
-`component=scheduler` pods and their CAPI Machine public IPs. The host
-bootstrap and local dynconfig use `<scheduler-node-ip>:8002`.
+`p2p.dragonfly.io/scheduler-ips` annotation is normally derived from downstream
+`component=scheduler` pods and their CAPI Machine public IPs. If the Rancher
+kubeconfig token is denied (HTTP 401/403 on the cluster proxy), the operator
+falls back to all public CAPI Machine IPs of the seed Cluster and emits a
+`SchedulerIPsFallback` warning, so bootstrap and host-sync still receive a
+non-empty scheduler list. The host bootstrap and local dynconfig use
+`<scheduler-node-ip>:8002`.
 
 The PKI layout is:
 
@@ -597,8 +601,10 @@ The env is shell-quoted in the Secret and exported to the piped `bash` with
 `set -a`/`set +a`; it includes `P2P_DISTRO`, `SCHEDULER_IPS`, the
 manager/static URLs, scheduler host/ID, versions, and the CA, client
 certificate, and **client key** (mTLS needs all three). The plain
-`p2p-static` URL carries no payload/query. The full block is far below
-node-driver `user_data` limits (32 KiB in some providers). Existing v0.3.23 Secrets are migrated from
+`p2p-static` URL carries no payload/query. The effective node-driver
+`user_data` (gzip+base64 of the Secret value) stays below the 32 KiB limit used
+by some providers; the raw Secret value can be larger (about 38 KiB on a live
+RKE2 node). Existing v0.3.23 Secrets are migrated from
 the inline heredoc block on the next reconcile; nodes apply the new block only
 after their next bootstrap/cloud-init run (normally a reboot). **Security:** the
 client key is in the Secret and provider-visible `user_data`, but not in HTTP
@@ -924,8 +930,9 @@ registry so RKE2 can still start.
 `/snapshotter` asset volume through Nginx. It also serves `/p2p-install.sh`,
 a byte-identical copy of the host installer script (no query/substitution).
 The machine bootstrap Secret contains the short `curl` command plus the
-shell-quoted env-file (no JSON, no `jq`, no python on the node); the Secret
-stays below the 32 KiB `user_data` limit used by some node drivers. The script installs the
+shell-quoted env-file (no JSON, no `jq`, no python on the node); the effective
+`user_data` (gzip+base64 of the Secret value) stays below the 32 KiB limit used
+by some node drivers, while the raw Secret can be larger. The script installs the
 host-only upstream nydus
 snapshotter (`v0.16.0`) plus the static `v2.4.5` daemon assets
 (including `nydus-overlayfs`), writes the global nydus containerd drop-in
