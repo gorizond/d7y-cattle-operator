@@ -90,6 +90,7 @@ P2P_DFGET_TIMEOUT="${P2P_DFGET_TIMEOUT:-10m}"
 DFGET_BIN="${DFGET_BIN:-${BIN_DIR}/dfget}"
 SERVICE_DIR="${ROOT}/etc/systemd/system"
 RKE2_CONTAINERD_DIR="${ROOT}/var/lib/rancher/${DISTRO}/agent/etc/containerd"
+RKE2_CONTAINERD_STATE_DIR="${ROOT}/var/lib/rancher/${DISTRO}/agent/containerd"
 NYDUS_DROPIN_DIR="${RKE2_CONTAINERD_DIR}/config-v3.toml.d"
 NYDUS_DROPIN="${NYDUS_DROPIN_DIR}/90-nydus.toml"
 
@@ -1295,12 +1296,13 @@ if [ "$CONTAINERD_MAJOR" = "2" ]; then
   type = 'snapshot'
   address = '/run/containerd-nydus/containerd-nydus-grpc.sock'
 TOML
-  # containerd derives the CRI imagefs path from its own root, while the host
-  # nydus snapshotter stores data in /var/lib/containerd-nydus. Without this
-  # link kubelet image GC reports ImageGCFailed and node-pressure eviction
-  # never sees a dedicated image fs. Symlink only: no restart, no data move.
-  mkdir -p "$RKE2_CONTAINERD_DIR"
-  ln -sfn /var/lib/containerd-nydus "${RKE2_CONTAINERD_DIR}/io.containerd.snapshotter.v1.nydus"
+  # kubelet stats the CRI imagefs under containerd's state/root dir, not its
+  # config dir, while the host nydus snapshotter stores data in
+  # /var/lib/containerd-nydus. Without this link kubelet image GC reports
+  # ImageGCFailed and node-pressure eviction aborts. Symlink only: no restart,
+  # no data move.
+  mkdir -p "$RKE2_CONTAINERD_STATE_DIR"
+  ln -sfn /var/lib/containerd-nydus "${RKE2_CONTAINERD_STATE_DIR}/io.containerd.snapshotter.v1.nydus"
   CONTAINERD_CONFIG_PATH="$NYDUS_DROPIN"
 else
   # containerd 1.x has no drop-in imports; write a global-nydus template. This
