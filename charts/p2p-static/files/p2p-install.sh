@@ -618,7 +618,7 @@ install_nydus_snapshotter_asset() {
   return 1
 }
 
-for key in MANAGER_GRPC STATIC_URL SCHEDULER_HOST SCHEDULER_CLUSTER_ID CA_CRT_B64 CLIENT_CRT_B64 CLIENT_KEY_B64; do
+for key in MANAGER_GRPC STATIC_URL SCHEDULER_CLUSTER_ID CA_CRT_B64 CLIENT_CRT_B64 CLIENT_KEY_B64; do
   if [ -z "${!key:-}" ]; then
     die "bootstrap env is missing $key"
   fi
@@ -691,10 +691,6 @@ if [ -n "${NYDUS_MIRROR_URL:-}" ]; then
   fi
   NYDUS_MIRROR_URL="${NYDUS_MIRROR_URL%/}"
 fi
-
-case "$SCHEDULER_HOST" in
-  ""|*[!A-Za-z0-9.-]*|*..*|.*|*.) die "scheduler_host is not a DNS name" ;;
-esac
 
 case "$SCHEDULER_CLUSTER_ID" in
   ""|*[!0-9]*) die "scheduler_cluster_id must be a non-negative integer" ;;
@@ -1941,7 +1937,7 @@ fi
 
 log "certificates written to ${CERT_DIR}"
 log "dfget.yaml written with scheduler cluster ID ${SCHEDULER_CLUSTER_ID}"
-log "dynconfig written with scheduler ${SCHEDULER_HOST}:${SCHEDULER_PORT}"
+log "dynconfig written with scheduler IPs ${SCHEDULER_IPS:-}"
 log "nydus ${NYDUS_VERSION} fscache and fusedev configs written to ${NYDUS_DIR}; nydus-fs-select chooses the driver at snapshotter start"
 log "nydus fscache requires RAFS v6 images; the nydusify conversion must pass --fs-version 6 (fs_version=6; proxy-owned, not this chart)"
 if [ -n "${NYDUS_MIRROR_URL:-}" ]; then

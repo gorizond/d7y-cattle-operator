@@ -53,7 +53,6 @@ type Options struct {
 	ManagerAPIHost               string
 	ManagerAPIURL                string
 	ManagerAPICredentialsSecret  string
-	P2PDomain                    string
 	ClusterIDFallback            string
 	DragonflyChart               helmop.Chart
 	ExtrasChart                  helmop.Chart
@@ -242,9 +241,8 @@ func (c *Controller) reconcile(key string, cluster *provv1.Cluster) (result *pro
 	hc := c.helmopCluster(cluster)
 	c.warnUnsupportedChartVersion(cluster, hc.Chart.Version)
 
-	// Fleet targets shared HelmOps by Cluster label and renders the scheduler
-	// host from the cluster-id label, so the labels must be in place before the
-	// objects are applied.
+	// Fleet targets shared HelmOps by Cluster label, so the labels must be in
+	// place before the objects are applied.
 	if updated, err := c.ensureClusterMetadata(cluster); err != nil {
 		errs = append(errs, err)
 	} else if updated != nil {
@@ -378,7 +376,6 @@ func (c *Controller) helmopCluster(cluster *provv1.Cluster) helmop.Cluster {
 		StaticURL:                          c.opts.StaticURL,
 		MirrorPort:                         c.opts.ContainerdMirrorPort,
 		ManagerGRPCDomain:                  c.opts.ManagerGRPCDomain,
-		P2PDomain:                          c.opts.P2PDomain,
 		ManagerGRPCPort:                    c.opts.ManagerGRPCPort,
 		ManagerAPIHost:                     c.opts.ManagerAPIHost,
 		ManagerAPICredentialsSecret:        c.opts.ManagerAPICredentialsSecret,
@@ -413,15 +410,6 @@ func (c *Controller) clusterID(cluster *provv1.Cluster) string {
 	return strings.TrimSpace(c.opts.ClusterIDFallback)
 }
 
-func schedulerHost(domain, clusterID string) string {
-	domain = strings.TrimSpace(strings.Trim(domain, "."))
-	clusterID = strings.TrimSpace(clusterID)
-	if domain == "" || clusterID == "" {
-		return ""
-	}
-	return fmt.Sprintf("d7y-scheduler.%s.%s", clusterID, domain)
-}
-
 // schedulerClusterID returns the annotation value as the integer the Dragonfly
 // chart expects. Missing, non-numeric, and non-positive values are reported as 0
 // so ensureSeed emits SchedulerClusterIDMissing instead of deploying with a
@@ -444,10 +432,10 @@ type sharedHelmOps struct {
 }
 
 // ensureClusterMetadata stamps the cluster-id label used by shared Fleet
-// templates. Role labels are user-managed and are never modified here.
+// targets. Role labels are user-managed and are never modified here.
 func (c *Controller) ensureClusterMetadata(cluster *provv1.Cluster) (*provv1.Cluster, error) {
 	labels := map[string]string{}
-	if id := strings.TrimSpace(cluster.Status.ClusterName); id != "" {
+	if id := c.clusterID(cluster); id != "" {
 		labels[helmop.LabelClusterID] = id
 	}
 	if len(labels) == 0 {

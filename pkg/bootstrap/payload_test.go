@@ -10,7 +10,6 @@ func testPayload() Payload {
 	return Payload{
 		ManagerGRPC:        "https://manager-grpc.example.com:65003",
 		StaticURL:          "http://static.example.com/",
-		SchedulerHost:      "d7y-scheduler.c-m-test.example.com",
 		SchedulerClusterID: "2",
 		CACert:             []byte("ca"),
 		ClientCert:         []byte("cert"),
@@ -24,8 +23,11 @@ func TestEnvPayload(t *testing.T) {
 		t.Fatalf("Env() error = %v", err)
 	}
 	lines := strings.Split(strings.TrimSpace(raw), "\n")
-	if len(lines) != 7 {
-		t.Fatalf("env lines = %d, want 7: %q", len(lines), raw)
+	if len(lines) != 6 {
+		t.Fatalf("env lines = %d, want 6: %q", len(lines), raw)
+	}
+	if strings.Contains(raw, "SCHEDULER_HOST=") {
+		t.Errorf("Env() must not emit the legacy SCHEDULER_HOST: %q", raw)
 	}
 	if lines[0] != "MANAGER_GRPC=https://manager-grpc.example.com:65003" {
 		t.Errorf("MANAGER_GRPC line = %q", lines[0])
@@ -33,13 +35,10 @@ func TestEnvPayload(t *testing.T) {
 	if lines[1] != "STATIC_URL=http://static.example.com" {
 		t.Errorf("STATIC_URL line = %q", lines[1])
 	}
-	if lines[2] != "SCHEDULER_HOST=d7y-scheduler.c-m-test.example.com" {
-		t.Errorf("SCHEDULER_HOST line = %q", lines[2])
+	if lines[2] != "SCHEDULER_CLUSTER_ID=2" {
+		t.Errorf("SCHEDULER_CLUSTER_ID line = %q", lines[2])
 	}
-	if lines[3] != "SCHEDULER_CLUSTER_ID=2" {
-		t.Errorf("SCHEDULER_CLUSTER_ID line = %q", lines[3])
-	}
-	for _, line := range lines[4:] {
+	for _, line := range lines[3:] {
 		key, value, ok := strings.Cut(line, "=")
 		if !ok {
 			t.Fatalf("invalid env line %q", line)
@@ -93,14 +92,12 @@ func TestEnvNydusMirrorURL(t *testing.T) {
 
 func TestEnvRejectsInvalid(t *testing.T) {
 	cases := map[string]Payload{
-		"manager without https":  {ManagerGRPC: "http://manager", StaticURL: "http://static", SchedulerClusterID: "2", CACert: []byte("ca"), ClientCert: []byte("cert"), ClientKey: []byte("key")},
-		"static without scheme":  {ManagerGRPC: "https://manager", StaticURL: "static", SchedulerClusterID: "2", CACert: []byte("ca"), ClientCert: []byte("cert"), ClientKey: []byte("key")},
-		"missing ID":             {ManagerGRPC: "https://manager", StaticURL: "http://static", SchedulerHost: "scheduler.example.com", CACert: []byte("ca"), ClientCert: []byte("cert"), ClientKey: []byte("key")},
-		"missing cert":           {ManagerGRPC: "https://manager", StaticURL: "http://static", SchedulerHost: "scheduler.example.com", SchedulerClusterID: "2", CACert: []byte("ca"), ClientCert: []byte("cert")},
-		"missing scheduler host": {ManagerGRPC: "https://manager", StaticURL: "http://static", SchedulerClusterID: "2", CACert: []byte("ca"), ClientCert: []byte("cert"), ClientKey: []byte("key")},
-		"invalid scheduler host": {ManagerGRPC: "https://manager", StaticURL: "http://static", SchedulerHost: "bad_host", SchedulerClusterID: "2", CACert: []byte("ca"), ClientCert: []byte("cert"), ClientKey: []byte("key")},
-		"invalid smart proxy":    {ManagerGRPC: "https://manager", StaticURL: "http://static", SmartProxyURL: "ftp://proxy", SchedulerHost: "scheduler.example.com", SchedulerClusterID: "2", CACert: []byte("ca"), ClientCert: []byte("cert"), ClientKey: []byte("key")},
-		"invalid nydus mirror":   {ManagerGRPC: "https://manager", StaticURL: "http://static", NydusMirrorURL: "https://proxy.example.com", SchedulerHost: "scheduler.example.com", SchedulerClusterID: "2", CACert: []byte("ca"), ClientCert: []byte("cert"), ClientKey: []byte("key")},
+		"manager without https": {ManagerGRPC: "http://manager", StaticURL: "http://static", SchedulerClusterID: "2", CACert: []byte("ca"), ClientCert: []byte("cert"), ClientKey: []byte("key")},
+		"static without scheme": {ManagerGRPC: "https://manager", StaticURL: "static", SchedulerClusterID: "2", CACert: []byte("ca"), ClientCert: []byte("cert"), ClientKey: []byte("key")},
+		"missing ID":            {ManagerGRPC: "https://manager", StaticURL: "http://static", CACert: []byte("ca"), ClientCert: []byte("cert"), ClientKey: []byte("key")},
+		"missing cert":          {ManagerGRPC: "https://manager", StaticURL: "http://static", SchedulerClusterID: "2", CACert: []byte("ca"), ClientCert: []byte("cert")},
+		"invalid smart proxy":   {ManagerGRPC: "https://manager", StaticURL: "http://static", SmartProxyURL: "ftp://proxy", SchedulerClusterID: "2", CACert: []byte("ca"), ClientCert: []byte("cert"), ClientKey: []byte("key")},
+		"invalid nydus mirror":  {ManagerGRPC: "https://manager", StaticURL: "http://static", NydusMirrorURL: "https://proxy.example.com", SchedulerClusterID: "2", CACert: []byte("ca"), ClientCert: []byte("cert"), ClientKey: []byte("key")},
 	}
 	for name, payload := range cases {
 		t.Run(name, func(t *testing.T) {

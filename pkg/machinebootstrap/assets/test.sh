@@ -28,15 +28,14 @@ RUNNER_EOF
 chmod +x "$RUNNER"
 
 payload() {
-  local ca cert key env host mirror ips id
-  host="${1:-scheduler.example.test}"
-  mirror="${2:-}"
-  ips="${3-203.0.113.10,203.0.113.11}"
-  id="${4:-2}"
+  local ca cert key env mirror ips id
+  mirror="${1:-}"
+  ips="${2-203.0.113.10,203.0.113.11}"
+  id="${3:-2}"
   ca="$(printf 'dummy-ca\n' | base64 | tr -d '\n')"
   cert="$(printf 'dummy-cert\n' | base64 | tr -d '\n')"
   key="$(printf 'dummy-key\n' | base64 | tr -d '\n')"
-  env="$(printf 'MANAGER_GRPC=https://manager-grpc.example.test:443\nSTATIC_URL=http://static.example.test\nSCHEDULER_HOST=%s\nSCHEDULER_CLUSTER_ID=%s\nSCHEDULER_IPS=%s\nCA_CRT_B64=%s\nCLIENT_CRT_B64=%s\nCLIENT_KEY_B64=%s\n' "$host" "$id" "$ips" "$ca" "$cert" "$key")"
+  env="$(printf 'MANAGER_GRPC=https://manager-grpc.example.test:443\nSTATIC_URL=http://static.example.test\nSCHEDULER_CLUSTER_ID=%s\nSCHEDULER_IPS=%s\nCA_CRT_B64=%s\nCLIENT_CRT_B64=%s\nCLIENT_KEY_B64=%s\n' "$id" "$ips" "$ca" "$cert" "$key")"
   if [ -n "$mirror" ]; then
     env="${env}"$'\n'"NYDUS_MIRROR_URL=${mirror}"
   fi
@@ -623,7 +622,7 @@ if [ -f "${ROOT_TWO}/var/lib/rancher/rke2/agent/etc/containerd/config-v3.toml.tm
 fi
 
 ROOT_MIRROR="${WORK}/root-mirror"
-MIRROR_CFG="$(payload scheduler.example.test https://proxy.example.test/docker.io/)"
+MIRROR_CFG="$(payload https://proxy.example.test/docker.io/)"
 P2P_ROOT="$ROOT_MIRROR" KERNEL_CONFIG_FILE="$N_KERNEL_CONFIG" SKIP_DOWNLOAD=1 SKIP_MODULES=1 SKIP_SYSTEMD=1 SKIP_PREFLIGHT=1 CONTAINERD_MAJOR=1 \
   "$RUNNER" "$INSTALL" "$MIRROR_CFG" > "${WORK}/mirror.log" 2>&1
 for mirror_host in docker.io index.docker.io _default; do
@@ -649,14 +648,14 @@ assert_not_contains "${WORK}/mirror.log" 'dummy-key'
 
 ROOT_BAD_MIRROR="${WORK}/root-bad-mirror"
 if P2P_ROOT="$ROOT_BAD_MIRROR" SKIP_DOWNLOAD=1 SKIP_MODULES=1 SKIP_SYSTEMD=1 SKIP_PREFLIGHT=1 CONTAINERD_MAJOR=1 \
-  "$RUNNER" "$INSTALL" "$(payload scheduler.example.test ftp://proxy.example.test/docker.io)" > "${WORK}/bad-mirror.log" 2>&1; then
+  "$RUNNER" "$INSTALL" "$(payload ftp://proxy.example.test/docker.io)" > "${WORK}/bad-mirror.log" 2>&1; then
   echo "p2p-static self-test: invalid nydus mirror URL was accepted" >&2
   exit 1
 fi
 assert_contains "${WORK}/bad-mirror.log" 'nydus_mirror_url must use http:// or https://'
 
 ROOT_FALLBACK="${WORK}/root-fallback"
-FALLBACK_CFG="$(payload scheduler.unreachable.invalid)"
+FALLBACK_CFG="$(payload)"
 P2P_ROOT="$ROOT_FALLBACK" SKIP_DOWNLOAD=1 SKIP_MODULES=1 SKIP_SYSTEMD=1 CONTAINERD_MAJOR=1 \
   P2P_PREFLIGHT_TIMEOUT=1 "$RUNNER" "$INSTALL" "$FALLBACK_CFG" > "${WORK}/fallback.log" 2>&1
 FALLBACK_TEMPLATE="${ROOT_FALLBACK}/var/lib/rancher/rke2/agent/etc/containerd/config.toml.tmpl"
@@ -909,7 +908,7 @@ assert_file "${ROOT_P2P_GITHUB}/usr/local/bin/containerd-nydus-grpc"
 assert_contains "${WORK}/p2p-github.log" 'nydus tarball: using GitHub release'
 assert_contains "${WORK}/p2p-github.log" 'nydus-snapshotter: using'
 
-CFG_NO_IPS="$(payload "" "" "" "")"
+CFG_NO_IPS="$(payload "" "" "")"
 ROOT_NO_SCHED="${WORK}/root-no-sched"
 p2p_run "$ROOT_NO_SCHED" "$CFG_NO_IPS" 1 ok > "${WORK}/p2p-no-sched.log" 2>&1
 assert_file "${ROOT_NO_SCHED}/usr/local/bin/nydusd"
@@ -1322,7 +1321,7 @@ assert_not_contains "$README" 'k3s-gpu-erofs'
 
 # Empty scheduler IPs: install configs but do not write the dfdaemon start marker.
 ROOT_NO_IPS="${WORK}/root-no-ips"
-NO_IPS_CFG="$(payload scheduler.example.test "" "")"
+NO_IPS_CFG="$(payload "" "")"
 P2P_ROOT="$ROOT_NO_IPS" SKIP_DOWNLOAD=1 SKIP_MODULES=1 SKIP_SYSTEMD=1 SKIP_PREFLIGHT=1 CONTAINERD_MAJOR=1 \
   "$RUNNER" "$INSTALL" "$NO_IPS_CFG" > "${WORK}/no-ips.log" 2>&1
 assert_contains "${ROOT_NO_IPS}/etc/dragonfly/dynconfig.yaml" 'addrs: []'
@@ -1340,7 +1339,7 @@ assert_contains "$INSTALL" 'if [ -n "${SCHEDULER_IPS:-}" ]; then'
 # First seed node: scheduler ID is still absent, so the operator injects the
 # zero placeholder and the host must install without starting dfdaemon.
 ROOT_NO_ID="${WORK}/root-no-id"
-NO_ID_CFG="$(payload scheduler.example.test "" "" 0)"
+NO_ID_CFG="$(payload "" "" 0)"
 P2P_ROOT="$ROOT_NO_ID" SKIP_DOWNLOAD=1 SKIP_MODULES=1 SKIP_SYSTEMD=1 SKIP_PREFLIGHT=1 CONTAINERD_MAJOR=1 \
   "$RUNNER" "$INSTALL" "$NO_ID_CFG" > "${WORK}/no-id.log" 2>&1
 assert_contains "${ROOT_NO_ID}/etc/dragonfly/dfget.yaml" 'schedulerClusterID: 0'
@@ -1352,7 +1351,7 @@ fi
 
 # P2P_DISTRO wins over the filesystem when no k3s directory exists.
 ROOT_DISTRO="${WORK}/root-distro"
-DISTRO_CFG="$(payload scheduler.example.test "" "")"
+DISTRO_CFG="$(payload "" "")"
 P2P_ROOT="$ROOT_DISTRO" P2P_DISTRO=k3s SKIP_DOWNLOAD=1 SKIP_MODULES=1 SKIP_SYSTEMD=1 SKIP_PREFLIGHT=1 CONTAINERD_MAJOR=1 \
   "$RUNNER" "$INSTALL" "$DISTRO_CFG" > "${WORK}/distro.log" 2>&1
 assert_contains "${ROOT_DISTRO}/etc/systemd/system/dfdaemon-bootstrap.service" 'Before=k3s.service'

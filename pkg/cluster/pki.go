@@ -154,11 +154,7 @@ func (c *Controller) ensurePKI(cluster *provv1.Cluster, roles Roles, seedIPs []s
 	}
 
 	if roles.Seed {
-		schedulerOpts, err := c.schedulerIssueOptions(cluster, seedIPs, seedDiscoveryFailed, scheduler)
-		if err != nil {
-			c.event(cluster, corev1.EventTypeWarning, "SchedulerHostUnavailable", err.Error())
-			return cluster, false, err
-		}
+		schedulerOpts := c.schedulerIssueOptions(cluster, seedIPs, seedDiscoveryFailed, scheduler)
 		scheduler, err = c.ensureServerLeaf(operatorNS, helmop.SchedulerSourceSecretName(cluster.Name), legacyServer, ca, schedulerOpts, phaseA)
 		if err != nil {
 			c.event(cluster, corev1.EventTypeWarning, "MTLSSecretUnavailable", err.Error())
@@ -533,27 +529,20 @@ func (c *Controller) managerIssueOptions() (pki.IssueOptions, error) {
 	}, nil
 }
 
-func (c *Controller) schedulerIssueOptions(cluster *provv1.Cluster, seedIPs []string, discoveryFailed bool, existing *corev1.Secret) (pki.IssueOptions, error) {
-	clusterID := c.clusterID(cluster)
-	if clusterID == "" {
-		return pki.IssueOptions{}, fmt.Errorf("cluster %s/%s has empty status.clusterName and no --p2p-cluster-id fallback", cluster.Namespace, cluster.Name)
-	}
-	host := schedulerHost(c.opts.P2PDomain, clusterID)
-	if host == "" {
-		return pki.IssueOptions{}, fmt.Errorf("scheduler host is empty: --p2p-domain is required")
-	}
+func (c *Controller) schedulerIssueOptions(cluster *provv1.Cluster, seedIPs []string, discoveryFailed bool, existing *corev1.Secret) pki.IssueOptions {
+	serviceDNS := cluster.Name + "-control-scheduler." + helmop.TargetNamespace + ".svc"
 	ips := schedulerSANIPs(seedIPs)
 	if discoveryFailed {
 		ips = append(ips, existingSchedulerIPs(existing)...)
 	}
 	ips = append(ips, net.IPv4(127, 0, 0, 1), net.IPv6loopback)
 	return pki.IssueOptions{
-		CommonName:  host,
-		DNSNames:    pki.NormalizeDNSNames([]string{host, cluster.Name + "-control-scheduler." + helmop.TargetNamespace + ".svc", "localhost"}),
+		CommonName:  serviceDNS,
+		DNSNames:    pki.NormalizeDNSNames([]string{serviceDNS, "localhost"}),
 		IPAddresses: pki.NormalizeIPs(ips),
 		ServerAuth:  true,
 		ClientAuth:  true,
-	}, nil
+	}
 }
 
 // schedulerSANIPs returns the scheduler addresses that peers may dial as

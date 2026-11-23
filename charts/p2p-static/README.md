@@ -16,7 +16,7 @@ self-test fails if the two drift. The location sets `access_log off` and
 The node-side env is embedded in the machine-bootstrap Secret by the operator
 and exported to the piped `bash` with `set -a`/`set +a`: `P2P_DISTRO`,
 `SCHEDULER_IPS`, `MANAGER_GRPC`, `STATIC_URL`, `SMART_PROXY_URL`,
-`NYDUS_MIRROR_URL`, `SCHEDULER_HOST`, `SCHEDULER_CLUSTER_ID`, the
+`NYDUS_MIRROR_URL`, `SCHEDULER_CLUSTER_ID`, the
 client/nydus/snapshotter versions, and the CA, client certificate, and client
 key (base64). The effective `user_data` the driver sends (gzip+base64 of
 the Secret value) stays below the 32 KiB limit used by the test provider; the

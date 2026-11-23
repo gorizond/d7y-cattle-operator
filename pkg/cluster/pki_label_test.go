@@ -11,7 +11,7 @@ import (
 
 func TestPKISecretLabelsValid(t *testing.T) {
 	controller, _, _ := newTestController(t)
-	installLegacyClient(t, controller, "c-m-a")
+	installLegacyClient(t, controller)
 	controller.machines = &fakeMachineCache{machines: []*capiv1beta2.Machine{seedMachine("c1", "c1-0", "203.0.113.10")}}
 	controller.downstream = &fakeSchedulerPodLister{pods: []schedulerPod{{NodeName: "c1-node", HostIP: "203.0.113.10"}}}
 	cluster := pkiSeed("c1", "c-m-a")

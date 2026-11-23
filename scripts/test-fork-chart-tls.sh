@@ -165,6 +165,11 @@ seedClient:
   replicas: 3
   persistence:
     enable: false
+  dynconfig:
+    scheduler:
+      addrs:
+        - 10.48.0.45:8002
+        - 62.83.78.181:8002
   resources:
     requests:
       cpu: 150m
@@ -178,6 +183,11 @@ client:
   dfinit:
     enable: false
   priorityClassName: system-node-critical
+  dynconfig:
+    scheduler:
+      addrs:
+        - 10.48.0.45:8002
+        - 62.83.78.181:8002
   resources:
     requests:
       cpu: 250m
@@ -188,6 +198,11 @@ client:
 YAML
 
 helm template c1-data "$chart" --namespace dragonfly-system -f "$tmp/data-values.yaml" >"$tmp/data.yaml"
+
+# The operator sets scheduler.addrs from node IPs.
+if ! grep -A6 'dynconfig.yaml: |-' "$tmp/data.yaml" | grep -q 'addrs:'; then
+  fail "data dynconfig is missing scheduler addrs"
+fi
 client_doc=$(awk 'BEGIN{RS="---"} /kind: DaemonSet/ && /name: c1-data-client/ {print}' "$tmp/data.yaml")
 seed_doc=$(awk 'BEGIN{RS="---"} /kind: StatefulSet/ && /name: c1-data-seed-client/ {print}' "$tmp/data.yaml")
 

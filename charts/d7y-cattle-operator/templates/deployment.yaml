@@ -38,8 +38,6 @@ spec:
               value: {{ .Values.nginx.staticURL | quote }}
             - name: NYDUS_MIRROR_URL
               value: {{ .Values.nydus.mirrorURL | quote }}
-            - name: P2P_DOMAIN
-              value: {{ .Values.scheduler.domain | quote }}
             - name: P2P_CLUSTER_ID
               value: {{ .Values.scheduler.clusterID | quote }}
             - name: MTLS_SECRET_NAME

@@ -17,8 +17,8 @@ Pod image-mutation admission, Harbor, and registry-proxy add-ons are out of scop
 - Maintains a stable CA Secret (`dragonfly-p2p-ca`, Opaque) and split leaf
   identities: the shared client `dragonfly-p2p-mtls` (ClientAuth, no SANs), the
   manager `dragonfly-p2p-manager` (manager DNS/IP SANs), and one
-  `<cluster>-p2p-scheduler` leaf per seed (scheduler host, Service, and current
-  public node IPs). The leaf is delivered by a per-seed
+  `<cluster>-p2p-scheduler` leaf per seed (Service DNS and current node IPs).
+  The leaf is delivered by a per-seed
   `<cluster>-p2p-scheduler-cert` HelmOp using the `p2p-scheduler-cert` chart;
   the Secret keeps the name `dragonfly-p2p-scheduler` and the `tls.crt`/
   `tls.key`/`ca.crt` keys. The control HelmOp depends on the scheduler-cert
@@ -107,8 +107,6 @@ flowchart LR
     end
   end
 
-  PUB["d7y-scheduler.&lt;cluster-id&gt;.&lt;domain&gt;"]
-
   FLEET -->|"HelmOps"| D1
   FLEET -->|"HelmOps"| D2
   OP -.->|"machine-bootstrap Secret: adds short p2p block"| MC
@@ -121,8 +119,7 @@ flowchart LR
   DF3 <-->|"P2P (joining)"| DF1
   DF2 <-->|"P2P across clusters"| DF4
   DF4 <-->|"P2P"| DF5
-  DF3 -->|"scheduler alias"| PUB
-  PUB -->|"TCP 443 TLS passthrough"| SCH1
+  DF3 -->|"scheduler node IPs :8002"| SCH1
 
   classDef workload fill:#f3f4f6,stroke:#6b7280
   classDef dfdaemon fill:#dbeafe,stroke:#2563eb
@@ -151,13 +148,13 @@ Color legend: gray = workload pods, blue = dfdaemon, green = scheduler, purple =
 - The operator runs on the local Rancher/Fleet cluster. It reconciles every Cluster labelled `d7y-operator-cattle: "true"` and creates the Fleet HelmOps for KeyDB, manager, scheduler/seed, extras, the
 containerd mirror, the singleton p2p-static server, and per-seed host-sync. Its machine-bootstrap Secret controller inserts a short p2p bootstrap block (env in the Secret, script served by `p2p-static`) into the node-driver bootstrap script that Rancher merges into cloud-init, before the Rancher `do_install "$@"` call.
 - Every running downstream node has a dfdaemon pod, with nydus on the host; pods pull through the node-local proxy and Dragonfly distributes blobs P2P. The diagram shows a scheduler pod per seed cluster and the manager pod on a node in downstream cluster B.
-- The orange dashed node in downstream cluster A consumes that bootstrap Secret through cloud-init before RKE2: it has only the host dfdaemon and nydus and is already joining P2P. The scheduler alias `d7y-scheduler.<cluster-id>.<domain>` is published by external-dns (or a wildcard zone) and used before RKE2 to bootstrap node/RKE2 image pulls.
+- The orange dashed node in downstream cluster A consumes that bootstrap Secret through cloud-init before RKE2: it has only the host dfdaemon and nydus and is already joining P2P. It dials the scheduler node IPs on `:8002` from `SCHEDULER_IPS` before RKE2 to bootstrap node/RKE2 image pulls.
 
 ### Multi-cluster topology
 
 - The manager is a role, not a fixed local component: the diagram places the purple manager pod on a node in downstream cluster B, while any Cluster with `d7y-operator-manager` can run it; the operator stays on the local Rancher cluster. Green scheduler pods are per seed Cluster, and blue dfdaemon pods run on every running node. Manager and seed roles may be split across different Clusters, each with its own KeyDB/extras release.
-- N downstream/seed Clusters have N scheduler IDs. Each seed Cluster runs its own scheduler + seed under its ID. The scheduler/seed for a new Cluster's ID runs in a seed Cluster reachable before the new Cluster's RKE2 (it cannot run in that Cluster before its own RKE2 exists); external-dns or a wildcard zone publishes `d7y-scheduler.<cluster-id>.<domain>`. In downstream cluster A, the orange dashed node is the pre-RKE2 bootstrap stage: its host dfdaemon joins P2P before RKE2 and any Kubernetes Pods exist.
-- `p2p-install.sh` fetched by the machine-bootstrap Secret from `p2p-static` + the host dfdaemon bootstrap start before RKE2 and pull node/RKE2 images via Dragonfly P2P from the scheduler/seed. This accelerates provisioning before the Kubernetes node starts; if the alias is unreachable, the script is fail-open and pulls directly.
+- N downstream/seed Clusters have N scheduler IDs. Each seed Cluster runs its own scheduler + seed under its ID. The scheduler/seed for a new Cluster's ID runs in a seed Cluster reachable before the new Cluster's RKE2 (it cannot run in that Cluster before its own RKE2 exists); the host bootstrap dials that scheduler's node IPs on `:8002`. In downstream cluster A, the orange dashed node is the pre-RKE2 bootstrap stage: its host dfdaemon joins P2P before RKE2 and any Kubernetes Pods exist.
+- `p2p-install.sh` fetched by the machine-bootstrap Secret from `p2p-static` + the host dfdaemon bootstrap start before RKE2 and pull node/RKE2 images via Dragonfly P2P from the scheduler/seed. This accelerates provisioning before the Kubernetes node starts; if the scheduler IPs are unreachable, the script is fail-open and pulls directly.
 
 ## Follow-ups
 
@@ -184,13 +181,12 @@ helm install d7y-cattle-operator gorizond/d7y-cattle-operator \
   --set manager.grpcDomain=manager-grpc.example.com \
   --set manager.apiURL=https://manager-api.example.com \
   --set nginx.staticURL=https://static.example.com \
-  --set managerApiCredentialsSecret=dragonfly-manager-api \
-  --set scheduler.domain=example.com
+  --set managerApiCredentialsSecret=dragonfly-manager-api
 ```
 
-`scheduler.domain` has no default and is required. It builds the per-seed
-scheduler DNS SAN `d7y-scheduler.<cluster-id>.<domain>`; scheduler clients dial
-the scheduler node IPs on `8002`. There is no public scheduler IP value.
+Scheduler clients dial scheduler node IPs on `8002` from the per-seed
+`p2p.dragonfly.io/scheduler-ips` annotation. There is no scheduler DNS alias or
+scheduler IP value.
 
 For local development use `charts/d7y-cattle-operator` instead of the repository
 chart. The release tag (`v<chart version>`) and the default image tag
@@ -211,7 +207,6 @@ and JWT signing key; see [Manager root credentials](#manager-root-credentials).
 | `manager.apiURL` | `MANAGER_API_URL` | Public manager REST API URL (`https://`) |
 | `nginx.staticURL` | `NGINX_STATIC_URL` | Base URL for the `p2p-install.sh` endpoint and the static client/nydus/snapshotter assets; may be the manager host when the p2p-static manager route is enabled. |
 | `nydus.mirrorURL` | `NYDUS_MIRROR_URL` | Optional HTTPS mirror path for nydus blobs in the bootstrap payload |
-| `scheduler.domain` | `P2P_DOMAIN` | Base domain for `d7y-scheduler.<fleet-cluster-id>.<domain>`; required |
 | `scheduler.clusterID` | `P2P_CLUSTER_ID` | Optional fallback when provisioning Cluster `status.clusterName` is empty |
 | `managerApiCredentialsSecret` | `MANAGER_API_CREDENTIALS_SECRET` | Secret with `username`, `password`, and `jwt-key` for the manager API and manager root login; generated by the operator when absent |
 | `dragonfly.chart.repo` | `DRAGONFLY_CHART_REPO` | Helm repository URL of the Dragonfly chart; defaults to the gorizond fork |
@@ -250,7 +245,6 @@ Defaults: `mtlsSecretName=dragonfly-p2p-mtls`, `dragonfly.chart.name=dragonfly`,
 verified amd64/arm64 v0.16.0 hashes. These values are the single source for the
 P2P charts. Scheduler node IPs come from
 downstream scheduler pods/CAPI Machines; there is no scheduler IP value.
-`scheduler.domain` has no default and is required.
 `scheduler.clusterID` is only a fallback for an unpopulated
 `status.clusterName`.
 
@@ -268,8 +262,8 @@ matching role label must also be present for Fleet to render the shared release.
 | `d7y-operator-seed` | `"true"` | Seed role (shared control/data/extras/mirror) |
 
 Role labels are user-managed: the operator stamps
-`p2p.dragonfly.io/cluster-id` (from `status.clusterName`, read by the scheduler
-host template) and `p2p.dragonfly.io/scheduler-ips`. A seed Cluster publishes
+`p2p.dragonfly.io/cluster-id` (from `status.clusterName`, used by shared Fleet
+targeting) and `p2p.dragonfly.io/scheduler-ips`. A seed Cluster publishes
 its own public CAPI machine IPs; a non-seed Cluster aggregates the scheduler-ips
 of other gated seed clusters. The same annotation feeds the
 pre-install bootstrap and the shared scheduler advertiseIP. An empty list is
@@ -315,8 +309,6 @@ The rendered values keep the per-cluster downstream names:
   `${ .ClusterName }-control`, `${ .ClusterName }-data`
 - Ingress/VPA backends: `${ .ClusterName }-manager`,
   `${ .ClusterName }-control-scheduler`, `${ .ClusterName }-data-seed-client`
-- Scheduler public host:
-  `d7y-scheduler.${ index .ClusterLabels "p2p.dragonfly.io/cluster-id" }.<domain>`
 - Scheduler cluster ID and advertiseIP:
   `${ index .ClusterAnnotations "p2p.dragonfly.io/scheduler-cluster-id" }` and
   the first element of `p2p.dragonfly.io/scheduler-ips`
@@ -492,9 +484,9 @@ The PKI layout is:
 - `<cluster>-p2p-scheduler` source Secret in the operator namespace; its
   contents are rendered as `dragonfly-p2p-scheduler` by the per-seed
   `<cluster>-p2p-scheduler-cert` HelmOp in the Cluster's downstream
-  `dragonfly-system` namespace. It carries the scheduler hostname,
-  `<cluster>-control-scheduler.dragonfly-system.svc`, the current seed public
-  IPs, and loopbacks.
+  `dragonfly-system` namespace. It carries the scheduler Service DNS name
+  `<cluster>-control-scheduler.dragonfly-system.svc`, the current seed IPs, and
+  loopbacks.
 
 Leaf Secrets are `kubernetes.io/tls`; their `ca.crt` is the CA trust bundle.
 The scheduler certificate revision is per seed
@@ -602,7 +594,7 @@ curl -sfL "<static>/p2p-install.sh" | bash || true
 
 The env is shell-quoted in the Secret and exported to the piped `bash` with
 `set -a`/`set +a`; it includes `P2P_DISTRO`, `SCHEDULER_IPS`, the
-manager/static URLs, scheduler host/ID, versions, and the CA, client
+manager/static URLs, scheduler ID, versions, and the CA, client
 certificate, and **client key** (mTLS needs all three). The plain
 `p2p-static` URL carries no payload/query. The effective node-driver
 `user_data` (gzip+base64 of the Secret value) stays below the 32 KiB limit used

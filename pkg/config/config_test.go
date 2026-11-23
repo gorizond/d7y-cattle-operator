@@ -10,7 +10,6 @@ var envKeys = []string{
 	"MANAGER_GRPC_PORT",
 	"CONTAINERD_MIRROR_PORT",
 	"MANAGER_API_URL",
-	"P2P_DOMAIN",
 	"P2P_CLUSTER_ID",
 	"MTLS_SECRET_NAME",
 	"MANAGER_API_CREDENTIALS_SECRET",
@@ -68,7 +67,6 @@ func requiredArgs() []string {
 		"--manager-grpc-domain=manager-grpc.example.com",
 		"--manager-api-url=https://manager-api.example.com",
 		"--nginx-static-url=https://static.example.com",
-		"--p2p-domain=example.com",
 		"--manager-api-credentials-secret=dragonfly-manager-api",
 	}
 }
@@ -89,9 +87,6 @@ func TestLoadDefaults(t *testing.T) {
 	}
 	if cfg.ClusterIDFallback != "" {
 		t.Errorf("ClusterIDFallback = %q, want empty", cfg.ClusterIDFallback)
-	}
-	if cfg.P2PDomain != "example.com" {
-		t.Errorf("P2PDomain = %q, want example.com", cfg.P2PDomain)
 	}
 	if cfg.MTLSSecretName != DefaultMTLSSecretName {
 		t.Errorf("MTLSSecretName = %q, want %q", cfg.MTLSSecretName, DefaultMTLSSecretName)
@@ -190,7 +185,6 @@ func TestLoadRequiredFlags(t *testing.T) {
 	for _, required := range []string{
 		"--manager-grpc-domain",
 		"--manager-api-url",
-		"--p2p-domain",
 		"--manager-api-credentials-secret",
 	} {
 		t.Run(required, func(t *testing.T) {
@@ -231,7 +225,6 @@ func TestLoadInvalidValues(t *testing.T) {
 		"invalid extras ingress controller": "--extras-ingress-controller=haproxy",
 		"invalid extras ingress class":      "--extras-ingress-class-name=Bad_Name",
 		"invalid extras ingress TLS Secret": "--extras-ingress-tls-secret=Bad_Name",
-		"invalid p2p domain":                "--p2p-domain=Bad_Suffix",
 		"invalid p2p cluster id":            "--p2p-cluster-id=Bad_Cluster",
 	}
 
@@ -252,7 +245,6 @@ func TestLoadEnvOverride(t *testing.T) {
 	t.Setenv("MANAGER_GRPC_DOMAIN", "grpc.env.example.com")
 	t.Setenv("MANAGER_GRPC_PORT", "8443")
 	t.Setenv("MANAGER_API_URL", "https://api.env.example.com")
-	t.Setenv("P2P_DOMAIN", "env.example.com")
 	t.Setenv("P2P_CLUSTER_ID", "c-m-env")
 	t.Setenv("MTLS_SECRET_NAME", "env-mtls")
 	t.Setenv("MANAGER_API_CREDENTIALS_SECRET", "env-credentials")
@@ -295,9 +287,6 @@ func TestLoadEnvOverride(t *testing.T) {
 	}
 	if cfg.ManagerAPIURL != "https://api.env.example.com" {
 		t.Errorf("ManagerAPIURL = %q", cfg.ManagerAPIURL)
-	}
-	if cfg.P2PDomain != "env.example.com" {
-		t.Errorf("P2PDomain = %q", cfg.P2PDomain)
 	}
 	if cfg.ClusterIDFallback != "c-m-env" {
 		t.Errorf("ClusterIDFallback = %q", cfg.ClusterIDFallback)

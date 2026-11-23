@@ -47,8 +47,6 @@ type InstallConfig struct {
 	StaticURL          string
 	SmartProxyURL      string
 	NydusMirrorURL     string
-	SchedulerDomain    string
-	ClusterIDFallback  string
 	ClientVersion      string
 	NydusVersion       string
 	SnapshotterVersion string
@@ -71,14 +69,6 @@ func BuildInstallEnv(cluster *provv1.Cluster, secret *corev1.Secret, schedulerID
 		// started while SCHEDULER_IPS is empty.
 		schedulerID = "0"
 	}
-	clusterID := strings.TrimSpace(cfg.ClusterIDFallback)
-	if cluster != nil && strings.TrimSpace(cluster.Status.ClusterName) != "" {
-		clusterID = strings.TrimSpace(cluster.Status.ClusterName)
-	}
-	host := schedulerHost(cfg.SchedulerDomain, clusterID)
-	if host == "" {
-		return "", fmt.Errorf("scheduler host is empty: P2P_DOMAIN and cluster ID are required")
-	}
 	if cfg.ManagerGRPCPort < 1 || cfg.ManagerGRPCPort > 65535 {
 		return "", fmt.Errorf("manager gRPC port %d is outside 1-65535", cfg.ManagerGRPCPort)
 	}
@@ -93,7 +83,6 @@ func BuildInstallEnv(cluster *provv1.Cluster, secret *corev1.Secret, schedulerID
 		StaticURL:          cfg.StaticURL,
 		SmartProxyURL:      cfg.SmartProxyURL,
 		NydusMirrorURL:     cfg.NydusMirrorURL,
-		SchedulerHost:      host,
 		SchedulerClusterID: schedulerID,
 		ClientVersion:      cfg.ClientVersion,
 		NydusVersion:       cfg.NydusVersion,
@@ -119,13 +108,4 @@ func Distro(cluster *provv1.Cluster) string {
 		return "rke2"
 	}
 	return "k3s"
-}
-
-func schedulerHost(domain, clusterID string) string {
-	domain = strings.TrimSpace(strings.Trim(domain, "."))
-	clusterID = strings.TrimSpace(clusterID)
-	if domain == "" || clusterID == "" {
-		return ""
-	}
-	return fmt.Sprintf("d7y-scheduler.%s.%s", clusterID, domain)
 }

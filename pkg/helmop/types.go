@@ -59,13 +59,11 @@ const (
 // Fleet targeting labels. Fleet matches spec.targets[].clusterSelector against
 // the provisioning Cluster labels, so the label contract below is the only way
 // a shared HelmOp can fan out. Labels are user-managed: the operator stamps the
-// cluster-id label (required by the scheduler-host template) and leaves role
-// labels untouched.
+// cluster-id label for target selection and leaves role labels untouched.
 const (
 	// LabelGate opts a Cluster into the Dragonfly stack.
 	LabelGate = "d7y-operator-cattle"
-	// LabelClusterID carries status.clusterName; the scheduler host template
-	// reads it from .ClusterLabels.
+	// LabelClusterID carries the cluster ID used by shared Fleet targets.
 	LabelClusterID = "p2p.dragonfly.io/cluster-id"
 
 	LabelRoleManager = "d7y-operator-manager"
@@ -241,9 +239,6 @@ type Cluster struct {
 	SchedulerReplicas          string
 	SeedClientReplicas         string
 	SchedulerIPs               string
-	// P2PDomain is the operator-wide scheduler base domain used to build the
-	// shared scheduler host template.
-	P2PDomain string
 	// MTLSCertRevision is the shared client identity revision.
 	MTLSCertRevision string
 	// ManagerCertRevision is the manager server identity revision.

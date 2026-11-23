@@ -71,7 +71,6 @@ type Config struct {
 	ManagerAPIURL                string
 	NginxStaticURL               string
 	NydusMirrorURL               string
-	P2PDomain                    string
 	ClusterIDFallback            string
 	MTLSSecretName               string
 	ManagerAPICredentialsSecret  string
@@ -151,7 +150,6 @@ func Load(args []string) (*Config, error) {
 	fs.StringVar(&cfg.ManagerAPIURL, "manager-api-url", envOr("MANAGER_API_URL", ""), "public HTTPS URL of the manager REST API")
 	fs.StringVar(&cfg.NginxStaticURL, "nginx-static-url", envOr("NGINX_STATIC_URL", ""), "base URL of the static asset server (http or https)")
 	fs.StringVar(&cfg.NydusMirrorURL, "nydus-mirror-url", envOr("NYDUS_MIRROR_URL", ""), "optional HTTPS mirror path for nydus blobs")
-	fs.StringVar(&cfg.P2PDomain, "p2p-domain", envOr("P2P_DOMAIN", ""), "base domain for the per-cluster scheduler alias d7y-scheduler.<cluster>.<domain>")
 	fs.StringVar(&cfg.ClusterIDFallback, "p2p-cluster-id", envOr("P2P_CLUSTER_ID", ""), "fallback cluster ID when provisioning Cluster status.clusterName is empty")
 	fs.StringVar(&cfg.MTLSSecretName, "mtls-secret-name", envOr("MTLS_SECRET_NAME", DefaultMTLSSecretName), "name of the mTLS Secret")
 	fs.StringVar(&cfg.ManagerAPICredentialsSecret, "manager-api-credentials-secret", envOr("MANAGER_API_CREDENTIALS_SECRET", ""), "name of the Secret holding manager API credentials")
@@ -299,11 +297,6 @@ func (c *Config) Validate() error {
 		if err := validateNydusMirrorURL(c.NydusMirrorURL); err != nil {
 			add("--nydus-mirror-url: %v", err)
 		}
-	}
-	if c.P2PDomain == "" {
-		add("--p2p-domain is required")
-	} else if msgs := validation.IsDNS1123Subdomain(c.P2PDomain); len(msgs) > 0 {
-		add("--p2p-domain: %s", strings.Join(msgs, "; "))
 	}
 	if c.ClusterIDFallback != "" {
 		if msgs := validation.IsDNS1123Label(c.ClusterIDFallback); len(msgs) > 0 {

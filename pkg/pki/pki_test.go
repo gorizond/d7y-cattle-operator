@@ -150,8 +150,8 @@ func TestCASignManagerSANs(t *testing.T) {
 func TestCASignSchedulerSANs(t *testing.T) {
 	ca := testCA(t)
 	opts := IssueOptions{
-		CommonName:  "d7y-scheduler.c-m-a.example.com",
-		DNSNames:    []string{"d7y-scheduler.c-m-a.example.com", "c1-control-scheduler.dragonfly-system.svc"},
+		CommonName:  "c1-control-scheduler.dragonfly-system.svc",
+		DNSNames:    []string{"c1-control-scheduler.dragonfly-system.svc"},
 		IPAddresses: []net.IP{net.ParseIP(testSeedIP), net.ParseIP("127.0.0.1"), net.ParseIP("::1")},
 		ServerAuth:  true,
 		ClientAuth:  true,
