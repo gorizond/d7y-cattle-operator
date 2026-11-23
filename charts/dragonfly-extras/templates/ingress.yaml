@@ -1,4 +1,5 @@
-{{- $controller := .Values.ingress.controller | default "nginx" -}}
+{{- $controller := include "dragonfly-extras.ingressController" . -}}
+{{- $className := include "dragonfly-extras.ingressClassName" . -}}
 {{- $grpcTLSSecret := .Values.ingress.grpc.tlsSecret -}}
 {{- $grpcEdgeSecret := $grpcTLSSecret | default .Values.ingress.tls.secretName -}}
 {{- if and .Values.ingress.enabled .Values.ingress.grpc.enabled (eq $controller "nginx") }}
@@ -8,7 +9,6 @@ metadata:
   name: {{ .Release.Name }}-manager-grpc
   labels:
     {{- include "dragonfly-extras.labels" . | nindent 4 }}
-  {{- if eq $controller "nginx" }}
   annotations:
     # The manager serves gRPC over TLS; nginx verifies it with the P2P CA and
     # presents the P2P client certificate. GRPC is kept only for a manager
@@ -23,9 +23,8 @@ metadata:
     nginx.ingress.kubernetes.io/auth-tls-secret: {{ .Values.ingress.mtlsSecret | quote }}
     nginx.ingress.kubernetes.io/auth-tls-verify-depth: "1"
     nginx.ingress.kubernetes.io/ssl-redirect: "false"
-  {{- end }}
 spec:
-  {{- with .Values.ingress.className }}
+  {{- with $className }}
   ingressClassName: {{ . | quote }}
   {{- end }}
   {{- if $grpcEdgeSecret }}
@@ -58,7 +57,7 @@ metadata:
   annotations:
     nginx.ingress.kubernetes.io/backend-protocol: HTTPS
 spec:
-  {{- with .Values.ingress.className }}
+  {{- with $className }}
   ingressClassName: {{ . | quote }}
   {{- end }}
   {{- if .Values.ingress.tls.enabled }}
@@ -79,7 +78,7 @@ spec:
                 port:
                   number: {{ .Values.ingress.rest.port }}
 {{- else if eq $controller "traefik" }}
-{{- if .Capabilities.APIVersions.Has "traefik.io/v1alpha1" }}
+{{- if .Capabilities.APIVersions.Has "traefik.io/v1alpha1/IngressRoute" }}
 # Traefik v3 ignores the service.serversscheme annotation for REST backends,
 # so the HTTPS backend is declared with an IngressRoute. Manager gRPC uses a
 # separate exact-SNI TCP passthrough (ingressroute-manager-grpc-tcp.yaml).
@@ -91,7 +90,7 @@ metadata:
   labels:
     {{- include "dragonfly-extras.labels" . | nindent 4 }}
 spec:
-  {{- with .Values.ingress.className }}
+  {{- with $className }}
   ingressClassName: {{ . | quote }}
   {{- end }}
   entryPoints:
@@ -103,7 +102,7 @@ spec:
         - name: {{ .Values.ingress.rest.service | quote }}
           port: {{ .Values.ingress.rest.port }}
           scheme: https
-          {{- if .Values.ingress.traefik.serversTransport.enabled }}
+          {{- if and .Values.ingress.traefik.serversTransport.enabled (.Capabilities.APIVersions.Has "traefik.io/v1alpha1/ServersTransport") }}
           serversTransport: {{ printf "%s-manager-rest" .Release.Name | quote }}
           {{- end }}
   {{- if .Values.ingress.tls.enabled }}
@@ -113,7 +112,7 @@ spec:
 {{- end }}
 {{- end }}
 {{- end }}
-{{- if and .Values.ingress.enabled .Values.ingress.rest.enabled (eq $controller "traefik") .Values.ingress.traefik.serversTransport.enabled (.Capabilities.APIVersions.Has "traefik.io/v1alpha1") }}
+{{- if and .Values.ingress.enabled .Values.ingress.rest.enabled (eq $controller "traefik") .Values.ingress.traefik.serversTransport.enabled (.Capabilities.APIVersions.Has "traefik.io/v1alpha1/IngressRoute") (.Capabilities.APIVersions.Has "traefik.io/v1alpha1/ServersTransport") }}
 ---
 apiVersion: traefik.io/v1alpha1
 kind: ServersTransport

@@ -229,8 +229,8 @@ and JWT signing key; see [Manager root credentials](#manager-root-credentials).
 | `releases.client` / `.nydus` / `.snapshotter` | `CLIENT_RELEASE_REPO` / `NYDUS_RELEASE_REPO` / `NYDUS_SNAPSHOTTER_RELEASE_REPO` | GitHub release repositories |
 | `versions.client` / `.nydus` / `.snapshotter` | `CLIENT_VERSION` / `NYDUS_VERSION` / `NYDUS_SNAPSHOTTER_VERSION` | Canonical client/nydus/snapshotter versions; defaults `v1.5.14` / `v2.4.5` / `v0.16.0`. The p2p-static and p2p-host-sync charts carry no version defaults. |
 | `checksums.*` | `CLIENT_SHA256_*`, `NYDUS_SHA256_*`, `NYDUS_SNAPSHOTTER_*`, `NYDUS_SNAPSHOTTER_BINARY_SHA256_*` | Canonical fallback pins rendered into both P2P charts; release checksum sidecars are preferred |
-| `extras.ingress.controller` | `EXTRAS_INGRESS_CONTROLLER` | `nginx` (default) or `traefik` |
-| `extras.ingress.className` | `EXTRAS_INGRESS_CLASS_NAME` | Ingress class; empty uses the cluster default |
+| `extras.ingress.controller` | `EXTRAS_INGRESS_CONTROLLER` | `auto` (default), `nginx`, or `traefik`; `auto` picks Traefik only when the target cluster exposes every Traefik CRD kind the enabled features need, otherwise nginx |
+| `extras.ingress.className` | `EXTRAS_INGRESS_CLASS_NAME` | Ingress class; empty keeps the cluster default (`traefik` is defaulted only when Traefik is resolved) |
 | `extras.ingress.grpcEnabled` | `EXTRAS_INGRESS_GRPC_ENABLED` | Render the manager gRPC front when the manager role is active; default `true` |
 | `extras.ingress.restEnabled` | `EXTRAS_INGRESS_REST_ENABLED` | Render the REST Ingress when the manager role is active; default `true` |
 | `extras.ingress.tlsSecret` | `EXTRAS_INGRESS_TLS_SECRET` | Ingress TLS Secret; empty disables the TLS block |
@@ -239,11 +239,11 @@ and JWT signing key; see [Manager root credentials](#manager-root-credentials).
 Defaults: `mtlsSecretName=dragonfly-p2p-mtls`, `dragonfly.chart.name=dragonfly`,
 `dragonfly.chart.repo=https://gorizond.github.io/dragonflyoss-helm-charts`,
 `dragonfly.chart.version=1.10.1-patch.2`, `extras.chart.name=dragonfly-extras`,
-`extras.chart.version=0.1.11`, `hostSync.chart.name=p2p-host-sync`,
+`extras.chart.version=0.1.12`, `hostSync.chart.name=p2p-host-sync`,
 `hostSync.chart.version=0.1.5`, `schedulerCert.chart.name=p2p-scheduler-cert`,
 `schedulerCert.chart.version=0.1.0`, `static.chart.name=p2p-static`,
 `static.chart.version=0.1.12`, `static.releaseName=p2p-static`,
-`extras.ingress.controller=nginx`,
+`extras.ingress.controller=auto`,
 `extras.ingress.grpcEnabled=true`, `extras.ingress.restEnabled=true`,
 `manager.grpcPort=443`, `leaderElect=false`. Version defaults are
 `v1.5.14` / `v2.4.5` / `v0.16.0`; snapshotter binary pins default to the
@@ -828,21 +828,44 @@ recommendation-only VPAs. The operator creates the shared `d7y-extras` HelmOp:
   template the boolean manager role. The Ingress backend Service names are
   templated as `${ .ClusterName }-manager`. The per-Ingress toggles
   are `ingress.grpc.enabled` and `ingress.rest.enabled`; both default to `true`.
-- `ingress.controller=nginx` (default) terminates client mTLS at the edge,
-  serves the P2P certificate for the gRPC host, and reaches the manager with
+- `ingress.controller=auto` (default) is resolved against the **target
+  cluster's** Helm capabilities (the downstream Fleet agent installs the
+  release, so `.Capabilities` reflects that cluster). Traefik is selected only
+  when every Traefik CRD kind the enabled features need exists:
+  `traefik.io/v1alpha1/IngressRoute` for REST,
+  `traefik.io/v1alpha1/IngressRouteTCP` for gRPC, and
+  `traefik.io/v1alpha1/ServersTransport` when REST and the ServersTransport
+  toggle are both enabled. Any missing kind (or no ingress feature enabled)
+  falls back to nginx, which RKE2 ships by default. Explicit
+  `nginx`/`traefik` always wins over detection.
+- `ingress.className` is passed through unchanged when set. When empty, the
+  chart defaults it to `traefik` only for a resolved Traefik controller;
+  nginx stays empty so the cluster's default IngressClass applies. An nginx
+  deployment never gets `className=traefik` forced.
+- In `nginx` mode the chart terminates client mTLS at the edge, serves the P2P
+  certificate for the gRPC host, and reaches the manager with
   `backend-protocol: GRPCS`, `proxy-ssl-secret` (the manager identity Secret,
   which carries `ca.crt` for backend verification and `tls.crt`/`tls.key` as the client
   certificate), `proxy-ssl-verify: "on"` and `proxy-ssl-name` set to
   `ingress.grpc.host`. Client certificates are verified at the edge from
   `dragonfly-p2p-manager`; REST keeps `backend-protocol: HTTPS` and the public
   certificate.
-- `ingress.controller=traefik` renders a `traefik.io/v1alpha1` `IngressRoute`
+- In `traefik` mode the chart renders a `traefik.io/v1alpha1` `IngressRoute`
   named `<release>-manager-api` for the REST backend (Traefik v3 ignores
   `traefik.ingress.kubernetes.io/service.serversscheme`). The route uses
-  `scheme: https` and, when enabled, references the `ServersTransport` named
-  `<release>-manager-rest` in the release namespace; that resource uses
-  `insecureSkipVerify: true`. The REST Ingress is not rendered in Traefik mode,
-  and no nginx annotations are added.
+  `scheme: https` and, when enabled and the ServersTransport kind exists,
+  references the `ServersTransport` named `<release>-manager-rest` in the
+  release namespace; that resource uses `insecureSkipVerify: true`. The REST
+  Ingress is not rendered in Traefik mode, and no nginx annotations are added.
+- Every Traefik object is guarded by its own CRD kind, not the
+  group/version alone: `IngressRoute`, `IngressRouteTCP`, and
+  `ServersTransport`. Explicit `traefik` on a cluster with missing kinds
+  therefore renders only the objects that cluster can accept (and never falls
+  back to nginx). If REST+ServersTransport is enabled but the
+  `ServersTransport` kind is absent, the REST `IngressRoute` omits the
+  `serversTransport` reference; the HTTPS backend then falls back to Traefik's
+  default transport, so a self-signed manager certificate is not verified
+  (install the Traefik CRDs or use `auto`/`nginx` to avoid this).
 - In Traefik mode the manager gRPC endpoint is an `IngressRouteTCP` named
   `<release>-manager-grpc` (CRD `traefik.io/v1alpha1`, entry point `websecure`)
   with exact `HostSNI` matching `ingress.grpc.host`, backend
@@ -851,9 +874,8 @@ recommendation-only VPAs. The operator creates the shared `d7y-extras` HelmOp:
   the manager verifies the client certificate end-to-end. There is no TLS
   Secret, `TLSOption`, `ServersTransport`, or CA-only Secret on this path, so
   no HTTP router competes with the exact SNI.
-- `ingress.controller=nginx` keeps its existing GRPCS + client-mTLS Ingress
-  path for compatibility. Traefik mode never renders an HTTP manager-gRPC
-  IngressRoute or ServersTransport.
+- Traefik mode never renders an HTTP manager-gRPC IngressRoute or
+  ServersTransport.
 - REST keeps its own `<release>-manager-rest` `ServersTransport` with
   `insecureSkipVerify: true`; the REST IngressRoute uses `scheme: https` and
   the public certificate.
