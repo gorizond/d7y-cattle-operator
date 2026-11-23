@@ -46,13 +46,15 @@ func dataValues(c Cluster, names Names) map[string]any {
 		"enable":      true,
 		"hostNetwork": true,
 		"replicas":    c.SeedClientReplicas,
-		// The chart defaults to 8 CPU / 16Gi requests, which no pilot node can
-		// fit for three replicas. 1 CPU / 2Gi per replica leaves at least
-		// 2.2 CPU / 3.4Gi free on the busiest node even if all three land on
-		// one node; in the normal one-replica-per-node spread it leaves at
-		// least 4.2 CPU / 7.5Gi with a control scheduler and client on the node.
+		// The chart defaults to 8 CPU / 16Gi requests. On a single 4 CPU /
+		// 8Gi pilot node the rest of the control+data stack already requests
+		// about 2.2 CPU / 3.4Gi, so the previous 1 CPU / 2Gi seed-client
+		// request left the pod Pending with "Insufficient cpu". 150m / 256Mi
+		// only reserves scheduling headroom; the 4 CPU / 8Gi limit still lets
+		// the daemon burst. These are defaults; per-cluster values may
+		// override them.
 		"resources": map[string]any{
-			"requests": map[string]any{"cpu": "1", "memory": "2Gi"},
+			"requests": map[string]any{"cpu": "150m", "memory": "256Mi"},
 			"limits":   map[string]any{"cpu": "4", "memory": "8Gi"},
 		},
 		// The chart defaults to a 100Gi PVC; the seed client must stay PVC-free.
