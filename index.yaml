@@ -77,6 +77,20 @@ entries:
   d7y-cattle-operator:
   - apiVersion: v2
     appVersion: v0.3.34
+    created: "2026-11-23T22:25:39.689043902Z"
+    description: Dragonfly P2P operator for Rancher-managed RKE2 clusters
+    digest: 503948d1e587f2bd6a68c09303f32d8f37a88384c183e8f79d4ae156a7acd471
+    home: https://github.com/gorizond/d7y-cattle-operator
+    kubeVersion: '>=1.28.0-0'
+    name: d7y-cattle-operator
+    sources:
+    - https://github.com/gorizond/d7y-cattle-operator
+    type: application
+    urls:
+    - https://github.com/gorizond/d7y-cattle-operator/releases/download/d7y-cattle-operator-0.3.35/d7y-cattle-operator-0.3.35.tgz
+    version: 0.3.35
+  - apiVersion: v2
+    appVersion: v0.3.34
     created: "2026-11-23T22:05:03.944129264Z"
     description: Dragonfly P2P operator for Rancher-managed RKE2 clusters
     digest: 394775aeaca64ae7f94cc8c3081cfa19855c50f7b3042e7e3cd528221fd945be
@@ -1743,6 +1757,20 @@ entries:
   p2p-static:
   - apiVersion: v2
     appVersion: 0.1.0
+    created: "2026-11-23T22:25:40.312710233Z"
+    description: Nginx static server for the Dragonfly P2P bootstrap script and binaries
+    digest: c1c5ca9b9948b6572c9a45c7c76a0a21738149ed6d33ec3caccdc57120d67121
+    home: https://github.com/gorizond/d7y-cattle-operator
+    kubeVersion: '>=1.28.0-0'
+    name: p2p-static
+    sources:
+    - https://github.com/gorizond/d7y-cattle-operator
+    type: application
+    urls:
+    - https://github.com/gorizond/d7y-cattle-operator/releases/download/p2p-static-0.1.15/p2p-static-0.1.15.tgz
+    version: 0.1.15
+  - apiVersion: v2
+    appVersion: 0.1.0
     created: "2026-11-23T22:05:04.75968648Z"
     description: Nginx static server for the Dragonfly P2P bootstrap script and binaries
     digest: bf3873af477d6b3200f5781f2f61287b26300d9cda842e875ac54ac979b58764
@@ -2218,4 +2246,4 @@ entries:
     urls:
     - https://github.com/gorizond/d7y-cattle-operator/releases/download/registry-proxy-0.1.0/registry-proxy-0.1.0.tgz
     version: 0.1.0
-generated: "2026-11-23T22:05:04.760222002Z"
+generated: "2026-11-23T22:25:40.313071353Z"
