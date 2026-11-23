@@ -152,8 +152,8 @@ func TestSeedUsesSchedulerPodsOnMachineNodes(t *testing.T) {
 	if _, err := controller.ensureSchedulerIPs(target, Roles{Enabled: true, Seed: true}, ips); err != nil {
 		t.Fatalf("ensureSchedulerIPs() error = %v", err)
 	}
-	if got := store.annotation(AnnotationSchedulerIPs); got != "203.0.113.10,203.0.113.11,203.0.113.12" {
-		t.Errorf("scheduler IPs = %q, want deduped/sorted scheduler node IPs", got)
+	if got := store.annotation(AnnotationSchedulerIPs); got != "10.0.0.1,203.0.113.10,203.0.113.11,203.0.113.12" {
+		t.Errorf("scheduler IPs = %q, want deduped machine IPs with the internal address first", got)
 	}
 	if got := store.annotation(legacySchedulerPublicIP); got != "" {
 		t.Errorf("legacy scheduler-public-ip = %q, want removed", got)
@@ -174,33 +174,61 @@ func TestSeedSchedulerIPsPreferDownstreamNode(t *testing.T) {
 		name     string
 		pod      schedulerPod
 		node     schedulerNode
+		noNode   bool
 		machines []*capiv1beta2.Machine
 		want     string
 	}{
 		{
-			name: "node external ip wins",
+			name: "node internal and external ips keep internal first",
 			pod:  schedulerPod{NodeName: "node-a", HostIP: "10.0.0.1"},
 			node: schedulerNode{InternalIPs: []string{"10.0.0.1"}, ExternalIPs: []string{"203.0.113.20"}},
 			machines: []*capiv1beta2.Machine{
 				schedulerMachine("seed-a-0", "node-a", internal("10.0.0.1"), external("203.0.113.99")),
 			},
-			want: "203.0.113.20",
+			want: "10.0.0.1,203.0.113.20",
 		},
 		{
-			name: "machine external ip fallback",
+			name: "node internal ip stays ahead of machine external ip",
 			pod:  schedulerPod{NodeName: "node-b", HostIP: "10.0.0.2"},
 			node: schedulerNode{InternalIPs: []string{"10.0.0.2"}},
 			machines: []*capiv1beta2.Machine{
 				schedulerMachine("seed-a-1", "node-b", internal("10.0.0.2"), external("203.0.113.21")),
 			},
-			want: "203.0.113.21",
+			want: "10.0.0.2",
+		},
+		{
+			name:   "machine fallback without downstream node",
+			pod:    schedulerPod{NodeName: "node-f", HostIP: "10.0.0.6"},
+			noNode: true,
+			machines: []*capiv1beta2.Machine{
+				schedulerMachine("seed-a-6", "", internal("10.0.0.6"), external("203.0.113.26")),
+			},
+			want: "10.0.0.6,203.0.113.26",
+		},
+		{
+			name: "local private node internal ip with internal machine ip",
+			pod:  schedulerPod{NodeName: "node-g", HostIP: "10.48.0.45"},
+			node: schedulerNode{InternalIPs: []string{"10.48.0.45"}},
+			machines: []*capiv1beta2.Machine{
+				schedulerMachine("seed-a-5", "node-g", internal("10.48.0.45")),
+			},
+			want: "10.48.0.45",
+		},
+		{
+			name: "local private node internal ip before public external ip",
+			pod:  schedulerPod{NodeName: "node-i", HostIP: "10.48.0.45"},
+			node: schedulerNode{InternalIPs: []string{"10.48.0.45"}, ExternalIPs: []string{"62.83.78.222"}},
+			machines: []*capiv1beta2.Machine{
+				schedulerMachine("seed-a-7", "node-i", internal("10.48.0.45")),
+			},
+			want: "10.48.0.45,62.83.78.222",
 		},
 		{
 			name: "public node internal ip with internal machine ip",
-			pod:  schedulerPod{NodeName: "node-g", HostIP: "62.83.78.222"},
+			pod:  schedulerPod{NodeName: "node-c", HostIP: "62.83.78.222"},
 			node: schedulerNode{InternalIPs: []string{"62.83.78.222"}},
 			machines: []*capiv1beta2.Machine{
-				schedulerMachine("seed-a-5", "node-g", internal("62.83.78.222")),
+				schedulerMachine("seed-a-2", "node-c", internal("62.83.78.222")),
 			},
 			want: "62.83.78.222",
 		},
@@ -211,32 +239,23 @@ func TestSeedSchedulerIPsPreferDownstreamNode(t *testing.T) {
 			want: "62.83.78.181",
 		},
 		{
-			name: "internal ips are never published",
-			pod:  schedulerPod{NodeName: "node-c", HostIP: "10.0.0.3"},
-			node: schedulerNode{InternalIPs: []string{"10.0.0.3"}},
+			name: "loopback node ip falls back to the machine internal ip",
+			pod:  schedulerPod{NodeName: "node-j", HostIP: "127.0.0.1"},
+			node: schedulerNode{InternalIPs: []string{"127.0.0.1"}},
 			machines: []*capiv1beta2.Machine{
-				schedulerMachine("seed-a-2", "node-c", internal("10.0.0.3")),
+				schedulerMachine("seed-a-8", "node-j", internal("10.0.0.3")),
 			},
-			want: "",
-		},
-		{
-			name: "first internal ip matches the machine",
-			pod:  schedulerPod{NodeName: "node-d", HostIP: "10.0.0.4"},
-			node: schedulerNode{InternalIPs: []string{"10.0.0.4", "10.0.1.4"}},
-			machines: []*capiv1beta2.Machine{
-				schedulerMachine("seed-a-3", "", internal("10.0.0.4"), external("203.0.113.23")),
-				schedulerMachine("seed-a-decoy", "", internal("10.0.1.4"), external("203.0.113.24")),
-			},
-			want: "203.0.113.23",
+			want: "10.0.0.3",
 		},
 		{
 			name: "missing noderef matches by first internal ip",
-			pod:  schedulerPod{NodeName: "node-e", HostIP: "10.0.0.5"},
-			node: schedulerNode{InternalIPs: []string{"10.0.0.5"}},
+			pod:  schedulerPod{NodeName: "node-d", HostIP: "10.0.0.4"},
+			node: schedulerNode{InternalIPs: []string{"2001:db8::5"}},
 			machines: []*capiv1beta2.Machine{
-				schedulerMachine("seed-a-4", "", internal("10.0.0.5"), external("203.0.113.25")),
+				schedulerMachine("seed-a-3", "", internal("2001:db8::5"), external("203.0.113.23")),
+				schedulerMachine("seed-a-decoy", "", internal("2001:db8::6"), external("203.0.113.24")),
 			},
-			want: "203.0.113.25",
+			want: "203.0.113.23",
 		},
 	}
 	for _, tt := range tests {
@@ -247,9 +266,13 @@ func TestSeedSchedulerIPsPreferDownstreamNode(t *testing.T) {
 			secrets.put(&corev1.Secret{ObjectMeta: metav1.ObjectMeta{Name: "seed-a-kubeconfig", Namespace: "fleet-default"}, Data: map[string][]byte{"value": []byte("fake")}})
 			controller.secrets = secrets
 			controller.machines = &fakeMachineCache{machines: tt.machines}
+			nodes := map[string]schedulerNode{}
+			if !tt.noNode {
+				nodes[tt.pod.NodeName] = tt.node
+			}
 			controller.downstream = &fakeSchedulerPodLister{
 				pods:  []schedulerPod{tt.pod},
-				nodes: map[string]schedulerNode{tt.pod.NodeName: tt.node},
+				nodes: nodes,
 			}
 
 			ips, err := controller.discoverSeedSchedulerIPs(target)
@@ -282,6 +305,49 @@ func TestSeedNodeLookupErrorUsesOtherSeedIPs(t *testing.T) {
 	}
 }
 
+func TestSeedFallbackIgnoresPrivateOtherSeedIPs(t *testing.T) {
+	controller, _, events := newTestController(t)
+	cluster := testSeedCluster("42")
+	controller.clusters.(*fakeClusterStore).set(cluster)
+	nebius := schedulerSeed("nebius-lab", "10.48.0.45")
+	poligon := schedulerSeed("poligon", "62.83.78.181,62.83.78.222")
+	controller.clusterCache = &fakeClusterCache{clusters: []*provv1.Cluster{cluster, nebius, poligon}}
+	controller.downstream.(*fakeSchedulerPodLister).err = errors.New("downstream unavailable")
+
+	if _, err := controller.reconcile("", cluster); err != nil {
+		t.Fatalf("reconcile() error = %v", err)
+	}
+	if got := controller.clusters.(*fakeClusterStore).annotation(AnnotationSchedulerIPs); got != "62.83.78.181,62.83.78.222" {
+		t.Errorf("scheduler IPs = %q, want poligon's public IPs only", got)
+	}
+	if !hasEventReason(events.events, "SchedulerIPsFallback") {
+		t.Errorf("events = %+v, want SchedulerIPsFallback", events.events)
+	}
+}
+
+func TestSeedLocalPrivateIPsBeatOtherSeedPublicIPs(t *testing.T) {
+	controller, _, events := newTestController(t)
+	cluster := testSeedCluster("42")
+	cluster.Annotations[AnnotationSchedulerIPs] = "62.83.78.181,62.83.78.222"
+	controller.clusters.(*fakeClusterStore).set(cluster)
+	poligon := schedulerSeed("poligon", "62.83.78.181,62.83.78.222")
+	controller.clusterCache = &fakeClusterCache{clusters: []*provv1.Cluster{cluster, poligon}}
+	controller.downstream = &fakeSchedulerPodLister{
+		pods:  []schedulerPod{{NodeName: "c1-node", HostIP: "10.48.0.45"}},
+		nodes: map[string]schedulerNode{"c1-node": {InternalIPs: []string{"10.48.0.45"}}},
+	}
+
+	if _, err := controller.reconcile("", cluster); err != nil {
+		t.Fatalf("reconcile() error = %v", err)
+	}
+	if got := controller.clusters.(*fakeClusterStore).annotation(AnnotationSchedulerIPs); got != "10.48.0.45" {
+		t.Errorf("scheduler IPs = %q, want the local private scheduler IP", got)
+	}
+	if hasEventReason(events.events, "SchedulerIPsFallback") {
+		t.Errorf("events = %+v, must not fall back while the local scheduler is reachable", events.events)
+	}
+}
+
 func TestNonSeedAggregatesOtherSeedIPs(t *testing.T) {
 	target := schedulerCluster("managed")
 	seedA := schedulerSeed("seed-a", "203.0.113.30,203.0.113.10")
@@ -303,14 +369,15 @@ func TestSchedulerIPsSkipInvalidPrivateAndSelf(t *testing.T) {
 	target.Annotations[AnnotationSchedulerIPs] = "198.51.100.99"
 	bad := schedulerSeed("bad", "not-an-ip")
 	private := schedulerSeed("private", "10.0.0.1")
+	mixed := schedulerSeed("mixed", "10.48.0.45,62.83.78.181")
 	good := schedulerSeed("good", "203.0.113.10")
-	controller, store, _ := testSchedulerController(target, []*provv1.Cluster{target, bad, private, good})
+	controller, store, _ := testSchedulerController(target, []*provv1.Cluster{target, bad, private, mixed, good})
 
 	if _, err := controller.ensureSchedulerIPs(target, Roles{Enabled: true}, nil); err != nil {
 		t.Fatalf("ensureSchedulerIPs() error = %v", err)
 	}
-	if got := store.annotation(AnnotationSchedulerIPs); got != "203.0.113.10" {
-		t.Errorf("scheduler IPs = %q, want only the valid public seed IP", got)
+	if got := store.annotation(AnnotationSchedulerIPs); got != "203.0.113.10,62.83.78.181" {
+		t.Errorf("scheduler IPs = %q, want only the valid public seed IPs", got)
 	}
 }
 
