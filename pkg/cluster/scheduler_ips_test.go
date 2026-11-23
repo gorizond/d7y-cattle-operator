@@ -3,6 +3,7 @@ package cluster
 import (
 	"context"
 	"errors"
+	"strings"
 	"testing"
 
 	corev1 "k8s.io/api/core/v1"
@@ -30,6 +31,8 @@ type fakeMachineCache struct {
 
 type fakeSchedulerPodLister struct {
 	pods          []schedulerPod
+	nodes         map[string]schedulerNode
+	nodesErr      error
 	err           error
 	secretMissing bool
 	secretErr     error
@@ -37,6 +40,10 @@ type fakeSchedulerPodLister struct {
 
 func (f *fakeSchedulerPodLister) ListSchedulerPods(_ context.Context, _ []byte) ([]schedulerPod, error) {
 	return f.pods, f.err
+}
+
+func (f *fakeSchedulerPodLister) ListSchedulerNodes(_ context.Context, _ []byte) (map[string]schedulerNode, error) {
+	return f.nodes, f.nodesErr
 }
 
 func (f *fakeSchedulerPodLister) SecretExists(_ context.Context, _ []byte, _, _ string) (bool, error) {
@@ -57,6 +64,20 @@ func seedMachine(cluster, name, address string) *capiv1beta2.Machine {
 			Type: capiv1beta2.MachineExternalIP, Address: address,
 		}}},
 	}
+}
+
+func schedulerMachine(name, nodeName string, addresses ...capiv1beta2.MachineAddress) *capiv1beta2.Machine {
+	machine := &capiv1beta2.Machine{
+		ObjectMeta: metav1.ObjectMeta{
+			Name: name, Namespace: "fleet-default",
+			Labels: map[string]string{capiClusterName: "seed-a"},
+		},
+		Status: capiv1beta2.MachineStatus{Addresses: addresses},
+	}
+	if nodeName != "" {
+		machine.Status.NodeRef = capiv1beta2.MachineNodeReference{Name: nodeName}
+	}
+	return machine
 }
 
 func schedulerCluster(name string) *provv1.Cluster {
@@ -139,6 +160,110 @@ func TestSeedUsesSchedulerPodsOnMachineNodes(t *testing.T) {
 	}
 	if len(events.events) != 1 || events.events[0].Reason != "SchedulerIPsUpdated" {
 		t.Errorf("events = %+v, want SchedulerIPsUpdated", events.events)
+	}
+}
+
+func TestSeedSchedulerIPsPreferDownstreamNode(t *testing.T) {
+	internal := func(address string) capiv1beta2.MachineAddress {
+		return capiv1beta2.MachineAddress{Type: capiv1beta2.MachineInternalIP, Address: address}
+	}
+	external := func(address string) capiv1beta2.MachineAddress {
+		return capiv1beta2.MachineAddress{Type: capiv1beta2.MachineExternalIP, Address: address}
+	}
+	tests := []struct {
+		name     string
+		pod      schedulerPod
+		node     schedulerNode
+		machines []*capiv1beta2.Machine
+		want     string
+	}{
+		{
+			name: "node external ip wins",
+			pod:  schedulerPod{NodeName: "node-a", HostIP: "10.0.0.1"},
+			node: schedulerNode{InternalIPs: []string{"10.0.0.1"}, ExternalIPs: []string{"203.0.113.20"}},
+			machines: []*capiv1beta2.Machine{
+				schedulerMachine("seed-a-0", "node-a", internal("10.0.0.1"), external("203.0.113.99")),
+			},
+			want: "203.0.113.20",
+		},
+		{
+			name: "machine external ip fallback",
+			pod:  schedulerPod{NodeName: "node-b", HostIP: "10.0.0.2"},
+			node: schedulerNode{InternalIPs: []string{"10.0.0.2"}},
+			machines: []*capiv1beta2.Machine{
+				schedulerMachine("seed-a-1", "node-b", internal("10.0.0.2"), external("203.0.113.21")),
+			},
+			want: "203.0.113.21",
+		},
+		{
+			name: "internal ips are never published",
+			pod:  schedulerPod{NodeName: "node-c", HostIP: "10.0.0.3"},
+			node: schedulerNode{InternalIPs: []string{"10.0.0.3"}},
+			machines: []*capiv1beta2.Machine{
+				schedulerMachine("seed-a-2", "node-c", internal("10.0.0.3")),
+			},
+			want: "",
+		},
+		{
+			name: "first internal ip matches the machine",
+			pod:  schedulerPod{NodeName: "node-d", HostIP: "10.0.0.4"},
+			node: schedulerNode{InternalIPs: []string{"10.0.0.4", "10.0.1.4"}},
+			machines: []*capiv1beta2.Machine{
+				schedulerMachine("seed-a-3", "", internal("10.0.0.4"), external("203.0.113.23")),
+				schedulerMachine("seed-a-decoy", "", internal("10.0.1.4"), external("203.0.113.24")),
+			},
+			want: "203.0.113.23",
+		},
+		{
+			name: "missing noderef matches by first internal ip",
+			pod:  schedulerPod{NodeName: "node-e", HostIP: "10.0.0.5"},
+			node: schedulerNode{InternalIPs: []string{"10.0.0.5"}},
+			machines: []*capiv1beta2.Machine{
+				schedulerMachine("seed-a-4", "", internal("10.0.0.5"), external("203.0.113.25")),
+			},
+			want: "203.0.113.25",
+		},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			target := schedulerSeed("seed-a", "")
+			controller, _, _ := testSchedulerController(target, []*provv1.Cluster{target})
+			secrets := newFakeSecretStore()
+			secrets.put(&corev1.Secret{ObjectMeta: metav1.ObjectMeta{Name: "seed-a-kubeconfig", Namespace: "fleet-default"}, Data: map[string][]byte{"value": []byte("fake")}})
+			controller.secrets = secrets
+			controller.machines = &fakeMachineCache{machines: tt.machines}
+			controller.downstream = &fakeSchedulerPodLister{
+				pods:  []schedulerPod{tt.pod},
+				nodes: map[string]schedulerNode{tt.pod.NodeName: tt.node},
+			}
+
+			ips, err := controller.discoverSeedSchedulerIPs(target)
+			if err != nil {
+				t.Fatalf("discoverSeedSchedulerIPs() error = %v", err)
+			}
+			if got := strings.Join(ips, ","); got != tt.want {
+				t.Errorf("scheduler IPs = %q, want %q", got, tt.want)
+			}
+		})
+	}
+}
+
+func TestSeedNodeLookupErrorUsesOtherSeedIPs(t *testing.T) {
+	controller, _, events := newTestController(t)
+	cluster := testSeedCluster("42")
+	controller.clusters.(*fakeClusterStore).set(cluster)
+	poligon := schedulerSeed("poligon", "203.0.113.50")
+	controller.clusterCache = &fakeClusterCache{clusters: []*provv1.Cluster{cluster, poligon}}
+	controller.downstream.(*fakeSchedulerPodLister).nodesErr = errors.New("nodes unavailable")
+
+	if _, err := controller.reconcile("", cluster); err != nil {
+		t.Fatalf("reconcile() error = %v", err)
+	}
+	if got := controller.clusters.(*fakeClusterStore).annotation(AnnotationSchedulerIPs); got != "203.0.113.50" {
+		t.Errorf("scheduler IPs = %q, want the other seed's scheduler IPs", got)
+	}
+	if !hasEventReason(events.events, "SchedulerIPsFallback") {
+		t.Errorf("events = %+v, want SchedulerIPsFallback", events.events)
 	}
 }
 
