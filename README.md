@@ -219,7 +219,7 @@ and JWT signing key; see [Manager root credentials](#manager-root-credentials).
 | `schedulerCert.chart.repo` | `SCHEDULER_CERT_CHART_REPO` | Helm repository URL of the p2p-scheduler-cert chart |
 | `schedulerCert.chart.name` | `SCHEDULER_CERT_CHART_NAME` | p2p-scheduler-cert chart name |
 | `schedulerCert.chart.version` | `SCHEDULER_CERT_CHART_VERSION` | p2p-scheduler-cert chart version; default `0.1.0` |
-| `static.chart.repo` / `.name` / `.version` | `STATIC_CHART_REPO` / `STATIC_CHART_NAME` / `STATIC_CHART_VERSION` | p2p-static chart location; default `p2p-static 0.1.12` |
+| `static.chart.repo` / `.name` / `.version` | `STATIC_CHART_REPO` / `STATIC_CHART_NAME` / `STATIC_CHART_VERSION` | p2p-static chart location; default `p2p-static 0.1.14` |
 | `static.releaseName` | `STATIC_RELEASE_NAME` | Helm release name for the singleton p2p-static release; default `p2p-static` |
 | `releases.client` / `.nydus` / `.snapshotter` | `CLIENT_RELEASE_REPO` / `NYDUS_RELEASE_REPO` / `NYDUS_SNAPSHOTTER_RELEASE_REPO` | GitHub release repositories |
 | `versions.client` / `.nydus` / `.snapshotter` | `CLIENT_VERSION` / `NYDUS_VERSION` / `NYDUS_SNAPSHOTTER_VERSION` | Canonical client/nydus/snapshotter versions; defaults `v1.5.14` / `v2.4.5` / `v0.16.0`. The p2p-static and p2p-host-sync charts carry no version defaults. |
@@ -237,7 +237,7 @@ Defaults: `mtlsSecretName=dragonfly-p2p-mtls`, `dragonfly.chart.name=dragonfly`,
 `extras.chart.version=0.1.12`, `hostSync.chart.name=p2p-host-sync`,
 `hostSync.chart.version=0.1.5`, `schedulerCert.chart.name=p2p-scheduler-cert`,
 `schedulerCert.chart.version=0.1.0`, `static.chart.name=p2p-static`,
-`static.chart.version=0.1.12`, `static.releaseName=p2p-static`,
+`static.chart.version=0.1.14`, `static.releaseName=p2p-static`,
 `extras.ingress.controller=auto`,
 `extras.ingress.grpcEnabled=true`, `extras.ingress.restEnabled=true`,
 `manager.grpcPort=443`, `leaderElect=false`. Version defaults are
