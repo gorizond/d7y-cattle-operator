@@ -200,6 +200,10 @@ func (c *Controller) localSchedulerPodIPs(cluster *provv1.Cluster) ([]string, er
 	if len(pods) == 0 {
 		return nil, nil
 	}
+	nodes, err := c.downstream.ListSchedulerNodes(c.ctx, kubeconfig)
+	if err != nil {
+		return nil, err
+	}
 
 	machines, err := c.machines.List(cluster.Namespace, labels.Everything())
 	if err != nil {
@@ -235,23 +239,48 @@ func (c *Controller) localSchedulerPodIPs(cluster *provv1.Cluster) ([]string, er
 	seen := map[string]bool{}
 	var ips []string
 	for _, pod := range pods {
+		node, hasNode := nodes[pod.NodeName]
 		machine := byNode[pod.NodeName]
-		if machine == nil && pod.HostIP != "" {
-			if ip := net.ParseIP(strings.TrimSpace(pod.HostIP)); ip != nil {
+		if machine == nil {
+			identity := firstInternalIP(node.InternalIPs)
+			if identity == "" {
+				identity = pod.HostIP
+			}
+			if ip := net.ParseIP(strings.TrimSpace(identity)); ip != nil {
 				machine = byIP[ip.String()]
 			}
+		}
+		if hasNode && len(node.ExternalIPs) > 0 {
+			for _, raw := range node.ExternalIPs {
+				addPublicIPv4(&ips, seen, raw)
+			}
+			continue
 		}
 		if machine == nil {
 			continue
 		}
 		for _, address := range machine.Status.Addresses {
-			if address.Type == capiv1beta2.MachineInternalIP || address.Type == capiv1beta2.MachineExternalIP {
+			// With a downstream Node the Machine is only an ExternalIP
+			// fallback; without one keep the legacy Machine address handling.
+			if address.Type == capiv1beta2.MachineExternalIP ||
+				(!hasNode && address.Type == capiv1beta2.MachineInternalIP) {
 				addPublicIPv4(&ips, seen, address.Address)
 			}
 		}
 	}
 	sort.Strings(ips)
 	return ips, nil
+}
+
+// firstInternalIP returns the first parseable InternalIP, which identifies the
+// downstream Node when matching it to a CAPI Machine.
+func firstInternalIP(addresses []string) string {
+	for _, raw := range addresses {
+		if ip := net.ParseIP(strings.TrimSpace(raw)); ip != nil {
+			return ip.String()
+		}
+	}
+	return ""
 }
 
 // otherSeedSchedulerIPs returns the scheduler IPs published by other gated

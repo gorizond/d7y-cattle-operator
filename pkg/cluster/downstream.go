@@ -5,6 +5,7 @@ import (
 	"fmt"
 	"time"
 
+	corev1 "k8s.io/api/core/v1"
 	apierrors "k8s.io/apimachinery/pkg/api/errors"
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
 	"k8s.io/client-go/kubernetes"
@@ -17,8 +18,16 @@ type schedulerPod struct {
 	HostIP   string
 }
 
+// schedulerNode holds the downstream Node addresses needed to identify the
+// node and to publish a public scheduler IP.
+type schedulerNode struct {
+	InternalIPs []string
+	ExternalIPs []string
+}
+
 type schedulerPodLister interface {
 	ListSchedulerPods(ctx context.Context, kubeconfig []byte) ([]schedulerPod, error)
+	ListSchedulerNodes(ctx context.Context, kubeconfig []byte) (map[string]schedulerNode, error)
 }
 
 type schedulerSecretChecker interface {
@@ -61,6 +70,35 @@ func (KubeSchedulerPodLister) ListSchedulerPods(ctx context.Context, kubeconfig 
 			NodeName: pods.Items[i].Spec.NodeName,
 			HostIP:   pods.Items[i].Status.HostIP,
 		})
+	}
+	return result, nil
+}
+
+// ListSchedulerNodes maps downstream Node names to their InternalIP and
+// ExternalIP addresses. The downstream Node is authoritative for the public
+// address: the CAPI Machine may carry only an InternalIP on some node drivers.
+func (KubeSchedulerPodLister) ListSchedulerNodes(ctx context.Context, kubeconfig []byte) (map[string]schedulerNode, error) {
+	client, err := downstreamClient(kubeconfig)
+	if err != nil {
+		return nil, err
+	}
+	nodes, err := client.CoreV1().Nodes().List(ctx, metav1.ListOptions{})
+	if err != nil {
+		return nil, fmt.Errorf("list downstream nodes: %w", err)
+	}
+	result := make(map[string]schedulerNode, len(nodes.Items))
+	for i := range nodes.Items {
+		node := &nodes.Items[i]
+		entry := schedulerNode{}
+		for _, address := range node.Status.Addresses {
+			switch address.Type {
+			case corev1.NodeInternalIP:
+				entry.InternalIPs = append(entry.InternalIPs, address.Address)
+			case corev1.NodeExternalIP:
+				entry.ExternalIPs = append(entry.ExternalIPs, address.Address)
+			}
+		}
+		result[node.Name] = entry
 	}
 	return result, nil
 }
