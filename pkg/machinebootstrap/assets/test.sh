@@ -616,7 +616,7 @@ assert_contains "$V3_DROPIN" 'disable_snapshot_annotations = false'
 assert_contains "$V3_DROPIN" 'discard_unpacked_layers = false'
 assert_contains "$V3_DROPIN" '[proxy_plugins.nydus]'
 assert_not_contains "$V3_DROPIN" 'runtimes.nydus'
-V3_LINK="${ROOT_TWO}/var/lib/rancher/rke2/agent/etc/containerd/io.containerd.snapshotter.v1.nydus"
+V3_LINK="${ROOT_TWO}/var/lib/rancher/rke2/agent/containerd/io.containerd.snapshotter.v1.nydus"
 if [ "$(readlink "$V3_LINK" 2>/dev/null)" != "/var/lib/containerd-nydus" ]; then
   echo "p2p-static self-test: v2 install must link the CRI imagefs to /var/lib/containerd-nydus" >&2
   exit 1
