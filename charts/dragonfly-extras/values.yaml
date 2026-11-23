@@ -23,8 +23,8 @@ ingress:
     enabled: false
     secretName: ""
   traefik:
-    # Entry points used by the REST IngressRoute and the manager/scheduler TCP
-    # passthrough routes.
+    # Entry points used by the REST IngressRoute and the manager gRPC TCP
+    # passthrough route.
     entryPoints: ["websecure"]
     serversTransport:
       enabled: true
@@ -32,29 +32,6 @@ ingress:
   # nginx-only manager identity Secret in this namespace that holds ca.crt
   # for client certificate verification.
   mtlsSecret: dragonfly-p2p-manager
-
-# Optional legacy public scheduler front. The operator disables it; bootstrap
-# clients and DaemonSets use scheduler node IPs on port 8002 instead. The
-# backend, when enabled manually, is the fork chart's headless scheduler
-# Service; TLS is passed through end-to-end.
-scheduler:
-  enabled: false
-  # Fleet cluster ID and base domain build d7y-scheduler.<cluster-id>.<domain>.
-  # Both are required when enabled; no domain is hardcoded in this chart.
-  clusterID: ""
-  domain: ""
-  # Public Traefik LB IP as resolved by the operator (the advertiseIP input).
-  # The chart does not pin it as an external-dns target: external-dns derives
-  # the target from the Gateway/Ingress/Service, so the alias follows the
-  # cluster's own LB.
-  publicIP: ""
-  # HostSNI matcher for the TCP router. The catch-all '*' also covers clients
-  # that dial the public IP and send no SNI. Set an explicit host or IP when
-  # the entry point is shared with other TCP passthrough routes.
-  hostSNI: "*"
-  # Headless scheduler Service created by the fork chart control release.
-  service: ""
-  port: 8002
 
 # VerticalPodAutoscalers in recommendation-only mode. Rendered only when the
 # autoscaling.k8s.io/v1 CRD is installed and vpa.enabled is true.

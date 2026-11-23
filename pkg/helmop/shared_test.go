@@ -130,12 +130,6 @@ func TestSharedValuesUseFleetTemplates(t *testing.T) {
 	if got := valueAt(t, extras, "ingress", "grpc", "service"); got != "${ .ClusterName }-manager" {
 		t.Errorf("extras ingress.grpc.service = %v", got)
 	}
-	if got := valueAt(t, extras, "scheduler", "service"); got != "${ .ClusterName }-control-scheduler" {
-		t.Errorf("extras scheduler.service = %v", got)
-	}
-	if got := valueAt(t, extras, "scheduler", "enabled"); got != false {
-		t.Errorf("extras scheduler.enabled = %v, want false (no public scheduler front)", got)
-	}
 	if got := valueAt(t, extras, "vpa", "targets", "data", "name"); got != "${ .ClusterName }-data-seed-client" {
 		t.Errorf("extras data VPA target = %v", got)
 	}
