@@ -27,8 +27,8 @@ func Data(c Cluster) *fleetv1alpha1.HelmOp {
 	return op
 }
 
-// SharedData returns the shared seedClient/client HelmOp. The scheduler host
-// and scheduler cluster ID are per-target Fleet templates. Like Data, it
+// SharedData returns the shared seedClient/client HelmOp. The scheduler
+// addresses and scheduler cluster ID are per-target Fleet templates. Like Data, it
 // mounts but never redeclares the client Secret owned by SharedControl.
 func SharedData(c Cluster) *fleetv1alpha1.HelmOp {
 	c = sharedCluster(c)

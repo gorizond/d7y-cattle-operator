@@ -54,8 +54,6 @@ type Options struct {
 	StaticURL          string
 	SmartProxyURL      string
 	NydusMirrorURL     string
-	SchedulerDomain    string
-	ClusterIDFallback  string
 	ClientVersion      string
 	NydusVersion       string
 	SnapshotterVersion string
@@ -298,8 +296,6 @@ func (c *Controller) reconcile(key string, secret *corev1.Secret) (*corev1.Secre
 		StaticURL:          c.opts.StaticURL,
 		SmartProxyURL:      c.opts.SmartProxyURL,
 		NydusMirrorURL:     c.opts.NydusMirrorURL,
-		SchedulerDomain:    c.opts.SchedulerDomain,
-		ClusterIDFallback:  c.opts.ClusterIDFallback,
 		ClientVersion:      c.opts.ClientVersion,
 		NydusVersion:       c.opts.NydusVersion,
 		SnapshotterVersion: c.opts.SnapshotterVersion,

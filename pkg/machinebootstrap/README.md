@@ -29,8 +29,8 @@ The `p2p-static` chart serves `/p2p-install.sh` (a byte-identical copy of
 `/client`, and `/snapshotter` assets. The endpoint sets `access_log off`.
 
 The env includes `P2P_DISTRO`, `SCHEDULER_IPS`, `MANAGER_GRPC`, `STATIC_URL`,
-`SMART_PROXY_URL`, `NYDUS_MIRROR_URL`, `SCHEDULER_HOST`,
-`SCHEDULER_CLUSTER_ID`, `CLIENT_VERSION`, `NYDUS_VERSION`,
+`SMART_PROXY_URL`, `NYDUS_MIRROR_URL`, `SCHEDULER_CLUSTER_ID`,
+`CLIENT_VERSION`, `NYDUS_VERSION`,
 `NYDUS_SNAPSHOTTER_VERSION`, `CA_CRT_B64`, `CLIENT_CRT_B64`, and
 `CLIENT_KEY_B64`. The client certificate **and key** stay in the Secret;
 CA-only is insufficient for mTLS. The limit that matters is the effective

@@ -15,7 +15,6 @@ type Payload struct {
 	StaticURL          string
 	SmartProxyURL      string
 	NydusMirrorURL     string
-	SchedulerHost      string
 	SchedulerClusterID string
 	ClientVersion      string
 	NydusVersion       string
@@ -26,25 +25,6 @@ type Payload struct {
 }
 
 // Env returns the single-line env-file representation.
-func validDNSName(host string) bool {
-	if len(host) > 253 || strings.HasSuffix(host, ".") {
-		return false
-	}
-	for _, label := range strings.Split(host, ".") {
-		if len(label) == 0 || len(label) > 63 ||
-			label[0] == '-' || label[len(label)-1] == '-' {
-			return false
-		}
-		for _, r := range label {
-			if (r >= 'a' && r <= 'z') || (r >= 'A' && r <= 'Z') || (r >= '0' && r <= '9') || r == '-' {
-				continue
-			}
-			return false
-		}
-	}
-	return true
-}
-
 func Env(p Payload) (string, error) {
 	manager, err := url.Parse(strings.TrimSpace(p.ManagerGRPC))
 	if err != nil || manager.Scheme != "https" || manager.Host == "" {
@@ -71,10 +51,6 @@ func Env(p Payload) (string, error) {
 		}
 		mirror = strings.TrimRight(mirror, "/")
 	}
-	host := strings.TrimSpace(p.SchedulerHost)
-	if host == "" || !validDNSName(host) {
-		return "", fmt.Errorf("bootstrap: scheduler_host must be a DNS name")
-	}
 	id, err := strconv.ParseInt(strings.TrimSpace(p.SchedulerClusterID), 10, 64)
 	if err != nil || id < 0 {
 		return "", fmt.Errorf("bootstrap: scheduler_cluster_id must be a non-negative integer")
@@ -92,7 +68,6 @@ func Env(p Payload) (string, error) {
 	if mirror != "" {
 		fmt.Fprintf(&builder, "NYDUS_MIRROR_URL=%s\n", mirror)
 	}
-	fmt.Fprintf(&builder, "SCHEDULER_HOST=%s\n", host)
 	fmt.Fprintf(&builder, "SCHEDULER_CLUSTER_ID=%d\n", id)
 	if version := strings.TrimSpace(p.ClientVersion); version != "" {
 		fmt.Fprintf(&builder, "CLIENT_VERSION=%s\n", version)

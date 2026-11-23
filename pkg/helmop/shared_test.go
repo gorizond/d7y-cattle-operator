@@ -12,7 +12,6 @@ import (
 
 func sharedTestCluster() Cluster {
 	c := testCluster()
-	c.P2PDomain = "example.com"
 	return c
 }
 

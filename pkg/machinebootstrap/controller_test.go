@@ -134,8 +134,6 @@ func testController() (*Controller, *fakeSecrets, *fakeMachines, *fakeClusters, 
 		ManagerGRPCDomain: "grpc.example.com",
 		ManagerGRPCPort:   443,
 		StaticURL:         "http://static.example.com",
-		SchedulerDomain:   "example.com",
-		ClusterIDFallback: "c-m-fallback",
 	}
 	c := &Controller{
 		secrets:  secrets,
@@ -149,8 +147,6 @@ func testController() (*Controller, *fakeSecrets, *fakeMachines, *fakeClusters, 
 			ManagerGRPCDomain: cfg.ManagerGRPCDomain,
 			ManagerGRPCPort:   cfg.ManagerGRPCPort,
 			StaticURL:         cfg.StaticURL,
-			SchedulerDomain:   cfg.SchedulerDomain,
-			ClusterIDFallback: cfg.ClusterIDFallback,
 		},
 	}
 	return c, secrets, c.machines.(*fakeMachines), c.clusters.(*fakeClusters), events, cfg

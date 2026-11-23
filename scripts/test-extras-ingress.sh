@@ -230,7 +230,6 @@ helm template e "$extras" --namespace dragonfly-system \
   --set ingress.className=traefik \
   --set scheduler.enabled=true \
   --set scheduler.clusterID=c-m-example \
-  --set scheduler.domain=example.com \
   --set scheduler.service=c1-control-scheduler \
   "${traefik_api[@]}" >"$tmp/no-scheduler-tcp.yaml"
 if grep -q 'name: e-scheduler' "$tmp/no-scheduler-tcp.yaml"; then
@@ -242,7 +241,7 @@ fi
 
 # The operator chart must not own Ingress, VPA, or PVC resources.
 helm template t "$operator" >"$tmp/operator.yaml"
-for env_name in EXTRAS_INGRESS_CONTROLLER EXTRAS_INGRESS_CLASS_NAME EXTRAS_INGRESS_GRPC_ENABLED EXTRAS_INGRESS_REST_ENABLED EXTRAS_INGRESS_TLS_SECRET EXTRAS_TRAEFIK_SERVERS_TRANSPORT_ENABLED P2P_DOMAIN P2P_CLUSTER_ID; do
+for env_name in EXTRAS_INGRESS_CONTROLLER EXTRAS_INGRESS_CLASS_NAME EXTRAS_INGRESS_GRPC_ENABLED EXTRAS_INGRESS_REST_ENABLED EXTRAS_INGRESS_TLS_SECRET EXTRAS_TRAEFIK_SERVERS_TRANSPORT_ENABLED P2P_CLUSTER_ID; do
   grep -q "name: $env_name" "$tmp/operator.yaml" || fail "operator deployment missing $env_name"
 done
 if ! grep -A1 'name: EXTRAS_INGRESS_CONTROLLER' "$tmp/operator.yaml" | grep -q 'value: "auto"'; then

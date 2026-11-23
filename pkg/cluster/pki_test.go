@@ -4,6 +4,7 @@ import (
 	"crypto/x509"
 	"net"
 	"slices"
+	"strings"
 	"testing"
 	"time"
 
@@ -107,20 +108,25 @@ func TestPKIStableCAAndSplitLeaves(t *testing.T) {
 			t.Errorf("manager SANs = %v, missing %q", managerCert.DNSNames, want)
 		}
 	}
-	if slices.Contains(managerCert.DNSNames, "d7y-scheduler.c-m-a.example.com") {
-		t.Errorf("manager SANs unexpectedly contain a scheduler host: %v", managerCert.DNSNames)
+	if slices.Contains(managerCert.DNSNames, "c1-control-scheduler.dragonfly-system.svc") {
+		t.Errorf("manager SANs unexpectedly contain a scheduler service: %v", managerCert.DNSNames)
 	}
 	schedulerACert := leaf(t, schedulerAAfter)
 	schedulerBCert := leaf(t, schedulerB)
-	for _, want := range []string{"d7y-scheduler.c-m-a.example.com", "c1-control-scheduler.dragonfly-system.svc"} {
+	for _, want := range []string{"c1-control-scheduler.dragonfly-system.svc"} {
 		if !slices.Contains(schedulerACert.DNSNames, want) {
 			t.Errorf("scheduler A SANs = %v, missing %q", schedulerACert.DNSNames, want)
 		}
 	}
-	if slices.Contains(schedulerACert.DNSNames, "d7y-scheduler.c-m-b.example.com") {
+	if slices.Contains(schedulerACert.DNSNames, "seed-b-control-scheduler.dragonfly-system.svc") {
 		t.Errorf("scheduler A SANs leak seed B: %v", schedulerACert.DNSNames)
 	}
-	if !slices.Contains(schedulerBCert.DNSNames, "d7y-scheduler.c-m-b.example.com") {
+	for _, name := range schedulerACert.DNSNames {
+		if strings.HasPrefix(name, "d7y-scheduler.") {
+			t.Errorf("scheduler A SANs still contain the removed DNS alias %q: %v", name, schedulerACert.DNSNames)
+		}
+	}
+	if !slices.Contains(schedulerBCert.DNSNames, "seed-b-control-scheduler.dragonfly-system.svc") {
 		t.Errorf("scheduler B SANs = %v", schedulerBCert.DNSNames)
 	}
 	if !certHasIP(schedulerACert.IPAddresses, "203.0.113.10") || !certHasIP(schedulerBCert.IPAddresses, "203.0.113.11") {
@@ -435,7 +441,7 @@ func TestLegacyTrustPhaseAThenPhaseB(t *testing.T) {
 	}
 	legacyLeaf, err := legacyCA.Sign(pki.IssueOptions{
 		CommonName:  "legacy",
-		DNSNames:    []string{"d7y-scheduler.c-m-a.example.com", "c1-control-scheduler.dragonfly-system.svc", "grpc.example.com", "api.example.com", "dragonfly-manager.dragonfly-system.svc", "localhost"},
+		DNSNames:    []string{"c1-control-scheduler.dragonfly-system.svc", "grpc.example.com", "api.example.com", "dragonfly-manager.dragonfly-system.svc", "localhost"},
 		IPAddresses: []net.IP{net.ParseIP("203.0.113.10"), net.ParseIP("127.0.0.1"), net.ParseIP("::1")},
 		ServerAuth:  true,
 		ClientAuth:  true,
@@ -547,7 +553,7 @@ func TestSchedulerRevisionAnnotatedOnlyAfterCertReady(t *testing.T) {
 	}
 }
 
-func installLegacyClient(t *testing.T, controller *Controller, clusterID string) (*pki.CA, *pki.Bundle) {
+func installLegacyClient(t *testing.T, controller *Controller) (*pki.CA, *pki.Bundle) {
 	t.Helper()
 	legacyCA, err := pki.NewCA(nil)
 	if err != nil {
@@ -556,7 +562,6 @@ func installLegacyClient(t *testing.T, controller *Controller, clusterID string)
 	legacyLeaf, err := legacyCA.Sign(pki.IssueOptions{
 		CommonName: "legacy",
 		DNSNames: []string{
-			"d7y-scheduler." + clusterID + ".example.com",
 			"c1-control-scheduler.dragonfly-system.svc",
 			"grpc.example.com", "api.example.com",
 			"dragonfly-manager.dragonfly-system.svc", "localhost",
@@ -578,7 +583,7 @@ func installLegacyClient(t *testing.T, controller *Controller, clusterID string)
 
 func TestNewSeedDuringPhaseA(t *testing.T) {
 	controller, _, _ := newTestController(t)
-	_, legacyLeaf := installLegacyClient(t, controller, "c-m-a")
+	_, legacyLeaf := installLegacyClient(t, controller)
 	controller.machines = &fakeMachineCache{machines: []*capiv1beta2.Machine{
 		seedMachine("c1", "c1-0", "203.0.113.10"),
 		seedMachine("seed-b", "seed-b-0", "203.0.113.11"),
@@ -600,7 +605,7 @@ func TestNewSeedDuringPhaseA(t *testing.T) {
 	if string(schedulerB.Raw) == string(leaf(t, &corev1.Secret{Data: map[string][]byte{corev1.TLSCertKey: legacyLeaf.CertPEM}}).Raw) {
 		t.Error("new seed reused a legacy scheduler identity without its SANs")
 	}
-	if !slices.Contains(schedulerB.DNSNames, "d7y-scheduler.c-m-b.example.com") {
+	if !slices.Contains(schedulerB.DNSNames, "seed-b-control-scheduler.dragonfly-system.svc") {
 		t.Errorf("new seed scheduler SANs = %v", schedulerB.DNSNames)
 	}
 	ca, _ := pki.ParseCertificates(getSecret(t, controller, "dragonfly-system", pki.CASecretName).Data["ca.crt"])
@@ -615,7 +620,7 @@ func TestNewSeedDuringPhaseA(t *testing.T) {
 
 func TestPhaseAAfterClientReSignUsesLegacyServerSecret(t *testing.T) {
 	controller, _, _ := newTestController(t)
-	_, legacyLeaf := installLegacyClient(t, controller, "c-m-a")
+	_, legacyLeaf := installLegacyClient(t, controller)
 	controller.machines = &fakeMachineCache{machines: []*capiv1beta2.Machine{seedMachine("c1", "c1-0", "203.0.113.10")}}
 	controller.downstream = &fakeSchedulerPodLister{pods: []schedulerPod{{NodeName: "c1-node", HostIP: "203.0.113.10"}}}
 	cluster := pkiSeed("c1", "c-m-a")
@@ -831,7 +836,7 @@ func TestSchedulerRevisionOnlyChangesForAffectedCluster(t *testing.T) {
 
 func TestPhaseARepairsCorruptServerLeaf(t *testing.T) {
 	controller, _, _ := newTestController(t)
-	_, legacyLeaf := installLegacyClient(t, controller, "c-m-a")
+	_, legacyLeaf := installLegacyClient(t, controller)
 	controller.machines = &fakeMachineCache{machines: []*capiv1beta2.Machine{seedMachine("c1", "c1-0", "203.0.113.10")}}
 	controller.downstream = &fakeSchedulerPodLister{pods: []schedulerPod{{NodeName: "c1-node", HostIP: "203.0.113.10"}}}
 	cluster := pkiSeed("c1", "c-m-a")
@@ -902,7 +907,7 @@ func TestSecondRotationRejectsStaleLegacyServerLeaf(t *testing.T) {
 	}
 	stale, err := staleCA.Sign(pki.IssueOptions{
 		CommonName:  "stale",
-		DNSNames:    []string{"d7y-scheduler.c-m-a.example.com", "c1-control-scheduler.dragonfly-system.svc", "grpc.example.com", "api.example.com", "dragonfly-manager.dragonfly-system.svc", "localhost"},
+		DNSNames:    []string{"c1-control-scheduler.dragonfly-system.svc", "grpc.example.com", "api.example.com", "dragonfly-manager.dragonfly-system.svc", "localhost"},
 		IPAddresses: []net.IP{net.ParseIP("203.0.113.10"), net.ParseIP("127.0.0.1"), net.ParseIP("::1")},
 		ServerAuth:  true,
 		ClientAuth:  true,
@@ -949,7 +954,7 @@ func mustCerts(t *testing.T, pemBytes []byte) []*x509.Certificate {
 
 func TestLegacyServerCleanupOnlyAfterPhaseB(t *testing.T) {
 	controller, _, _ := newTestController(t)
-	installLegacyClient(t, controller, "c-m-a")
+	installLegacyClient(t, controller)
 	controller.machines = &fakeMachineCache{machines: []*capiv1beta2.Machine{seedMachine("c1", "c1-0", "203.0.113.10")}}
 	controller.downstream = &fakeSchedulerPodLister{pods: []schedulerPod{{NodeName: "c1-node", HostIP: "203.0.113.10"}}}
 	cluster := pkiSeed("c1", "c-m-a")

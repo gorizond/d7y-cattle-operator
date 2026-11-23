@@ -42,17 +42,13 @@ nydus:
   # Empty keeps the dfdaemon proxy fallback. No domain is hardcoded.
   mirrorURL: ""
 
-# Scheduler DNS and internal Service identities. The public LB IP is resolved at
-# reconcile time from d7y-scheduler.<cluster-id>.<domain>; the service IP is
-# pinned as the non-headless scheduler client Service ClusterIP. The resolved
-# public IP(s), the service IP, and manager DNS names are the P2P leaf SANs.
+# Scheduler identity. Clients dial scheduler node IPs on :8002; the in-cluster
+# scheduler Service DNS name and those IPs are the scheduler leaf SANs. No
+# public scheduler DNS alias is used.
 scheduler:
-  # Optional fallback when provisioning Cluster status.clusterName is empty.
-  # Leave empty to always require status.clusterName.
+  # Optional fallback cluster ID when provisioning Cluster status.clusterName is
+  # empty. Leave empty to rely on status.clusterName.
   clusterID: ""
-  # Required. No domain is hardcoded in this chart; set the deployment's
-  # base domain (for example via --set scheduler.domain=example.com).
-  domain: ""
 
 dragonfly:
   chart:
@@ -60,9 +56,9 @@ dragonfly:
     # and the non-headless scheduler client Service.
     repo: https://gorizond.github.io/dragonflyoss-helm-charts
     name: dragonfly
-    # 1.10.1-patch.2 is the verified version. Other versions are allowed but
+    # 1.10.1-patch.3 is the verified version. Other versions are allowed but
     # produce an UnsupportedChartVersion warning event.
-    version: 1.10.1-patch.2
+    version: 1.10.1-patch.3
 
 # dragonfly-extras chart owns the manager Ingresses and optional VPAs.
 extras:

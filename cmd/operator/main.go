@@ -91,7 +91,6 @@ func run() error {
 		ManagerAPIHost:              apiHost,
 		ManagerAPIURL:               cfg.ManagerAPIURL,
 		ManagerAPICredentialsSecret: cfg.ManagerAPICredentialsSecret,
-		P2PDomain:                   cfg.P2PDomain,
 		ClusterIDFallback:           cfg.ClusterIDFallback,
 		DragonflyChart: helmop.Chart{
 			Repo:    cfg.DragonflyChartRepo,
@@ -150,8 +149,6 @@ func run() error {
 		ManagerGRPCPort:    cfg.ManagerGRPCPort,
 		StaticURL:          cfg.NginxStaticURL,
 		NydusMirrorURL:     cfg.NydusMirrorURL,
-		SchedulerDomain:    cfg.P2PDomain,
-		ClusterIDFallback:  cfg.ClusterIDFallback,
 		ClientVersion:      cfg.ClientVersion,
 		NydusVersion:       cfg.NydusVersion,
 		SnapshotterVersion: cfg.SnapshotterVersion,
