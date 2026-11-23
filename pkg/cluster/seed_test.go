@@ -66,11 +66,10 @@ func TestReconcileSeedCreatesSharedHelmOps(t *testing.T) {
 		t.Errorf("control downstreamSecretNames = %v, want the client Secret", got)
 	}
 	data := store.object("fleet-default/" + helmop.SharedDataName())
-	if got := dependsOn(data); len(got) != 3 ||
+	if got := dependsOn(data); len(got) != 2 ||
 		got[0] != helmop.SharedControlName() ||
-		got[1] != helmop.SharedKeyDBName() ||
-		got[2] != helmop.SharedExtrasName() {
-		t.Errorf("data dependsOn = %v", got)
+		got[1] != helmop.SharedKeyDBName() {
+		t.Errorf("data dependsOn = %v, want control and keydb", got)
 	}
 	if got := downstreamSecretNames(data); len(got) != 0 {
 		t.Errorf("data downstreamSecretNames = %v, want none: control owns the client Secret", got)

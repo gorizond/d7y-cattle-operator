@@ -16,11 +16,10 @@ func TestDataHelmOp(t *testing.T) {
 	if op.Name != "c1-data" || op.Namespace != "fleet-default" {
 		t.Errorf("name/namespace = %s/%s", op.Name, op.Namespace)
 	}
-	if len(op.Spec.DependsOn) != 3 ||
+	if len(op.Spec.DependsOn) != 2 ||
 		op.Spec.DependsOn[0].Name != "c1-control" ||
-		op.Spec.DependsOn[1].Name != "c1-keydb" ||
-		op.Spec.DependsOn[2].Name != "c1-extras" {
-		t.Errorf("dependsOn = %+v", op.Spec.DependsOn)
+		op.Spec.DependsOn[1].Name != "c1-keydb" {
+		t.Errorf("dependsOn = %+v, want control and keydb", op.Spec.DependsOn)
 	}
 	if len(op.Spec.DownstreamResources) != 0 {
 		t.Errorf("downstreamResources = %+v, want none: control is the sole client Secret owner", op.Spec.DownstreamResources)

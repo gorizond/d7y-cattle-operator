@@ -120,71 +120,24 @@ helm template e "$extras" --namespace dragonfly-system \
 if grep -q 'kind: ServersTransport' "$tmp/traefik-no-transport.yaml"; then fail "REST ServersTransport rendered while disabled"; fi
 if grep -q 'serversTransport:' "$tmp/traefik-no-transport.yaml"; then fail "REST ServersTransport reference rendered while disabled"; fi
 
-# Scheduler front: the extras chart owns only the Traefik TCP TLS-passthrough
-# route. The scheduler terminates mTLS itself and no LE certificate is attached.
+# The scheduler is reached by direct node IP on 8002; the extras chart must
+# not render a scheduler IngressRouteTCP anymore, even if the old values are
+# still supplied.
 helm template e "$extras" --namespace dragonfly-system \
-  --set ingress.enabled=false \
+  --set ingress.enabled=true \
   --set ingress.controller=traefik \
   --set ingress.className=traefik \
   --set scheduler.enabled=true \
   --set scheduler.clusterID=c-m-example \
   --set scheduler.domain=example.com \
   --set scheduler.service=c1-control-scheduler \
-  --set scheduler.port=8002 \
-  --api-versions traefik.io/v1alpha1 >"$tmp/scheduler-tcp.yaml"
-scheduler_route=$(doc IngressRouteTCP e-scheduler "$tmp/scheduler-tcp.yaml")
-[ -n "$scheduler_route" ] || fail "scheduler IngressRouteTCP missing"
-if grep -q 'name: c1-control-scheduler-client' "$tmp/scheduler-tcp.yaml"; then
-  fail "extras must not render a scheduler client ClusterIP Service"
+  --api-versions traefik.io/v1alpha1 >"$tmp/no-scheduler-tcp.yaml"
+if grep -q 'name: e-scheduler' "$tmp/no-scheduler-tcp.yaml"; then
+  fail "extras chart still renders a scheduler IngressRouteTCP"
 fi
-echo "$scheduler_route" | grep -q 'HostSNI(`\*`)' || fail "scheduler HostSNI catch-all missing"
-echo "$scheduler_route" | grep -q 'name: "c1-control-scheduler"' || fail "scheduler headless backend Service missing"
-echo "$scheduler_route" | grep -q 'port: 8002' || fail "scheduler backend port missing"
-echo "$scheduler_route" | grep -q 'passthrough: true' || fail "scheduler TLS passthrough missing"
-echo "$scheduler_route" | grep -q 'external-dns.alpha.kubernetes.io/hostname: "d7y-scheduler.c-m-example.example.com"' || fail "scheduler external-dns hostname missing"
-if echo "$scheduler_route" | grep -q 'external-dns.alpha.kubernetes.io/target:'; then
-  fail "scheduler external-dns target must be derived, not pinned"
+if awk 'BEGIN{RS="---"} /kind: IngressRouteTCP/ && /component: scheduler/ {found=1} END{exit found?0:1}' "$tmp/no-scheduler-tcp.yaml"; then
+  fail "extras chart still renders a scheduler TCP route"
 fi
-
-# Fleet renders unquoted numeric cluster IDs as numbers, not strings. The alias
-# must format them without fmt's %!s(...) marker.
-helm template e "$extras" --namespace dragonfly-system \
-  --set ingress.enabled=false \
-  --set ingress.controller=traefik \
-  --set ingress.className=traefik \
-  --set scheduler.enabled=true \
-  --set scheduler.clusterID=2 \
-  --set scheduler.domain=example.com \
-  --set scheduler.service=c1-control-scheduler \
-  --set scheduler.port=8002 \
-  --api-versions traefik.io/v1alpha1 \
-  --show-only templates/ingressroute-scheduler-tcp.yaml >"$tmp/scheduler-numeric.yaml"
-grep -q 'external-dns.alpha.kubernetes.io/hostname: "d7y-scheduler.2.example.com"' "$tmp/scheduler-numeric.yaml" || fail "numeric scheduler clusterID must render the external-dns hostname"
-if grep -q 'external-dns.alpha.kubernetes.io/target:' "$tmp/scheduler-numeric.yaml"; then
-  fail "numeric scheduler render must not pin an external-dns target"
-fi
-if grep -q '%!' "$tmp/scheduler-numeric.yaml"; then fail "scheduler external-dns alias contains a fmt error marker"; fi
-if echo "$scheduler_route" | grep -q 'secretName:'; then fail "scheduler passthrough must not reference a TLS Secret"; fi
-if grep -q 'name: e-scheduler' "$tmp/scheduler-tcp.yaml" && grep -q 'kind: TLSOption' "$tmp/scheduler-tcp.yaml"; then
-  fail "scheduler passthrough must not render a TLSOption"
-fi
-if grep -q 'name: e-scheduler' "$tmp/scheduler-tcp.yaml" && grep -q 'kind: ServersTransport' "$tmp/scheduler-tcp.yaml"; then
-  fail "scheduler passthrough must not render a ServersTransport"
-fi
-if grep -q 'name: e-manager-grpc' "$tmp/scheduler-tcp.yaml"; then fail "scheduler-only render emitted the manager gRPC route"; fi
-
-# An explicit HostSNI keeps working when operators share the entry point.
-helm template e "$extras" --namespace dragonfly-system \
-  --set ingress.enabled=false \
-  --set ingress.controller=traefik \
-  --set scheduler.enabled=true \
-  --set scheduler.publicIP=203.0.113.10 \
-  --set scheduler.clusterID=c1 \
-  --set scheduler.domain=example.com \
-  --set scheduler.hostSNI=203.0.113.10 \
-  --set scheduler.service=c1-control-scheduler \
-  --api-versions traefik.io/v1alpha1 >"$tmp/scheduler-tcp-ip.yaml"
-grep -q 'HostSNI(`203.0.113.10`)' "$tmp/scheduler-tcp-ip.yaml" || fail "scheduler explicit HostSNI missing"
 
 # The operator chart must not own Ingress, VPA, or PVC resources.
 helm template t "$operator" >"$tmp/operator.yaml"

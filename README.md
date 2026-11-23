@@ -239,7 +239,7 @@ and JWT signing key; see [Manager root credentials](#manager-root-credentials).
 Defaults: `mtlsSecretName=dragonfly-p2p-mtls`, `dragonfly.chart.name=dragonfly`,
 `dragonfly.chart.repo=https://gorizond.github.io/dragonflyoss-helm-charts`,
 `dragonfly.chart.version=1.10.1-patch.2`, `extras.chart.name=dragonfly-extras`,
-`extras.chart.version=0.1.10`, `hostSync.chart.name=p2p-host-sync`,
+`extras.chart.version=0.1.11`, `hostSync.chart.name=p2p-host-sync`,
 `hostSync.chart.version=0.1.5`, `schedulerCert.chart.name=p2p-scheduler-cert`,
 `schedulerCert.chart.version=0.1.0`, `static.chart.name=p2p-static`,
 `static.chart.version=0.1.12`, `static.releaseName=p2p-static`,
@@ -450,9 +450,9 @@ Secret values or certificate material.
 - The scheduler Service uses the real container gRPC port and honours
   `scheduler.config.server.tls`; `server.grpc.tls` is accepted as an alias and
   `server.rest.tls` is rejected as manager-only.
-- The scheduler keeps its upstream-shaped headless peer Service. Only the
-  public TCP front is rendered by `dragonfly-extras`; the fork chart adds no
-  scheduler client Service.
+- The scheduler keeps its upstream-shaped headless peer Service. There is no
+  scheduler IngressRouteTCP; clients use scheduler node IPs on `8002`. The
+  fork chart adds no scheduler client Service.
 
 Both values are passed to every Dragonfly HelmOp (`manager`, `control`,
 `data`). A different version is allowed for experiments, but the operator
@@ -768,7 +768,7 @@ security groups:
 | `4101/4102/4103/4104` | seedClient proxy/metrics/health/stats | bind to `127.0.0.1`; do not expose |
 | `4105/4106` | seedClient storage TCP/QUIC | cluster network only |
 | `65003` | manager gRPC backend | mTLS end-to-end; Traefik only forwards TCP; never plaintext |
-| `443` | manager gRPC edge | TCP TLS passthrough; client mTLS terminates at manager. The public scheduler front is disabled. |
+| `443` | manager gRPC edge | TCP TLS passthrough; client mTLS terminates at manager. |
 | `8080` | manager REST | JWT required; public Ingress is allowed |
 
 Do not use `proxy.basicAuth` for peer authentication: chart 1.10.1-patch.2
@@ -779,8 +779,8 @@ DaemonSets may run on the same node, seedClient ports are shifted to
 
 All releases target `dragonfly-system` and depend on each other through
 `spec.dependsOn`: the shared control depends on shared KeyDB, shared data
-depends on shared control, KeyDB, and extras, and the per-seed host-sync depends
-on shared control. The shared control additionally depends on the per-seed
+depends on shared control and KeyDB, and the per-seed host-sync depends on
+shared control. The shared control additionally depends on the per-seed
 scheduler certificate HelmOp Bundles by the `p2p.dragonfly.io/scheduler-cert`
 label selector. The shared mirror depends on
 shared data, and the shared manager depends on shared KeyDB. The per-seed
@@ -857,11 +857,10 @@ recommendation-only VPAs. The operator creates the shared `d7y-extras` HelmOp:
 - REST keeps its own `<release>-manager-rest` `ServersTransport` with
   `insecureSkipVerify: true`; the REST IngressRoute uses `scheme: https` and
   the public certificate.
-- The public scheduler route is disabled (`scheduler.enabled=false`); clients
-  use the per-seed scheduler cert at the node IPs. The scheduler Service and
-  port remain in the values only for the VPA target. The nginx gRPC ingress
-  uses the `dragonfly-p2p-manager` identity Secret; extras does not deliver it
-  (the manager release owns that delivery).
+- There is no scheduler IngressRouteTCP; clients use the per-seed scheduler
+  certificate at the node IPs. The nginx gRPC ingress uses the
+  `dragonfly-p2p-manager` identity Secret; extras does not deliver it (the
+  manager release owns that delivery).
 - `ingress.tls.enabled` adds the public REST TLS block using
   `ingress.tls.secretName`. Manager gRPC uses TCP passthrough and does not
   attach a certificate; `ingress.grpc.tlsSecret` and `ingress.mtlsSecret`

@@ -167,8 +167,8 @@ seedClient:
     enable: false
   resources:
     requests:
-      cpu: "1"
-      memory: 2Gi
+      cpu: 150m
+      memory: 256Mi
     limits:
       cpu: "4"
       memory: 8Gi
@@ -200,7 +200,7 @@ assert_workload_resources() {
   echo "$doc" | grep -A2 'limits:' | grep -q "memory: $limits_memory" || fail "$label limits.memory missing"
 }
 
-assert_workload_resources "$seed_doc" '"1"' '2Gi' '"4"' '8Gi' "seedClient"
+assert_workload_resources "$seed_doc" '150m' '256Mi' '"4"' '8Gi' "seedClient"
 assert_workload_resources "$client_doc" '250m' '512Mi' '"2"' '4Gi' "client"
 
 echo "fork chart data resource render checks passed ($repo $version)"
@@ -219,28 +219,20 @@ helm template e "$extras" --namespace dragonfly-system \
   --set ingress.rest.service=c1-manager \
   --set ingress.tls.enabled=true \
   --set ingress.tls.secretName=demo-manager-public-tls \
-  --set scheduler.enabled=true \
-  --set scheduler.clusterID=c-m-example \
-  --set scheduler.domain=example.com \
-  --set scheduler.publicIP=203.0.113.10 \
-  --set scheduler.service=c1-control-scheduler \
   --api-versions traefik.io/v1alpha1 >"$tmp/extras.yaml"
 manager_tcp=$(awk 'BEGIN{RS="---"} /kind: IngressRouteTCP/ && /name: e-manager-grpc/ {print}' "$tmp/extras.yaml")
-scheduler_tcp=$(awk 'BEGIN{RS="---"} /kind: IngressRouteTCP/ && /name: e-scheduler/ {print}' "$tmp/extras.yaml")
 [ -n "$manager_tcp" ] || fail "manager gRPC TCP route missing"
-[ -n "$scheduler_tcp" ] || fail "scheduler TCP route missing"
 echo "$manager_tcp" | grep -Fq 'HostSNI(`grpc.example.com`)' || fail "manager gRPC exact HostSNI missing"
 echo "$manager_tcp" | grep -q 'name: "c1-manager"' || fail "manager gRPC backend missing"
 echo "$manager_tcp" | grep -q 'port: 65003' || fail "manager gRPC backend port must be 65003"
 echo "$manager_tcp" | grep -q 'passthrough: true' || fail "manager gRPC passthrough missing"
-echo "$scheduler_tcp" | grep -q 'HostSNI(`\*`)' || fail "scheduler HostSNI catch-all missing"
-echo "$scheduler_tcp" | grep -q 'port: 8002' || fail "scheduler backend port missing"
 if grep -q 'kind: TLSOption' "$tmp/extras.yaml"; then fail "manager gRPC must not render a TLSOption"; fi
 if awk 'BEGIN{RS="---"} /kind: ServersTransport/ && /name: e-manager-grpc/ {found=1} END{exit found?0:1}' "$tmp/extras.yaml"; then
   fail "manager gRPC must not render a ServersTransport"
 fi
 if grep -Fq 'Host(`grpc.example.com`)' "$tmp/extras.yaml"; then fail "HTTP router competes with manager gRPC TCP SNI"; fi
 if grep -q 'dragonfly-system.svc' "$tmp/extras.yaml"; then fail "extras render contains an internal manager DNS address"; fi
+if grep -q 'name: e-scheduler' "$tmp/extras.yaml"; then fail "extras chart still renders a scheduler TCP route"; fi
 grep -q 'serversTransport: "e-manager-rest"' "$tmp/extras.yaml" || fail "REST ServersTransport missing"
 grep -q 'secretName: "demo-manager-public-tls"' "$tmp/extras.yaml" || fail "REST public TLS Secret missing"
 

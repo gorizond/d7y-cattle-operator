@@ -60,7 +60,7 @@ func TestSharedExtrasTemplatedManagerBackends(t *testing.T) {
 	}
 }
 
-func TestSharedExtrasSchedulerFront(t *testing.T) {
+func TestSharedExtrasVPA(t *testing.T) {
 	controller, store, _ := newTestController(t)
 	cluster := testSeedCluster("42")
 
@@ -70,10 +70,7 @@ func TestSharedExtrasSchedulerFront(t *testing.T) {
 
 	values := helmValues(t, store.object("fleet-default/"+helmop.SharedExtrasName()))
 	for path, want := range map[string]any{
-		"scheduler.enabled": false,
-		"scheduler.service": helmop.SharedClusterNameTemplate + "-control-scheduler",
-		"scheduler.port":    int64(helmop.SchedulerPort),
-		"vpa.enabled":       true,
+		"vpa.enabled": true,
 	} {
 		keys := strings.Split(path, ".")
 		if got := valueAtPath(t, values, keys...); got != want {

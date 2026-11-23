@@ -12,8 +12,6 @@ func TestExtrasHelmOp(t *testing.T) {
 		VPAEnabled:                     true,
 		Manager:                        true,
 		Seed:                           true,
-		SchedulerService:               "c1-control-scheduler",
-		SchedulerPort:                  SchedulerPort,
 	})
 
 	if op.Name != "c1-extras" || op.Namespace != "fleet-default" {
@@ -28,7 +26,7 @@ func TestExtrasHelmOp(t *testing.T) {
 	if len(op.Spec.DownstreamResources) != 0 {
 		t.Errorf("downstreamResources = %+v, want none; SharedManager owns the manager Secret", op.Spec.DownstreamResources)
 	}
-	if op.Spec.Helm.Chart != "dragonfly-extras" || op.Spec.Helm.Version != "0.1.10" {
+	if op.Spec.Helm.Chart != "dragonfly-extras" || op.Spec.Helm.Version != "0.1.11" {
 		t.Errorf("chart = %s %s", op.Spec.Helm.Chart, op.Spec.Helm.Version)
 	}
 
@@ -80,15 +78,6 @@ func TestExtrasHelmOp(t *testing.T) {
 	}
 	if got := valueAt(t, values, "ingress", "traefik", "serversTransport", "insecureSkipVerify"); got != true {
 		t.Errorf("traefik insecureSkipVerify = %v", got)
-	}
-	if got := valueAt(t, values, "scheduler", "enabled"); got != false {
-		t.Errorf("scheduler.enabled = %v, want false", got)
-	}
-	if got := valueAt(t, values, "scheduler", "service"); got != "c1-control-scheduler" {
-		t.Errorf("scheduler.service = %v", got)
-	}
-	if got := valueAt(t, values, "scheduler", "port"); got != SchedulerPort {
-		t.Errorf("scheduler.port = %v", got)
 	}
 
 	if got := valueAt(t, values, "vpa", "enabled"); got != true {

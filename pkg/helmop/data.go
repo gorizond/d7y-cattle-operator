@@ -22,7 +22,7 @@ func Data(c Cluster) *fleetv1alpha1.HelmOp {
 	values := dataValues(c, names)
 	op := newHelmOp(DataName(c.Name), c, c.Chart, "data",
 		values,
-		[]string{names.Control, names.KeyDB, ExtrasName(c.Name)})
+		[]string{names.Control, names.KeyDB})
 	withSchedulerAddrsTemplate(op, values)
 	return op
 }
@@ -36,7 +36,7 @@ func SharedData(c Cluster) *fleetv1alpha1.HelmOp {
 	values := dataValues(c, names)
 	op := newSharedHelmOp(SharedDataName(), TargetNamespace, c, c.Chart, "data",
 		values,
-		[]string{SharedControlName(), SharedKeyDBName(), SharedExtrasName()}, SharedSelector())
+		[]string{SharedControlName(), SharedKeyDBName()}, SharedSelector())
 	withSchedulerAddrsTemplate(op, values)
 	return op
 }
@@ -138,8 +138,9 @@ func dataValues(c Cluster, names Names) map[string]any {
 		"seedClient":       seedClient,
 		"client":           client,
 	}
-	// The extras release owns the public scheduler TCP route used by the local
-	// dynconfig, so data waits for it before starting clients.
+	// Data depends only on the control release (scheduler and the mTLS client
+	// identity) and KeyDB. The extras release (manager Ingress/VPA) is not in
+	// the data path and must not block data when it is not ready.
 	applyMonitoring(values, c.Monitoring)
 	return values
 }
