@@ -632,7 +632,12 @@ func TestSeedHostSyncFollowsSchedulerIPs(t *testing.T) {
 	}
 
 	controller.machines = &fakeMachineCache{}
-	controller.downstream = &fakeSchedulerPodLister{}
+	// Scheduler pods exist but expose no public address: this is a genuine
+	// empty scheduler IP set, unlike a transiently empty pod list.
+	controller.downstream = &fakeSchedulerPodLister{
+		pods:  []schedulerPod{{NodeName: "c1-node", HostIP: "10.0.0.9"}},
+		nodes: map[string]schedulerNode{"c1-node": {InternalIPs: []string{"10.0.0.9"}}},
+	}
 	controller.clusters.(*fakeClusterStore).set(cluster)
 	if _, err := controller.reconcile("", cluster); err != nil {
 		t.Fatalf("reconcile(empty IPs) error = %v", err)

@@ -196,6 +196,21 @@ func TestSeedSchedulerIPsPreferDownstreamNode(t *testing.T) {
 			want: "203.0.113.21",
 		},
 		{
+			name: "public node internal ip with internal machine ip",
+			pod:  schedulerPod{NodeName: "node-g", HostIP: "62.83.78.222"},
+			node: schedulerNode{InternalIPs: []string{"62.83.78.222"}},
+			machines: []*capiv1beta2.Machine{
+				schedulerMachine("seed-a-5", "node-g", internal("62.83.78.222")),
+			},
+			want: "62.83.78.222",
+		},
+		{
+			name: "public node internal ip without a machine",
+			pod:  schedulerPod{NodeName: "node-h", HostIP: "62.83.78.181"},
+			node: schedulerNode{InternalIPs: []string{"62.83.78.181"}},
+			want: "62.83.78.181",
+		},
+		{
 			name: "internal ips are never published",
 			pod:  schedulerPod{NodeName: "node-c", HostIP: "10.0.0.3"},
 			node: schedulerNode{InternalIPs: []string{"10.0.0.3"}},
@@ -422,16 +437,21 @@ func TestSeedMissingKubeconfigWithoutFallbackKeepsAnnotation(t *testing.T) {
 	}
 }
 
-func TestSeedEmptySchedulerPodsRemovesAnnotation(t *testing.T) {
-	controller, _, _ := newTestController(t)
+func TestSeedEmptySchedulerPodsKeepsAnnotation(t *testing.T) {
+	controller, _, events := newTestController(t)
 	cluster := testSeedCluster("42")
+	cluster.Annotations[AnnotationSchedulerIPs] = "62.83.78.181,62.83.78.222"
+	controller.clusters.(*fakeClusterStore).set(cluster)
 	controller.downstream.(*fakeSchedulerPodLister).pods = nil
 
-	if _, err := controller.reconcile("", cluster); err != nil {
-		t.Fatalf("reconcile() error = %v", err)
+	if _, err := controller.reconcile("", cluster); err == nil {
+		t.Fatal("reconcile() error = nil, want a retry error for the transient empty scheduler pod list")
 	}
-	if got := controller.clusters.(*fakeClusterStore).annotation(AnnotationSchedulerIPs); got != "" {
-		t.Errorf("scheduler IPs = %q, want empty without scheduler pods", got)
+	if got := controller.clusters.(*fakeClusterStore).annotation(AnnotationSchedulerIPs); got != "62.83.78.181,62.83.78.222" {
+		t.Errorf("scheduler IPs = %q, want the existing annotation preserved", got)
+	}
+	if hasEventReason(events.events, "SchedulerIPsUpdated") {
+		t.Errorf("events = %+v, want no scheduler-ips update for a transient empty pod list", events.events)
 	}
 }
 

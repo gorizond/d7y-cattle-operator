@@ -30,6 +30,11 @@ const (
 	legacySchedulerPublicIP = "p2p.dragonfly.io/scheduler-public-ip"
 )
 
+// errNoSchedulerPods reports a transiently empty downstream scheduler pod list
+// (operator restart, scheduler rollout). Discovery must preserve the published
+// scheduler-ips annotation instead of clearing it.
+var errNoSchedulerPods = errors.New("no downstream scheduler pods found")
+
 type clusterCache interface {
 	List(namespace string, selector labels.Selector) ([]*provv1.Cluster, error)
 }
@@ -96,17 +101,21 @@ func (c *Controller) ensureSchedulerIPs(cluster *provv1.Cluster, roles Roles, se
 	return result, nil
 }
 
-func addPublicIPv4(ips *[]string, seen map[string]bool, raw string) {
+// addPublicIPv4 appends raw to ips when it is a public IPv4 address. It
+// reports whether raw is a public IPv4, including an address already seen, so
+// callers can tell that the candidate was handled even when deduplicated.
+func addPublicIPv4(ips *[]string, seen map[string]bool, raw string) bool {
 	ip := net.ParseIP(strings.TrimSpace(raw))
 	if ip == nil || ip.To4() == nil || !pki.IsPublicIP(ip) {
-		return
+		return false
 	}
 	value := ip.String()
 	if seen[value] {
-		return
+		return true
 	}
 	seen[value] = true
 	*ips = append(*ips, value)
+	return true
 }
 
 // seedMachineIPs returns all public IPv4 addresses of the seed Cluster's CAPI
@@ -198,7 +207,7 @@ func (c *Controller) localSchedulerPodIPs(cluster *provv1.Cluster) ([]string, er
 		return nil, err
 	}
 	if len(pods) == 0 {
-		return nil, nil
+		return nil, errNoSchedulerPods
 	}
 	nodes, err := c.downstream.ListSchedulerNodes(c.ctx, kubeconfig)
 	if err != nil {
@@ -250,11 +259,25 @@ func (c *Controller) localSchedulerPodIPs(cluster *provv1.Cluster) ([]string, er
 				machine = byIP[ip.String()]
 			}
 		}
-		if hasNode && len(node.ExternalIPs) > 0 {
-			for _, raw := range node.ExternalIPs {
-				addPublicIPv4(&ips, seen, raw)
+		if hasNode {
+			nodeIPs := node.ExternalIPs
+			if len(nodeIPs) == 0 {
+				// Hetzner and static node drivers expose the routable public
+				// IPv4 as the Node InternalIP. addPublicIPv4 still drops
+				// private, link-local and loopback addresses.
+				nodeIPs = node.InternalIPs
 			}
-			continue
+			published := false
+			for _, raw := range nodeIPs {
+				if addPublicIPv4(&ips, seen, raw) {
+					published = true
+				}
+			}
+			// Only fall through to the Machine when the Node has no public
+			// address at all; this keeps the Machine ExternalIP fallback.
+			if published {
+				continue
+			}
 		}
 		if machine == nil {
 			continue
@@ -351,16 +374,17 @@ func (c *Controller) discoverSeedSchedulerIPs(cluster *provv1.Cluster) ([]string
 
 	// If the local scheduler pods cannot be read at all (missing kubeconfig or
 	// 401/403), the seed's own public CAPI machine IPs are the last resort. Do
-	// not use them when the pod list succeeded but is empty: the scheduler may
-	// intentionally live in another seed.
+	// not use them for a transiently empty pod list: the scheduler may
+	// intentionally live in another seed, and the existing annotation must be
+	// preserved until the pods reappear.
 	if localErr != nil {
-		machines, machineErr := c.seedMachineIPs(cluster)
-		if machineErr == nil && len(machines) > 0 {
-			c.schedulerFallback(cluster, localErr, "the seed's public CAPI machine IPs")
-			return machines, nil
+		if !errors.Is(localErr, errNoSchedulerPods) {
+			machines, machineErr := c.seedMachineIPs(cluster)
+			if machineErr == nil && len(machines) > 0 {
+				c.schedulerFallback(cluster, localErr, "the seed's public CAPI machine IPs")
+				return machines, nil
+			}
 		}
-	}
-	if localErr != nil {
 		return nil, localErr
 	}
 	if otherErr != nil {
