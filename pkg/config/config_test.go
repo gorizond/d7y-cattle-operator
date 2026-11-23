@@ -178,7 +178,7 @@ func TestForkChartDefaults(t *testing.T) {
 	if DefaultDragonflyChartVersion != "1.10.1-patch.2" {
 		t.Errorf("DefaultDragonflyChartVersion = %q", DefaultDragonflyChartVersion)
 	}
-	if DefaultExtrasChartVersion != "0.1.11" {
+	if DefaultExtrasChartVersion != "0.1.12" {
 		t.Errorf("DefaultExtrasChartVersion = %q", DefaultExtrasChartVersion)
 	}
 	if DefaultMirrorChartVersion != "0.1.0" {
@@ -395,6 +395,20 @@ func TestLoadClusterIDFallbackFlag(t *testing.T) {
 	}
 	if cfg.ClusterIDFallback != "c-m-fallback" {
 		t.Errorf("ClusterIDFallback = %q", cfg.ClusterIDFallback)
+	}
+}
+
+func TestLoadExtrasIngressAuto(t *testing.T) {
+	clearEnv(t)
+	cfg, err := Load(append(requiredArgs(), "--extras-ingress-controller=auto"))
+	if err != nil {
+		t.Fatalf("Load() error = %v", err)
+	}
+	if cfg.ExtrasIngressController != "auto" {
+		t.Errorf("ExtrasIngressController = %q, want auto", cfg.ExtrasIngressController)
+	}
+	if cfg.ExtrasIngressClassName != "" {
+		t.Errorf("ExtrasIngressClassName = %q, want empty", cfg.ExtrasIngressClassName)
 	}
 }
 

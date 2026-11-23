@@ -26,7 +26,7 @@ func TestExtrasHelmOp(t *testing.T) {
 	if len(op.Spec.DownstreamResources) != 0 {
 		t.Errorf("downstreamResources = %+v, want none; SharedManager owns the manager Secret", op.Spec.DownstreamResources)
 	}
-	if op.Spec.Helm.Chart != "dragonfly-extras" || op.Spec.Helm.Version != "0.1.11" {
+	if op.Spec.Helm.Chart != "dragonfly-extras" || op.Spec.Helm.Version != "0.1.12" {
 		t.Errorf("chart = %s %s", op.Spec.Helm.Chart, op.Spec.Helm.Version)
 	}
 
@@ -105,6 +105,18 @@ func TestExtrasHelmOp(t *testing.T) {
 		if targetMap["enabled"] != want.enabled || targetMap["kind"] != want.kind || targetMap["name"] != want.target {
 			t.Errorf("vpa target %s = %v, want enabled=%v kind=%s name=%s", name, targetMap, want.enabled, want.kind, want.target)
 		}
+	}
+}
+
+func TestExtrasDefaultsToAuto(t *testing.T) {
+	op := Extras(testCluster(), ExtrasOptions{IngressEnabled: true, Manager: true})
+
+	values := op.Spec.Helm.Values.Data
+	if got := valueAt(t, values, "ingress", "controller"); got != "auto" {
+		t.Errorf("ingress.controller = %v, want auto detection", got)
+	}
+	if got := valueAt(t, values, "ingress", "className"); got != "" {
+		t.Errorf("ingress.className = %v, want empty (chart resolves it)", got)
 	}
 }
 

@@ -14,14 +14,19 @@ var VPAGVR = schema.GroupVersionResource{
 // ExtrasOptions selects which extras resources the chart renders.
 type ExtrasOptions struct {
 	IngressEnabled bool
-	// IngressController is "nginx" or "traefik"; empty defaults to nginx.
+	// IngressController is "auto", "nginx", or "traefik". Empty means "auto":
+	// the extras chart selects Traefik only when the target cluster exposes
+	// every Traefik CRD kind the enabled features need, else nginx.
 	IngressController string
-	IngressClassName  string
-	GRPCEnabled       bool
-	RESTEnabled       bool
-	TLSSecret         string
+	// IngressClassName is passed through to the chart. Empty stays empty: the
+	// chart defaults it to "traefik" only when Traefik is the resolved
+	// controller, and leaves nginx on the cluster's default IngressClass.
+	IngressClassName string
+	GRPCEnabled      bool
+	RESTEnabled      bool
+	TLSSecret        string
 	// TraefikServersTransportEnabled renders the Traefik ServersTransport and
-	// its REST Ingress annotation.
+	// its REST IngressRoute reference when the ServersTransport CRD exists.
 	TraefikServersTransportEnabled bool
 	VPAEnabled                     bool
 	Manager                        bool
@@ -62,7 +67,7 @@ func SharedExtras(c Cluster, opts ExtrasOptions) *fleetv1alpha1.HelmOp {
 func extrasValues(c Cluster, opts ExtrasOptions, names Names) map[string]any {
 	controller := opts.IngressController
 	if controller == "" {
-		controller = "nginx"
+		controller = "auto"
 	}
 	values := map[string]any{
 		"ingress": map[string]any{

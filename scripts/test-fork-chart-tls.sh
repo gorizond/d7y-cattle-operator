@@ -219,7 +219,9 @@ helm template e "$extras" --namespace dragonfly-system \
   --set ingress.rest.service=c1-manager \
   --set ingress.tls.enabled=true \
   --set ingress.tls.secretName=demo-manager-public-tls \
-  --api-versions traefik.io/v1alpha1 >"$tmp/extras.yaml"
+  --api-versions traefik.io/v1alpha1/IngressRoute \
+  --api-versions traefik.io/v1alpha1/IngressRouteTCP \
+  --api-versions traefik.io/v1alpha1/ServersTransport >"$tmp/extras.yaml"
 manager_tcp=$(awk 'BEGIN{RS="---"} /kind: IngressRouteTCP/ && /name: e-manager-grpc/ {print}' "$tmp/extras.yaml")
 [ -n "$manager_tcp" ] || fail "manager gRPC TCP route missing"
 echo "$manager_tcp" | grep -Fq 'HostSNI(`grpc.example.com`)' || fail "manager gRPC exact HostSNI missing"

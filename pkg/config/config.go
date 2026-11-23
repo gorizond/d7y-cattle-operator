@@ -24,7 +24,7 @@ const (
 	DefaultDragonflyChartVersion         = "1.10.1-patch.2"
 	DefaultExtrasChartRepo               = "https://gorizond.github.io/d7y-cattle-operator"
 	DefaultExtrasChartName               = "dragonfly-extras"
-	DefaultExtrasChartVersion            = "0.1.11"
+	DefaultExtrasChartVersion            = "0.1.12"
 	DefaultMirrorChartRepo               = "https://gorizond.github.io/d7y-cattle-operator"
 	DefaultMirrorChartName               = "containerd-mirror"
 	DefaultMirrorChartVersion            = "0.1.0"
@@ -52,7 +52,7 @@ const (
 	DefaultClientVersion                 = "v1.5.14"
 	DefaultNydusVersion                  = "v2.4.5"
 	DefaultSnapshotterVersion            = "v0.16.0"
-	DefaultExtrasIngressController       = "nginx"
+	DefaultExtrasIngressController       = "auto"
 	DefaultExtrasIngressClassName        = ""
 	DefaultExtrasIngressGRPCEnabled      = true
 	DefaultExtrasIngressRESTEnabled      = true
@@ -188,7 +188,7 @@ func Load(args []string) (*Config, error) {
 	fs.StringVar(&cfg.ClientVersion, "client-version", envOr("CLIENT_VERSION", DefaultClientVersion), "Dragonfly client release used by the host bootstrap")
 	fs.StringVar(&cfg.NydusVersion, "nydus-version", envOr("NYDUS_VERSION", DefaultNydusVersion), "nydus static release used by the host bootstrap")
 	fs.StringVar(&cfg.SnapshotterVersion, "nydus-snapshotter-version", envOr("NYDUS_SNAPSHOTTER_VERSION", DefaultSnapshotterVersion), "upstream nydus-snapshotter release used by the host bootstrap")
-	fs.StringVar(&cfg.ExtrasIngressController, "extras-ingress-controller", envOr("EXTRAS_INGRESS_CONTROLLER", DefaultExtrasIngressController), "extras Ingress controller: nginx or traefik")
+	fs.StringVar(&cfg.ExtrasIngressController, "extras-ingress-controller", envOr("EXTRAS_INGRESS_CONTROLLER", DefaultExtrasIngressController), "extras Ingress controller: auto, nginx, or traefik")
 	fs.StringVar(&cfg.ExtrasIngressClassName, "extras-ingress-class-name", envOr("EXTRAS_INGRESS_CLASS_NAME", DefaultExtrasIngressClassName), "extras Ingress class name (empty uses the cluster default)")
 	fs.BoolVar(&cfg.ExtrasIngressGRPCEnabled, "extras-ingress-grpc-enabled", defaultGRPCEnabled, "render the extras gRPC Ingress")
 	fs.BoolVar(&cfg.ExtrasIngressRESTEnabled, "extras-ingress-rest-enabled", defaultRESTEnabled, "render the extras REST Ingress")
@@ -386,9 +386,9 @@ func (c *Config) Validate() error {
 		add("--scheduler-cert-chart-version: %q is not a valid chart version", c.SchedulerCertChartVersion)
 	}
 	switch c.ExtrasIngressController {
-	case "nginx", "traefik":
+	case "auto", "nginx", "traefik":
 	default:
-		add("--extras-ingress-controller: must be nginx or traefik")
+		add("--extras-ingress-controller: must be auto, nginx, or traefik")
 	}
 	if c.ExtrasIngressClassName != "" {
 		if msgs := validation.IsDNS1123Subdomain(c.ExtrasIngressClassName); len(msgs) > 0 {

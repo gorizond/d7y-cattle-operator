@@ -2,9 +2,14 @@
 # manager REST over HTTPS (public certificate).
 ingress:
   enabled: false
-  # traefik uses IngressRouteTCP passthrough for manager gRPC and an HTTPS
-  # IngressRoute for REST. nginx keeps its existing GRPCS/mTLS Ingress path.
-  controller: nginx
+  # Ingress controller for the manager fronts. "auto" selects traefik only when
+  # the target cluster exposes every Traefik CRD kind the enabled features need
+  # (IngressRoute, IngressRouteTCP, ServersTransport) and falls back to nginx
+  # otherwise; RKE2 ships nginx by default. Set "nginx" or "traefik" to force a
+  # controller; each Traefik object is still guarded by its own CRD kind.
+  controller: auto
+  # Empty keeps the cluster default: the chart sets "traefik" only when the
+  # resolved controller is traefik; nginx stays empty (default IngressClass).
   className: ""
   grpc:
     enabled: true
