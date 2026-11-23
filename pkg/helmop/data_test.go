@@ -317,12 +317,21 @@ func TestControlHelmOpP2PDataTLSEnabled(t *testing.T) {
 }
 
 func TestDataResourceSizing(t *testing.T) {
-	values := Data(testCluster()).Spec.Helm.Values.Data
-
-	seedClient := nested(t, values, "seedClient")
-	assertResources(t, seedClient, "1", "2Gi", "4", "8Gi")
-	client := nested(t, values, "client")
-	assertResources(t, client, "250m", "512Mi", "2", "4Gi")
+	for name, op := range map[string]*fleetv1alpha1.HelmOp{
+		"data":        Data(testCluster()),
+		"shared-data": SharedData(testCluster()),
+	} {
+		t.Run(name, func(t *testing.T) {
+			values := op.Spec.Helm.Values.Data
+			seedClient := nested(t, values, "seedClient")
+			// The seed-client request must fit the live 4 CPU / 8Gi single
+			// node with the rest of the stack; the limit is unchanged so the
+			// daemon can still burst.
+			assertResources(t, seedClient, "150m", "256Mi", "4", "8Gi")
+			client := nested(t, values, "client")
+			assertResources(t, client, "250m", "512Mi", "2", "4Gi")
+		})
+	}
 }
 
 func assertResources(t *testing.T, component map[string]any, requestsCPU, requestsMemory, limitsCPU, limitsMemory string) {
