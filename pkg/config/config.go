@@ -21,7 +21,7 @@ const (
 	DefaultContainerdMirrorPort          = 4001
 	DefaultDragonflyChartRepo            = "https://gorizond.github.io/dragonflyoss-helm-charts"
 	DefaultDragonflyChartName            = "dragonfly"
-	DefaultDragonflyChartVersion         = "1.10.1-patch.3"
+	DefaultDragonflyChartVersion         = "1.10.1-patch.2"
 	DefaultExtrasChartRepo               = "https://gorizond.github.io/d7y-cattle-operator"
 	DefaultExtrasChartName               = "dragonfly-extras"
 	DefaultExtrasChartVersion            = "0.1.12"

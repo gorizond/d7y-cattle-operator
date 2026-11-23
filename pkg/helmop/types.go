@@ -49,7 +49,7 @@ const (
 
 	// VerifiedDragonflyChartVersion is the Dragonfly chart version this
 	// operator is tested against. Other versions are allowed but warn.
-	VerifiedDragonflyChartVersion = "1.10.1-patch.3"
+	VerifiedDragonflyChartVersion = "1.10.1-patch.2"
 
 	KeyDBChartRepo    = "https://enapter.github.io/charts/"
 	KeyDBChartName    = "keydb"

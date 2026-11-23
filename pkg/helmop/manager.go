@@ -46,7 +46,7 @@ func managerValues(c Cluster, fullname, keydbAddr string) map[string]any {
 		"enable": true,
 		"config": map[string]any{
 			"server": map[string]any{
-				// The fork chart (1.10.1-patch.3) renders grpc.tls under
+				// The fork chart (1.10.1-patch.2) renders grpc.tls under
 				// server.grpc, so the manager serves gRPC over mTLS and
 				// its probes use the TLS flags.
 				"grpc": map[string]any{"tls": tlsPaths()},

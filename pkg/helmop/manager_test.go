@@ -11,7 +11,7 @@ func testCluster() Cluster {
 		Name:                        "c1",
 		Namespace:                   "fleet-default",
 		MTLSSecretName:              "dragonfly-p2p-mtls",
-		Chart:                       Chart{Repo: "https://charts.example.com", Name: "dragonfly", Version: "1.10.1-patch.3"},
+		Chart:                       Chart{Repo: "https://charts.example.com", Name: "dragonfly", Version: "1.10.1-patch.2"},
 		ExtrasChart:                 Chart{Repo: "https://charts.example.com", Name: "dragonfly-extras", Version: "0.1.12"},
 		MirrorChart:                 Chart{Repo: "https://charts.example.com", Name: "containerd-mirror", Version: "0.1.0"},
 		HostSyncChart:               Chart{Repo: "https://charts.example.com", Name: "p2p-host-sync", Version: "0.1.0"},
@@ -87,7 +87,7 @@ func TestManagerHelmOp(t *testing.T) {
 	if helm == nil {
 		t.Fatal("spec.helm is nil")
 	}
-	if helm.Repo != "https://charts.example.com" || helm.Chart != "dragonfly" || helm.Version != "1.10.1-patch.3" {
+	if helm.Repo != "https://charts.example.com" || helm.Chart != "dragonfly" || helm.Version != "1.10.1-patch.2" {
 		t.Errorf("chart = %s/%s/%s", helm.Repo, helm.Chart, helm.Version)
 	}
 	if helm.ReleaseName != "c1-manager" {

@@ -35,7 +35,7 @@ Pod image-mutation admission, Harbor, and registry-proxy add-ons are out of scop
   and a revision-triggered `nydus-updater.service` run without reboot.
 - Deploys KeyDB and the Dragonfly manager through Fleet HelmOps, without
   PersistentVolumeClaims. Dragonfly releases use the gorizond fork chart
-  `dragonfly 1.10.1-patch.3`, which renders `server.grpc.tls` under `grpc`,
+  `dragonfly 1.10.1-patch.2`, which renders `server.grpc.tls` under `grpc`,
   adds TLS flags to the manager/scheduler `grpc_health_probe` commands, and
   keeps the scheduler headless Service upstream-shaped.
 - Deploys the seed role (scheduler/control, seedClient+client/data) when
@@ -233,7 +233,7 @@ and JWT signing key; see [Manager root credentials](#manager-root-credentials).
 
 Defaults: `mtlsSecretName=dragonfly-p2p-mtls`, `dragonfly.chart.name=dragonfly`,
 `dragonfly.chart.repo=https://gorizond.github.io/dragonflyoss-helm-charts`,
-`dragonfly.chart.version=1.10.1-patch.3`, `extras.chart.name=dragonfly-extras`,
+`dragonfly.chart.version=1.10.1-patch.2`, `extras.chart.name=dragonfly-extras`,
 `extras.chart.version=0.1.12`, `hostSync.chart.name=p2p-host-sync`,
 `hostSync.chart.version=0.1.5`, `schedulerCert.chart.name=p2p-scheduler-cert`,
 `schedulerCert.chart.version=0.1.0`, `static.chart.name=p2p-static`,
@@ -431,7 +431,7 @@ Secret values or certificate material.
 
 `dragonfly.chart.repo` defaults to
 `https://gorizond.github.io/dragonflyoss-helm-charts` and
-`dragonfly.chart.version` to the verified `1.10.1-patch.3` (appVersion
+`dragonfly.chart.version` to the verified `1.10.1-patch.2` (appVersion
 `2.5.4`). The fork carries these upstream-compatible patches:
 
 - `server.grpc.tls` is rendered under `server.grpc`, so the manager actually
@@ -445,9 +445,6 @@ Secret values or certificate material.
 - The scheduler keeps its upstream-shaped headless peer Service. There is no
   scheduler IngressRouteTCP; clients use scheduler node IPs on `8002`. The
   fork chart adds no scheduler client Service.
-- When `client`/`seedClient` `dynconfig.scheduler.addrs` is set, the chart
-  renders only the `addrs` list and omits the legacy singular `scheduler.addr`
-  Service address.
 
 Both values are passed to every Dragonfly HelmOp (`manager`, `control`,
 `data`). A different version is allowed for experiments, but the operator
@@ -766,7 +763,7 @@ security groups:
 | `443` | manager gRPC edge | TCP TLS passthrough; client mTLS terminates at manager. |
 | `8080` | manager REST | JWT required; public Ingress is allowed |
 
-Do not use `proxy.basicAuth` for peer authentication: chart 1.10.1-patch.3
+Do not use `proxy.basicAuth` for peer authentication: chart 1.10.1-patch.2
 places it in the wrong configuration block. The operator keeps `proxy`, `metrics`, `health`,
 and `stats` on `127.0.0.1` for both `client` and `seedClient`. Because both
 DaemonSets may run on the same node, seedClient ports are shifted to
@@ -1055,7 +1052,7 @@ deliver it.
 
 The operator defaults to the external fork
 `https://gorizond.github.io/dragonflyoss-helm-charts` and pins
-`dragonfly 1.10.1-patch.3`. The chart is not vendored into this repository; if
+`dragonfly 1.10.1-patch.2`. The chart is not vendored into this repository; if
 the fork pages or repository disappear, every Dragonfly HelmOp fails to
 install. The fork is an interim dependency until the two patches are merged
 upstream. When upstream publishes an equivalent release, re-run the fork chart

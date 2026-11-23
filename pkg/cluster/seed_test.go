@@ -264,7 +264,7 @@ func newTestController(t *testing.T) (*Controller, *fakeHelmOpStore, *fakeEventS
 			ManagerAPIHost:               "api.example.com",
 			ManagerAPIURL:                "https://manager-api.example.com",
 			ManagerAPICredentialsSecret:  "manager-api-credentials",
-			DragonflyChart:               helmop.Chart{Repo: "https://charts.example.com", Name: "dragonfly", Version: "1.10.1-patch.3"},
+			DragonflyChart:               helmop.Chart{Repo: "https://charts.example.com", Name: "dragonfly", Version: "1.10.1-patch.2"},
 			ExtrasChart:                  helmop.Chart{Repo: "https://charts.example.com", Name: "dragonfly-extras", Version: "0.1.11"},
 			MirrorChart:                  helmop.Chart{Repo: "https://charts.example.com", Name: "containerd-mirror", Version: "0.1.0"},
 			HostSyncChart:                helmop.Chart{Repo: "https://charts.example.com", Name: "p2p-host-sync", Version: "0.1.0"},

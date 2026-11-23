@@ -170,7 +170,7 @@ func TestForkChartDefaults(t *testing.T) {
 	if DefaultDragonflyChartRepo != "https://gorizond.github.io/dragonflyoss-helm-charts" {
 		t.Errorf("DefaultDragonflyChartRepo = %q", DefaultDragonflyChartRepo)
 	}
-	if DefaultDragonflyChartVersion != "1.10.1-patch.3" {
+	if DefaultDragonflyChartVersion != "1.10.1-patch.2" {
 		t.Errorf("DefaultDragonflyChartVersion = %q", DefaultDragonflyChartVersion)
 	}
 	if DefaultExtrasChartVersion != "0.1.12" {

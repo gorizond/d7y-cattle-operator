@@ -6,7 +6,7 @@ tmp="$(mktemp -d)"
 trap 'rm -rf "$tmp"' EXIT
 
 repo="${DRAGONFLY_CHART_REPO:-https://gorizond.github.io/dragonflyoss-helm-charts}"
-version="${DRAGONFLY_CHART_VERSION:-1.10.1-patch.3}"
+version="${DRAGONFLY_CHART_VERSION:-1.10.1-patch.2}"
 
 fail() {
   echo "FAIL: $*" >&2
@@ -14,19 +14,10 @@ fail() {
 }
 
 # Pull the fork chart with its packaged subcharts and verify the pinned version.
-# DRAGONFLY_CHART_DIR renders a local checkout instead, for testing an
-# unreleased fork patch.
-if [ -n "${DRAGONFLY_CHART_DIR:-}" ]; then
-  chart="$DRAGONFLY_CHART_DIR"
-  [ -d "$chart" ] || fail "DRAGONFLY_CHART_DIR=$chart is not a directory"
-  version=$(helm show chart "$chart" | awk '/^version:/ {print $2}')
-  [ -n "$version" ] || fail "local chart $chart has no version"
-else
-  helm pull dragonfly --repo "$repo" --version "$version" -d "$tmp" >/dev/null
-  chart=$(find "$tmp" -maxdepth 1 -name 'dragonfly-*.tgz' -print -quit)
-  [ -n "$chart" ] || fail "fork chart $version was not pulled from $repo"
-  helm show chart "$chart" | grep -q "^version: $version$" || fail "pulled chart is not version $version"
-fi
+helm pull dragonfly --repo "$repo" --version "$version" -d "$tmp" >/dev/null
+chart=$(find "$tmp" -maxdepth 1 -name 'dragonfly-*.tgz' -print -quit)
+[ -n "$chart" ] || fail "fork chart $version was not pulled from $repo"
+helm show chart "$chart" | grep -q "^version: $version$" || fail "pulled chart is not version $version"
 
 cat >"$tmp/manager-values.yaml" <<'YAML'
 fullnameOverride: c1
@@ -208,13 +199,9 @@ YAML
 
 helm template c1-data "$chart" --namespace dragonfly-system -f "$tmp/data-values.yaml" >"$tmp/data.yaml"
 
-# The operator sets scheduler.addrs from node IPs. With addrs set the chart
-# must not render the legacy singular scheduler.addr service address.
+# The operator sets scheduler.addrs from node IPs.
 if ! grep -A6 'dynconfig.yaml: |-' "$tmp/data.yaml" | grep -q 'addrs:'; then
   fail "data dynconfig is missing scheduler addrs"
-fi
-if grep -A6 'dynconfig.yaml: |-' "$tmp/data.yaml" | grep -qE '^[[:space:]]+addr:'; then
-  fail "data dynconfig still renders the singular scheduler.addr"
 fi
 client_doc=$(awk 'BEGIN{RS="---"} /kind: DaemonSet/ && /name: c1-data-client/ {print}' "$tmp/data.yaml")
 seed_doc=$(awk 'BEGIN{RS="---"} /kind: StatefulSet/ && /name: c1-data-seed-client/ {print}' "$tmp/data.yaml")

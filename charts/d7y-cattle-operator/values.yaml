@@ -56,9 +56,9 @@ dragonfly:
     # and the non-headless scheduler client Service.
     repo: https://gorizond.github.io/dragonflyoss-helm-charts
     name: dragonfly
-    # 1.10.1-patch.3 is the verified version. Other versions are allowed but
+    # 1.10.1-patch.2 is the verified version. Other versions are allowed but
     # produce an UnsupportedChartVersion warning event.
-    version: 1.10.1-patch.3
+    version: 1.10.1-patch.2
 
 # dragonfly-extras chart owns the manager Ingresses and optional VPAs.
 extras:
