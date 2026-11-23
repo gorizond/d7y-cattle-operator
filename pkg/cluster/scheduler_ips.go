@@ -60,21 +60,11 @@ func (c *Controller) ensureSchedulerIPs(cluster *provv1.Cluster, roles Roles, se
 		if c.clusterCache == nil {
 			return nil, nil
 		}
-		clusters, err := c.clusterCache.List(cluster.Namespace, labels.Everything())
+		other, err := c.otherSeedSchedulerIPs(cluster)
 		if err != nil {
-			return nil, fmt.Errorf("list managed clusters: %w", err)
+			return nil, err
 		}
-		for _, candidate := range clusters {
-			if candidate == nil || candidate.Name == cluster.Name {
-				continue
-			}
-			if candidate.Labels[LabelEnabled] != "true" || candidate.Annotations[AnnotationSeed] != "true" {
-				continue
-			}
-			for _, raw := range strings.Split(candidate.Annotations[AnnotationSchedulerIPs], ",") {
-				addPublicIPv4(&ips, seen, raw)
-			}
-		}
+		ips = other
 	}
 	sort.Strings(ips)
 	desired := strings.Join(ips, ",")
@@ -165,12 +155,29 @@ func downstreamAccessDenied(err error) bool {
 	var status apierrors.APIStatus
 	if errors.As(err, &status) {
 		code := status.Status().Code
-		return code == http.StatusForbidden || code == http.StatusUnauthorized
+		if code == http.StatusForbidden || code == http.StatusUnauthorized {
+			return true
+		}
+	}
+	// Rancher's cluster proxy can return its APIError JSON as a raw/wrapped
+	// body. The k8s client then produces a generic error whose text contains
+	// these markers instead of a typed StatusError.
+	text := strings.ToLower(err.Error())
+	for _, marker := range []string{
+		`"status":403`, `"status":401`,
+		`"code":"forbidden"`, `"code":"unauthorized"`,
+		" is forbidden: ", "cannot get resource", "cannot list resource",
+	} {
+		if strings.Contains(text, marker) {
+			return true
+		}
 	}
 	return false
 }
 
-func (c *Controller) discoverSeedSchedulerIPs(cluster *provv1.Cluster) ([]string, error) {
+// localSchedulerPodIPs follows the precise path: list scheduler pods through
+// the Rancher kubeconfig and map them to the seed's CAPI Machines.
+func (c *Controller) localSchedulerPodIPs(cluster *provv1.Cluster) ([]string, error) {
 	if cluster == nil {
 		return nil, nil
 	}
@@ -188,18 +195,7 @@ func (c *Controller) discoverSeedSchedulerIPs(cluster *provv1.Cluster) ([]string
 	}
 	pods, err := c.downstream.ListSchedulerPods(c.ctx, kubeconfig)
 	if err != nil {
-		if !downstreamAccessDenied(err) {
-			return nil, err
-		}
-		fallback, fallbackErr := c.seedMachineIPs(cluster)
-		if fallbackErr != nil || len(fallback) == 0 {
-			return nil, err
-		}
-		slog.Warn("downstream scheduler pod discovery denied; using all seed machine public IPs",
-			"cluster", cluster.Namespace+"/"+cluster.Name, "error", err)
-		c.event(cluster, corev1.EventTypeWarning, "SchedulerIPsFallback",
-			"downstream scheduler pod discovery is denied; using all seed machine public IPs")
-		return fallback, nil
+		return nil, err
 	}
 	if len(pods) == 0 {
 		return nil, nil
@@ -256,6 +252,92 @@ func (c *Controller) discoverSeedSchedulerIPs(cluster *provv1.Cluster) ([]string
 	}
 	sort.Strings(ips)
 	return ips, nil
+}
+
+// otherSeedSchedulerIPs returns the scheduler IPs published by other gated
+// seed Clusters. A new seed's scheduler runs in a reachable seed before its own
+// RKE2 exists, so this is the correct fallback when local discovery is
+// unavailable or empty.
+func (c *Controller) otherSeedSchedulerIPs(cluster *provv1.Cluster) ([]string, error) {
+	if cluster == nil || c.clusterCache == nil {
+		return nil, nil
+	}
+	clusters, err := c.clusterCache.List(cluster.Namespace, labels.Everything())
+	if err != nil {
+		return nil, fmt.Errorf("list managed clusters: %w", err)
+	}
+	seen := map[string]bool{}
+	var ips []string
+	for _, candidate := range clusters {
+		if candidate == nil || candidate.Name == cluster.Name {
+			continue
+		}
+		if candidate.Labels[LabelEnabled] != "true" || candidate.Annotations[AnnotationSeed] != "true" {
+			continue
+		}
+		for _, raw := range strings.Split(candidate.Annotations[AnnotationSchedulerIPs], ",") {
+			addPublicIPv4(&ips, seen, raw)
+		}
+	}
+	sort.Strings(ips)
+	return ips, nil
+}
+
+func (c *Controller) schedulerFallback(cluster *provv1.Cluster, cause error, source string) {
+	if cause != nil {
+		slog.Warn("local scheduler pod discovery failed; using fallback scheduler IPs",
+			"cluster", cluster.Namespace+"/"+cluster.Name,
+			"source", source,
+			"access_denied", downstreamAccessDenied(cause),
+			"error_type", fmt.Sprintf("%T", cause),
+			"error", cause,
+		)
+		c.event(cluster, corev1.EventTypeWarning, "SchedulerIPsFallback",
+			"local scheduler pod discovery failed; using scheduler IPs from "+source)
+		return
+	}
+	slog.Warn("local scheduler pods are absent; using fallback scheduler IPs",
+		"cluster", cluster.Namespace+"/"+cluster.Name, "source", source)
+	c.event(cluster, corev1.EventTypeWarning, "SchedulerIPsFallback",
+		"local scheduler pods are absent; using scheduler IPs from "+source)
+}
+
+func (c *Controller) discoverSeedSchedulerIPs(cluster *provv1.Cluster) ([]string, error) {
+	if cluster == nil {
+		return nil, nil
+	}
+	local, localErr := c.localSchedulerPodIPs(cluster)
+	if localErr == nil && len(local) > 0 {
+		return local, nil
+	}
+
+	// A new seed's scheduler runs in a reachable seed until its own RKE2
+	// exists. Prefer another gated seed's published scheduler IPs before
+	// falling back to this seed's own machines.
+	other, otherErr := c.otherSeedSchedulerIPs(cluster)
+	if otherErr == nil && len(other) > 0 {
+		c.schedulerFallback(cluster, localErr, "another gated seed")
+		return other, nil
+	}
+
+	// If the local scheduler pods cannot be read at all (missing kubeconfig or
+	// 401/403), the seed's own public CAPI machine IPs are the last resort. Do
+	// not use them when the pod list succeeded but is empty: the scheduler may
+	// intentionally live in another seed.
+	if localErr != nil {
+		machines, machineErr := c.seedMachineIPs(cluster)
+		if machineErr == nil && len(machines) > 0 {
+			c.schedulerFallback(cluster, localErr, "the seed's public CAPI machine IPs")
+			return machines, nil
+		}
+	}
+	if localErr != nil {
+		return nil, localErr
+	}
+	if otherErr != nil {
+		return nil, otherErr
+	}
+	return nil, nil
 }
 
 func (c *Controller) machineChanged(key string, machine *capiv1beta2.Machine) (*capiv1beta2.Machine, error) {

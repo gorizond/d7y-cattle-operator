@@ -201,6 +201,9 @@ func (c *Controller) reconcile(key string, cluster *provv1.Cluster) (result *pro
 		if err != nil {
 			seedDiscoveryFailed = true
 			c.event(cluster, corev1.EventTypeWarning, "SchedulerIPsUnavailable", err.Error())
+			// Return the discovery error so the workqueue retries the Cluster;
+			// machine/cluster events alone left it idle after a transient 403.
+			errs = append(errs, err)
 		}
 	}
 	mtlsReady := true

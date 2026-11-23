@@ -467,12 +467,15 @@ pulled by Fleet at reconcile time and is not vendored here.
 Scheduler clients connect directly to the scheduler pod node IP on port
 `8002`; there is no public scheduler Traefik front. The per-seed
 `p2p.dragonfly.io/scheduler-ips` annotation is normally derived from downstream
-`component=scheduler` pods and their CAPI Machine public IPs. If the Rancher
-kubeconfig token is denied (HTTP 401/403 on the cluster proxy), the operator
-falls back to all public CAPI Machine IPs of the seed Cluster and emits a
-`SchedulerIPsFallback` warning, so bootstrap and host-sync still receive a
-non-empty scheduler list. The host bootstrap and local dynconfig use
-`<scheduler-node-ip>:8002`.
+`component=scheduler` pods and their CAPI Machine public IPs. A new seed can run
+its scheduler in an already reachable seed before its own RKE2 exists. If local
+scheduler pods are unavailable (missing kubeconfig, HTTP 401/403 on the cluster
+proxy, or no local pods), the operator uses the scheduler IPs published by
+another gated seed; if none, it uses the seed's public CAPI Machine IPs on
+access-denied errors. The fallback emits a `SchedulerIPsFallback` warning, and
+discovery failures are returned to the workqueue so the Cluster is retried. A
+worker created after Ready then receives the updated annotation and bootstrap
+env. The host bootstrap and local dynconfig use `<scheduler-node-ip>:8002`.
 
 The PKI layout is:
 
