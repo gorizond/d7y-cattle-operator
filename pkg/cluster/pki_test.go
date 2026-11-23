@@ -990,3 +990,42 @@ func TestServerLeafMustBeTrustedByBundle(t *testing.T) {
 		t.Error("serverLeafCovers rejected a leaf trusted by the bundle")
 	}
 }
+
+func TestSchedulerSANIPsIncludePrivateAddresses(t *testing.T) {
+	ips := schedulerSANIPs([]string{"10.48.0.45", "62.83.78.181", "127.0.0.1", "169.254.1.1", "not-an-ip"})
+	if !certHasIP(ips, "10.48.0.45") {
+		t.Errorf("scheduler SANs = %v, want the private local address", ips)
+	}
+	if !certHasIP(ips, "62.83.78.181") {
+		t.Errorf("scheduler SANs = %v, want the public address", ips)
+	}
+	if certHasIP(ips, "127.0.0.1") || certHasIP(ips, "169.254.1.1") {
+		t.Errorf("scheduler SANs = %v, want loopback and link-local excluded", ips)
+	}
+}
+
+func TestExistingSchedulerIPsKeepPrivateAddresses(t *testing.T) {
+	ca, err := pki.NewCA(nil)
+	if err != nil {
+		t.Fatalf("NewCA() error = %v", err)
+	}
+	bundle, err := ca.Sign(pki.IssueOptions{
+		CommonName:  "scheduler",
+		ServerAuth:  true,
+		IPAddresses: []net.IP{net.ParseIP("10.48.0.45"), net.ParseIP("62.83.78.181"), net.ParseIP("127.0.0.1")},
+	})
+	if err != nil {
+		t.Fatalf("Sign() error = %v", err)
+	}
+	secret := &corev1.Secret{Data: map[string][]byte{corev1.TLSCertKey: bundle.CertPEM}}
+	ips := existingSchedulerIPs(secret)
+	if !certHasIP(ips, "10.48.0.45") {
+		t.Errorf("existing SANs = %v, want the previously issued private address", ips)
+	}
+	if !certHasIP(ips, "62.83.78.181") {
+		t.Errorf("existing SANs = %v, want the previously issued public address", ips)
+	}
+	if certHasIP(ips, "127.0.0.1") {
+		t.Errorf("existing SANs = %v, want loopback excluded", ips)
+	}
+}

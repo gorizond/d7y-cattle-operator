@@ -542,9 +542,9 @@ func (c *Controller) schedulerIssueOptions(cluster *provv1.Cluster, seedIPs []st
 	if host == "" {
 		return pki.IssueOptions{}, fmt.Errorf("scheduler host is empty: --p2p-domain is required")
 	}
-	ips := publicIPs(seedIPs)
+	ips := schedulerSANIPs(seedIPs)
 	if discoveryFailed {
-		ips = append(ips, existingPublicIPs(existing)...)
+		ips = append(ips, existingSchedulerIPs(existing)...)
 	}
 	ips = append(ips, net.IPv4(127, 0, 0, 1), net.IPv6loopback)
 	return pki.IssueOptions{
@@ -556,12 +556,15 @@ func (c *Controller) schedulerIssueOptions(cluster *provv1.Cluster, seedIPs []st
 	}, nil
 }
 
-func publicIPs(values []string) []net.IP {
+// schedulerSANIPs returns the scheduler addresses that peers may dial as
+// certificate IP SANs. Private addresses are included: a cluster's own
+// scheduler is reachable on its internal network even when not publicly
+// routable.
+func schedulerSANIPs(values []string) []net.IP {
 	result := make([]net.IP, 0, len(values))
 	for _, raw := range values {
-		ip := net.ParseIP(strings.TrimSpace(raw))
-		if ip != nil && pki.IsPublicIP(ip) {
-			result = append(result, ip)
+		if value, ok := usableIPv4(raw); ok {
+			result = append(result, net.ParseIP(value))
 		}
 	}
 	return pki.NormalizeIPs(result)
@@ -829,9 +832,10 @@ func errorsJoin(errs []error) error {
 	return errors.Join(errs...)
 }
 
-// existingPublicIPs keeps previously issued public scheduler IPs when a
+// existingSchedulerIPs keeps previously issued scheduler IP SANs when a
 // transient downstream discovery failure would otherwise shrink the SAN set.
-func existingPublicIPs(secret *corev1.Secret) []net.IP {
+// Private and public addresses are preserved.
+func existingSchedulerIPs(secret *corev1.Secret) []net.IP {
 	if secret == nil {
 		return nil
 	}
@@ -841,7 +845,7 @@ func existingPublicIPs(secret *corev1.Secret) []net.IP {
 	}
 	var result []net.IP
 	for _, ip := range certs[0].IPAddresses {
-		if pki.IsPublicIP(ip) {
+		if ip.IsGlobalUnicast() {
 			result = append(result, ip)
 		}
 	}

@@ -48,9 +48,10 @@ type helmOpWatcher interface {
 }
 
 // ensureSchedulerIPs computes scheduler-ips for a managed cluster. A seed
-// cluster publishes its own machine IPs; other gated clusters aggregate the
-// scheduler-ips of other seed clusters. The legacy scheduler-public-ip
-// annotation is removed during the same reconcile.
+// cluster publishes its own scheduler addresses (private ones included); other
+// gated clusters aggregate the public scheduler-ips of other seed clusters.
+// The legacy scheduler-public-ip annotation is removed during the same
+// reconcile.
 func (c *Controller) ensureSchedulerIPs(cluster *provv1.Cluster, roles Roles, seedIPs []string) (*provv1.Cluster, error) {
 	if cluster == nil || c.clusters == nil {
 		return nil, nil
@@ -58,8 +59,10 @@ func (c *Controller) ensureSchedulerIPs(cluster *provv1.Cluster, roles Roles, se
 	seen := map[string]bool{}
 	var ips []string
 	if roles.Seed {
+		// Preserve discovery order: the cluster's own scheduler addresses come
+		// first, internal/private before external/public.
 		for _, raw := range seedIPs {
-			addPublicIPv4(&ips, seen, raw)
+			appendUsableIPv4(&ips, seen, raw)
 		}
 	} else {
 		if c.clusterCache == nil {
@@ -71,7 +74,6 @@ func (c *Controller) ensureSchedulerIPs(cluster *provv1.Cluster, roles Roles, se
 		}
 		ips = other
 	}
-	sort.Strings(ips)
 	desired := strings.Join(ips, ",")
 	current := strings.TrimSpace(cluster.Annotations[AnnotationSchedulerIPs])
 	_, hasLegacy := cluster.Annotations[legacySchedulerPublicIP]
@@ -101,25 +103,88 @@ func (c *Controller) ensureSchedulerIPs(cluster *provv1.Cluster, roles Roles, se
 	return result, nil
 }
 
-// addPublicIPv4 appends raw to ips when it is a public IPv4 address. It
-// reports whether raw is a public IPv4, including an address already seen, so
-// callers can tell that the candidate was handled even when deduplicated.
-func addPublicIPv4(ips *[]string, seen map[string]bool, raw string) bool {
+// usableIPv4 returns the canonical form of raw when it is an IPv4 address that
+// a peer can dial. Private (RFC1918) and public addresses are both accepted;
+// loopback, link-local, unspecified, multicast and broadcast are rejected.
+func usableIPv4(raw string) (string, bool) {
 	ip := net.ParseIP(strings.TrimSpace(raw))
-	if ip == nil || ip.To4() == nil || !pki.IsPublicIP(ip) {
-		return false
+	if ip == nil {
+		return "", false
 	}
-	value := ip.String()
-	if seen[value] {
-		return true
+	ip4 := ip.To4()
+	if ip4 == nil || !ip4.IsGlobalUnicast() {
+		return "", false
+	}
+	return ip4.String(), true
+}
+
+// appendUsableIPv4 appends raw when it is a usable IPv4 address that is not
+// already present. Order is preserved so callers control locality priority.
+func appendUsableIPv4(ips *[]string, seen map[string]bool, raw string) {
+	value, ok := usableIPv4(raw)
+	if !ok || seen[value] {
+		return
 	}
 	seen[value] = true
 	*ips = append(*ips, value)
+}
+
+// addPublicIPv4 appends raw when it is a public IPv4 address. Private
+// addresses from another cluster are not reachable externally and are dropped.
+func addPublicIPv4(ips *[]string, seen map[string]bool, raw string) {
+	ip := net.ParseIP(strings.TrimSpace(raw))
+	if ip == nil || ip.To4() == nil || !pki.IsPublicIP(ip) {
+		return
+	}
+	value := ip.String()
+	if seen[value] {
+		return
+	}
+	seen[value] = true
+	*ips = append(*ips, value)
+}
+
+// schedulerIPGroups collects usable local IPv4 addresses into an internal
+// group and an external group. The internal group is emitted first so the
+// closest address stays first, then each group is sorted for determinism.
+type schedulerIPGroups struct {
+	internal []string
+	external []string
+	seen     map[string]bool
+}
+
+func (g *schedulerIPGroups) add(raw string, internal bool) bool {
+	value, ok := usableIPv4(raw)
+	if !ok {
+		return false
+	}
+	if g.seen == nil {
+		g.seen = map[string]bool{}
+	}
+	if !g.seen[value] {
+		g.seen[value] = true
+		if internal {
+			g.internal = append(g.internal, value)
+		} else {
+			g.external = append(g.external, value)
+		}
+	}
 	return true
 }
 
-// seedMachineIPs returns all public IPv4 addresses of the seed Cluster's CAPI
-// Machines. It is the fallback when the downstream kubeconfig cannot be used.
+func (g *schedulerIPGroups) addInternal(raw string) bool { return g.add(raw, true) }
+func (g *schedulerIPGroups) addExternal(raw string) bool { return g.add(raw, false) }
+
+func (g *schedulerIPGroups) ips() []string {
+	sort.Strings(g.internal)
+	sort.Strings(g.external)
+	return append(g.internal, g.external...)
+}
+
+// seedMachineIPs returns the usable IPv4 addresses of the seed Cluster's CAPI
+// Machines, internal addresses first. It is the fallback when the downstream
+// kubeconfig cannot be used; private addresses are valid for the local
+// scheduler.
 func (c *Controller) seedMachineIPs(cluster *provv1.Cluster) ([]string, error) {
 	if cluster == nil || c.machines == nil {
 		return nil, nil
@@ -128,8 +193,7 @@ func (c *Controller) seedMachineIPs(cluster *provv1.Cluster) ([]string, error) {
 	if err != nil {
 		return nil, fmt.Errorf("list machines for seed IPs: %w", err)
 	}
-	seen := map[string]bool{}
-	var ips []string
+	var groups schedulerIPGroups
 	for i := range machines {
 		machine := machines[i]
 		if machine == nil || machine.DeletionTimestamp != nil || machine.Namespace != cluster.Namespace {
@@ -143,13 +207,15 @@ func (c *Controller) seedMachineIPs(cluster *provv1.Cluster) ([]string, error) {
 			continue
 		}
 		for _, address := range machine.Status.Addresses {
-			if address.Type == capiv1beta2.MachineInternalIP || address.Type == capiv1beta2.MachineExternalIP {
-				addPublicIPv4(&ips, seen, address.Address)
+			switch address.Type {
+			case capiv1beta2.MachineInternalIP:
+				groups.addInternal(address.Address)
+			case capiv1beta2.MachineExternalIP:
+				groups.addExternal(address.Address)
 			}
 		}
 	}
-	sort.Strings(ips)
-	return ips, nil
+	return groups.ips(), nil
 }
 
 // downstreamAccessDenied reports whether a downstream API error means the
@@ -245,8 +311,7 @@ func (c *Controller) localSchedulerPodIPs(cluster *provv1.Cluster) ([]string, er
 		}
 	}
 
-	seen := map[string]bool{}
-	var ips []string
+	var groups schedulerIPGroups
 	for _, pod := range pods {
 		node, hasNode := nodes[pod.NodeName]
 		machine := byNode[pod.NodeName]
@@ -260,21 +325,20 @@ func (c *Controller) localSchedulerPodIPs(cluster *provv1.Cluster) ([]string, er
 			}
 		}
 		if hasNode {
-			nodeIPs := node.ExternalIPs
-			if len(nodeIPs) == 0 {
-				// Hetzner and static node drivers expose the routable public
-				// IPv4 as the Node InternalIP. addPublicIPv4 still drops
-				// private, link-local and loopback addresses.
-				nodeIPs = node.InternalIPs
-			}
+			// The Node is authoritative and may expose a private InternalIP
+			// (the same isolated network reaches it) or a public one on
+			// drivers such as Hetzner. Internal addresses stay first.
 			published := false
-			for _, raw := range nodeIPs {
-				if addPublicIPv4(&ips, seen, raw) {
+			for _, raw := range node.InternalIPs {
+				if groups.addInternal(raw) {
 					published = true
 				}
 			}
-			// Only fall through to the Machine when the Node has no public
-			// address at all; this keeps the Machine ExternalIP fallback.
+			for _, raw := range node.ExternalIPs {
+				if groups.addExternal(raw) {
+					published = true
+				}
+			}
 			if published {
 				continue
 			}
@@ -282,17 +346,17 @@ func (c *Controller) localSchedulerPodIPs(cluster *provv1.Cluster) ([]string, er
 		if machine == nil {
 			continue
 		}
+		// No usable Node address: the Machine is the last-resort source.
 		for _, address := range machine.Status.Addresses {
-			// With a downstream Node the Machine is only an ExternalIP
-			// fallback; without one keep the legacy Machine address handling.
-			if address.Type == capiv1beta2.MachineExternalIP ||
-				(!hasNode && address.Type == capiv1beta2.MachineInternalIP) {
-				addPublicIPv4(&ips, seen, address.Address)
+			switch address.Type {
+			case capiv1beta2.MachineInternalIP:
+				groups.addInternal(address.Address)
+			case capiv1beta2.MachineExternalIP:
+				groups.addExternal(address.Address)
 			}
 		}
 	}
-	sort.Strings(ips)
-	return ips, nil
+	return groups.ips(), nil
 }
 
 // firstInternalIP returns the first parseable InternalIP, which identifies the
@@ -306,10 +370,12 @@ func firstInternalIP(addresses []string) string {
 	return ""
 }
 
-// otherSeedSchedulerIPs returns the scheduler IPs published by other gated
-// seed Clusters. A new seed's scheduler runs in a reachable seed before its own
-// RKE2 exists, so this is the correct fallback when local discovery is
-// unavailable or empty.
+// otherSeedSchedulerIPs returns the PUBLIC scheduler IPs published by other
+// gated seed Clusters. Private addresses are not reachable from another
+// cluster, so they are never borrowed; external sharing is only a fallback.
+// A new seed's scheduler runs in a reachable seed before its own RKE2 exists,
+// so this is the correct fallback when local discovery is unavailable or
+// empty.
 func (c *Controller) otherSeedSchedulerIPs(cluster *provv1.Cluster) ([]string, error) {
 	if cluster == nil || c.clusterCache == nil {
 		return nil, nil
@@ -373,15 +439,16 @@ func (c *Controller) discoverSeedSchedulerIPs(cluster *provv1.Cluster) ([]string
 	}
 
 	// If the local scheduler pods cannot be read at all (missing kubeconfig or
-	// 401/403), the seed's own public CAPI machine IPs are the last resort. Do
-	// not use them for a transiently empty pod list: the scheduler may
-	// intentionally live in another seed, and the existing annotation must be
-	// preserved until the pods reappear.
+	// 401/403), the seed's own CAPI machine IPs are the last resort; private
+	// addresses are valid for the local scheduler. Do not use them for a
+	// transiently empty pod list: the scheduler may intentionally live in
+	// another seed, and the existing annotation must be preserved until the
+	// pods reappear.
 	if localErr != nil {
 		if !errors.Is(localErr, errNoSchedulerPods) {
 			machines, machineErr := c.seedMachineIPs(cluster)
 			if machineErr == nil && len(machines) > 0 {
-				c.schedulerFallback(cluster, localErr, "the seed's public CAPI machine IPs")
+				c.schedulerFallback(cluster, localErr, "the seed's CAPI machine IPs")
 				return machines, nil
 			}
 		}
