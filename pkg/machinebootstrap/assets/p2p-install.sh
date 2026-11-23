@@ -1295,6 +1295,12 @@ if [ "$CONTAINERD_MAJOR" = "2" ]; then
   type = 'snapshot'
   address = '/run/containerd-nydus/containerd-nydus-grpc.sock'
 TOML
+  # containerd derives the CRI imagefs path from its own root, while the host
+  # nydus snapshotter stores data in /var/lib/containerd-nydus. Without this
+  # link kubelet image GC reports ImageGCFailed and node-pressure eviction
+  # never sees a dedicated image fs. Symlink only: no restart, no data move.
+  mkdir -p "$RKE2_CONTAINERD_DIR"
+  ln -sfn /var/lib/containerd-nydus "${RKE2_CONTAINERD_DIR}/io.containerd.snapshotter.v1.nydus"
   CONTAINERD_CONFIG_PATH="$NYDUS_DROPIN"
 else
   # containerd 1.x has no drop-in imports; write a global-nydus template. This

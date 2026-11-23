@@ -20,6 +20,10 @@ const (
 	conditionIDMismatch           condition.Cond = "d7y.io/IdMismatch"
 )
 
+// legacyNydusCondition was written by the removed in-cluster nydus chart. The
+// host-only operator does not own it, so reconcile drops it from status.
+const legacyNydusCondition = "d7y.io/NydusReady"
+
 // statusBuilder accumulates all condition changes for one reconcile pass and
 // writes them with a single UpdateStatus call. Multiple status updates with the
 // same stale resourceVersion would otherwise conflict with each other.
@@ -30,7 +34,20 @@ type statusBuilder struct {
 }
 
 func (c *Controller) newStatus(cluster *provv1.Cluster) *statusBuilder {
-	return &statusBuilder{controller: c, original: cluster, updated: cluster.DeepCopy()}
+	updated := cluster.DeepCopy()
+	dropLegacyConditions(updated)
+	return &statusBuilder{controller: c, original: cluster, updated: updated}
+}
+
+func dropLegacyConditions(cluster *provv1.Cluster) {
+	conditions := cluster.Status.Conditions[:0]
+	for _, cond := range cluster.Status.Conditions {
+		if cond.Type == legacyNydusCondition {
+			continue
+		}
+		conditions = append(conditions, cond)
+	}
+	cluster.Status.Conditions = conditions
 }
 
 func (s *statusBuilder) set(cond condition.Cond, value bool, reason, message string) {

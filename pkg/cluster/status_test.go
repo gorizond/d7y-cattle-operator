@@ -14,6 +14,22 @@ import (
 	"github.com/gorizond/d7y-cattle-operator/pkg/managerapi"
 )
 
+func TestNewStatusDropsLegacyNydusCondition(t *testing.T) {
+	cluster := &provv1.Cluster{Status: provv1.ClusterStatus{Conditions: []genericcondition.GenericCondition{
+		{Type: legacyNydusCondition, Status: corev1.ConditionFalse, Reason: "NydusDeferred"},
+		{Type: "RancherCondition", Status: corev1.ConditionTrue},
+	}}}
+
+	status := (&Controller{}).newStatus(cluster)
+
+	if len(status.updated.Status.Conditions) != 1 || status.updated.Status.Conditions[0].Type != "RancherCondition" {
+		t.Errorf("updated conditions = %+v, want only RancherCondition", status.updated.Status.Conditions)
+	}
+	if len(cluster.Status.Conditions) != 2 {
+		t.Errorf("original conditions = %+v, want untouched", cluster.Status.Conditions)
+	}
+}
+
 func TestReconcileSetsRoleConditions(t *testing.T) {
 	controller, _, _ := newTestController(t)
 	clusterStore := controller.clusters.(*fakeClusterStore)
