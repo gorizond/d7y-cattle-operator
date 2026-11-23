@@ -252,6 +252,31 @@ func TestReconcileCarriesSchedulerIPs(t *testing.T) {
 	}
 }
 
+func TestReconcileWorkerAfterSchedulerIPsPicksUpEnv(t *testing.T) {
+	controller, secrets, machines, clusters, _, _ := testController()
+	clusters.clusters["fleet-default/c1"].Annotations[bootstrap.SchedulerIPsAnnotation] = "203.0.113.10"
+	machines.machines["fleet-default/machine-2"] = &capiv1beta2.Machine{ObjectMeta: metav1.ObjectMeta{
+		Name: "machine-2", Namespace: "fleet-default",
+		Labels: map[string]string{capiClusterName: "c1"},
+	}}
+	worker := &corev1.Secret{
+		ObjectMeta: metav1.ObjectMeta{Name: "machine-2-machine-bootstrap", Namespace: "fleet-default"},
+		Type:       bootstrapSecretType,
+		Data:       map[string][]byte{bootstrapValueKey: []byte("#!/bin/bash\necho worker\ndo_install \"$@\"\nexit 0\n")},
+	}
+
+	if _, err := controller.reconcile("", worker.DeepCopy()); err != nil {
+		t.Fatalf("reconcile(worker) error = %v", err)
+	}
+	value := string(secrets.secret.Data[bootstrapValueKey])
+	if !strings.Contains(value, "SCHEDULER_IPS='203.0.113.10'\n") {
+		t.Fatalf("worker bootstrap env is missing scheduler IPs: %q", value)
+	}
+	if !strings.Contains(value, bootstrap.Marker) {
+		t.Fatalf("worker bootstrap block is missing: %q", value)
+	}
+}
+
 func TestReconcileNonGatedClusterUntouched(t *testing.T) {
 	controller, secrets, _, clusters, events, _ := testController()
 	clusters.clusters["fleet-default/c1"].Annotations[annotationSeed] = "false"

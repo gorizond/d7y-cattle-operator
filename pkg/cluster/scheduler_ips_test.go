@@ -242,8 +242,8 @@ func TestSeedForbiddenDownstreamWithoutMachineIPsKeepsAnnotation(t *testing.T) {
 		schema.GroupResource{Group: "management.cattle.io", Resource: "clusters"}, "c-m-test", errors.New("forbidden"))
 	controller.machines = &fakeMachineCache{}
 
-	if _, err := controller.reconcile("", cluster); err != nil {
-		t.Fatalf("reconcile() error = %v", err)
+	if _, err := controller.reconcile("", cluster); err == nil {
+		t.Fatal("reconcile() error = nil, want the discovery error for a retry")
 	}
 	if got := controller.clusters.(*fakeClusterStore).annotation(AnnotationSchedulerIPs); got != "203.0.113.10" {
 		t.Errorf("scheduler IPs = %q, want the stale annotation preserved", got)
@@ -253,19 +253,44 @@ func TestSeedForbiddenDownstreamWithoutMachineIPsKeepsAnnotation(t *testing.T) {
 	}
 }
 
-func TestSeedMissingKubeconfigKeepsAnnotation(t *testing.T) {
+func TestSeedMissingKubeconfigFallsBackToMachineIPs(t *testing.T) {
 	controller, _, events := newTestController(t)
 	cluster := testSeedCluster("42")
-	cluster.Annotations[AnnotationSchedulerIPs] = "203.0.113.10"
+	cluster.Annotations[AnnotationSchedulerIPs] = "203.0.113.99"
 	controller.clusters.(*fakeClusterStore).set(cluster)
 	controller.secrets.(*fakeSecretStore).secrets = map[string]*corev1.Secret{}
-	controller.downstream.(*fakeSchedulerPodLister).pods = nil
+	controller.machines = &fakeMachineCache{machines: []*capiv1beta2.Machine{
+		seedMachine("c1", "c1-0", "203.0.113.10"),
+	}}
 
 	if _, err := controller.reconcile("", cluster); err != nil {
 		t.Fatalf("reconcile() error = %v", err)
 	}
 	if got := controller.clusters.(*fakeClusterStore).annotation(AnnotationSchedulerIPs); got != "203.0.113.10" {
-		t.Errorf("scheduler IPs = %q, want stale annotation preserved on discovery failure", got)
+		t.Errorf("scheduler IPs = %q, want the seed machine public IP", got)
+	}
+	if !hasEventReason(events.events, "SchedulerIPsFallback") {
+		t.Errorf("events = %+v, want SchedulerIPsFallback", events.events)
+	}
+	if hasEventReason(events.events, "SchedulerIPsUnavailable") {
+		t.Errorf("events = %+v, must not report SchedulerIPsUnavailable after a fallback", events.events)
+	}
+}
+
+func TestSeedMissingKubeconfigWithoutFallbackKeepsAnnotation(t *testing.T) {
+	controller, _, events := newTestController(t)
+	cluster := testSeedCluster("42")
+	cluster.Annotations[AnnotationSchedulerIPs] = "203.0.113.10"
+	controller.clusters.(*fakeClusterStore).set(cluster)
+	controller.secrets.(*fakeSecretStore).secrets = map[string]*corev1.Secret{}
+	controller.machines = &fakeMachineCache{}
+	controller.clusterCache = &fakeClusterCache{}
+
+	if _, err := controller.reconcile("", cluster); err == nil {
+		t.Fatal("reconcile() error = nil, want the discovery error for a retry")
+	}
+	if got := controller.clusters.(*fakeClusterStore).annotation(AnnotationSchedulerIPs); got != "203.0.113.10" {
+		t.Errorf("scheduler IPs = %q, want the stale annotation preserved", got)
 	}
 	if !hasEventReason(events.events, "SchedulerIPsUnavailable") {
 		t.Errorf("events = %+v, want SchedulerIPsUnavailable", events.events)
@@ -285,20 +310,95 @@ func TestSeedEmptySchedulerPodsRemovesAnnotation(t *testing.T) {
 	}
 }
 
-func TestSeedDownstreamErrorKeepsAnnotation(t *testing.T) {
+func TestSeedDownstreamErrorWithoutFallbackKeepsAnnotation(t *testing.T) {
 	controller, _, events := newTestController(t)
 	cluster := testSeedCluster("42")
 	cluster.Annotations[AnnotationSchedulerIPs] = "203.0.113.10"
 	controller.clusters.(*fakeClusterStore).set(cluster)
 	controller.downstream.(*fakeSchedulerPodLister).err = errors.New("downstream unavailable")
+	controller.machines = &fakeMachineCache{}
+	controller.clusterCache = &fakeClusterCache{}
+
+	if _, err := controller.reconcile("", cluster); err == nil {
+		t.Fatal("reconcile() error = nil, want the discovery error for a retry")
+	}
+	if got := controller.clusters.(*fakeClusterStore).annotation(AnnotationSchedulerIPs); got != "203.0.113.10" {
+		t.Errorf("scheduler IPs = %q, want the stale annotation preserved", got)
+	}
+	if !hasEventReason(events.events, "SchedulerIPsUnavailable") {
+		t.Errorf("events = %+v, want SchedulerIPsUnavailable", events.events)
+	}
+}
+
+func TestSeedEmptySchedulerPodsUsesOtherSeedIPs(t *testing.T) {
+	controller, _, events := newTestController(t)
+	cluster := testSeedCluster("42")
+	controller.clusters.(*fakeClusterStore).set(cluster)
+	poligon := schedulerSeed("poligon", "203.0.113.50")
+	controller.clusterCache = &fakeClusterCache{clusters: []*provv1.Cluster{cluster, poligon}}
+	controller.downstream.(*fakeSchedulerPodLister).pods = nil
 
 	if _, err := controller.reconcile("", cluster); err != nil {
 		t.Fatalf("reconcile() error = %v", err)
 	}
-	if got := controller.clusters.(*fakeClusterStore).annotation(AnnotationSchedulerIPs); got != "203.0.113.10" {
-		t.Errorf("scheduler IPs = %q, want stale annotation preserved on downstream error", got)
+	if got := controller.clusters.(*fakeClusterStore).annotation(AnnotationSchedulerIPs); got != "203.0.113.50" {
+		t.Errorf("scheduler IPs = %q, want the other seed's scheduler IPs", got)
 	}
-	if !hasEventReason(events.events, "SchedulerIPsUnavailable") {
-		t.Errorf("events = %+v, want SchedulerIPsUnavailable", events.events)
+	if !hasEventReason(events.events, "SchedulerIPsFallback") {
+		t.Errorf("events = %+v, want SchedulerIPsFallback", events.events)
+	}
+	if hasEventReason(events.events, "SchedulerIPsUnavailable") {
+		t.Errorf("events = %+v, must not report SchedulerIPsUnavailable after a fallback", events.events)
+	}
+}
+
+func TestSeedRawForbiddenUsesOtherSeedIPs(t *testing.T) {
+	controller, _, events := newTestController(t)
+	cluster := testSeedCluster("42")
+	controller.clusters.(*fakeClusterStore).set(cluster)
+	poligon := schedulerSeed("poligon", "203.0.113.50")
+	controller.clusterCache = &fakeClusterCache{clusters: []*provv1.Cluster{cluster, poligon}}
+	controller.downstream.(*fakeSchedulerPodLister).err = errors.New(`{"Code":{"Code":"Forbidden","Status":403},"Message":"clusters.management.cattle.io is forbidden: User "u-test" cannot get resource "clusters" in API group "management.cattle.io" at the cluster scope","Cause":null,"FieldName":""} (get pods)`)
+
+	if _, err := controller.reconcile("", cluster); err != nil {
+		t.Fatalf("reconcile() error = %v", err)
+	}
+	if got := controller.clusters.(*fakeClusterStore).annotation(AnnotationSchedulerIPs); got != "203.0.113.50" {
+		t.Errorf("scheduler IPs = %q, want the other seed's scheduler IPs", got)
+	}
+	if !hasEventReason(events.events, "SchedulerIPsFallback") {
+		t.Errorf("events = %+v, want SchedulerIPsFallback", events.events)
+	}
+	if hasEventReason(events.events, "SchedulerIPsUnavailable") {
+		t.Errorf("events = %+v, must not report SchedulerIPsUnavailable after a fallback", events.events)
+	}
+}
+
+func TestSeedNilMachineCacheFallsBackToOtherSeedIPs(t *testing.T) {
+	controller, _, events := newTestController(t)
+	cluster := testSeedCluster("42")
+	controller.clusters.(*fakeClusterStore).set(cluster)
+	poligon := schedulerSeed("poligon", "203.0.113.50")
+	controller.clusterCache = &fakeClusterCache{clusters: []*provv1.Cluster{cluster, poligon}}
+	controller.machines = nil
+
+	if _, err := controller.reconcile("", cluster); err != nil {
+		t.Fatalf("reconcile() error = %v", err)
+	}
+	if got := controller.clusters.(*fakeClusterStore).annotation(AnnotationSchedulerIPs); got != "203.0.113.50" {
+		t.Errorf("scheduler IPs = %q, want the other seed's scheduler IPs", got)
+	}
+	if !hasEventReason(events.events, "SchedulerIPsFallback") {
+		t.Errorf("events = %+v, want SchedulerIPsFallback", events.events)
+	}
+}
+
+func TestDownstreamAccessDeniedRawRancherError(t *testing.T) {
+	raw := errors.New(`{"Code":{"Code":"Forbidden","Status":403},"Message":"clusters.management.cattle.io is forbidden","Cause":null,"FieldName":""} (get pods)`)
+	if !downstreamAccessDenied(raw) {
+		t.Fatal("downstreamAccessDenied() = false, want true for the raw Rancher 403 body")
+	}
+	if downstreamAccessDenied(errors.New("connection refused")) {
+		t.Fatal("downstreamAccessDenied() = true for an unrelated error")
 	}
 }
