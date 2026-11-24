@@ -142,17 +142,21 @@ func run() error {
 		NydusVersion:                 cfg.NydusVersion,
 		SnapshotterVersion:           cfg.SnapshotterVersion,
 	})
-	machinebootstrap.Register(ctx, secretController, machineController, clusterController, eventController, machinebootstrap.Options{
-		OperatorNamespace:  cfg.Namespace,
-		MTLSSecretName:     cfg.MTLSSecretName,
-		ManagerGRPCDomain:  cfg.ManagerGRPCDomain,
-		ManagerGRPCPort:    cfg.ManagerGRPCPort,
-		StaticURL:          cfg.NginxStaticURL,
-		NydusMirrorURL:     cfg.NydusMirrorURL,
-		ClientVersion:      cfg.ClientVersion,
-		NydusVersion:       cfg.NydusVersion,
-		SnapshotterVersion: cfg.SnapshotterVersion,
-	})
+	if os.Getenv("MACHINE_BOOTSTRAP_DISABLED") == "true" {
+		slog.Info("machine bootstrap controller disabled by environment")
+	} else {
+		machinebootstrap.Register(ctx, secretController, machineController, clusterController, eventController, machinebootstrap.Options{
+			OperatorNamespace:  cfg.Namespace,
+			MTLSSecretName:     cfg.MTLSSecretName,
+			ManagerGRPCDomain:  cfg.ManagerGRPCDomain,
+			ManagerGRPCPort:    cfg.ManagerGRPCPort,
+			StaticURL:          cfg.NginxStaticURL,
+			NydusMirrorURL:     cfg.NydusMirrorURL,
+			ClientVersion:      cfg.ClientVersion,
+			NydusVersion:       cfg.NydusVersion,
+			SnapshotterVersion: cfg.SnapshotterVersion,
+		})
+	}
 
 	if err := start.All(ctx, 1, coreFactory, provisioningFactory, capiFactory); err != nil {
 		return fmt.Errorf("start controllers: %w", err)
