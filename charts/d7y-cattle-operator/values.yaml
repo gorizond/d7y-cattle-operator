@@ -46,6 +46,9 @@ webhook:
     # The chart reuses the existing self-signed certificate Secret across
     # upgrades. Set rotate=true to generate a new CA and leaf on the next
     # upgrade (the webhook reloads the mounted key pair on the next handshake).
+    # Upgrading from a chart whose leaf CN/SAN did not include the webhook
+    # Service name (chart <= 0.3.37) keeps the broken certificate on reuse:
+    # set rotate=true for that one upgrade.
     rotate: false
 
 # Secret holding the CA and leaf certificate shared with Dragonfly.

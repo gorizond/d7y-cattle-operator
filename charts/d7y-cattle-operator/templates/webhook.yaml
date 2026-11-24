@@ -2,9 +2,13 @@
 {{- if not (has .Values.webhook.failurePolicy (list "Fail" "Ignore")) }}
 {{- fail "webhook.failurePolicy must be Fail or Ignore" }}
 {{- end }}
-{{- $svc := include "d7y-cattle-operator.fullname" . }}
+{{- $fullname := include "d7y-cattle-operator.fullname" . }}
 {{- $ns := .Release.Namespace }}
-{{- $certSecret := printf "%s-webhook-cert" $svc }}
+{{- /* The API server connects to the webhook Service, not the operator
+       Service. The leaf CN/SANs and the MWC service.name must both derive
+       from this one name, or admission fails with "tls: bad certificate". */}}
+{{- $webhookSvc := printf "%s-webhook" $fullname }}
+{{- $certSecret := printf "%s-cert" $webhookSvc }}
 {{- $caCert := "" }}
 {{- $tlsCert := "" }}
 {{- $tlsKey := "" }}
@@ -15,9 +19,9 @@
 {{- $tlsKey = index $existing.data "tls.key" | default "" }}
 {{- end }}
 {{- if or (not $caCert) (not $tlsCert) (not $tlsKey) }}
-{{- $altNames := list $svc (printf "%s.%s" $svc $ns) (printf "%s.%s.svc" $svc $ns) (printf "%s.%s.svc.cluster.local" $svc $ns) }}
-{{- $ca := genCA (printf "%s-webhook-ca" $svc) 3650 }}
-{{- $cert := genSignedCert (printf "%s.%s.svc" $svc $ns) nil $altNames 3650 $ca }}
+{{- $altNames := list $webhookSvc (printf "%s.%s" $webhookSvc $ns) (printf "%s.%s.svc" $webhookSvc $ns) (printf "%s.%s.svc.cluster.local" $webhookSvc $ns) }}
+{{- $ca := genCA (printf "%s-ca" $webhookSvc) 3650 }}
+{{- $cert := genSignedCert (printf "%s.%s.svc" $webhookSvc $ns) nil $altNames 3650 $ca }}
 {{- $caCert = $ca.Cert | b64enc }}
 {{- $tlsCert = $cert.Cert | b64enc }}
 {{- $tlsKey = $cert.Key | b64enc }}
@@ -37,7 +41,7 @@ data:
 apiVersion: v1
 kind: Service
 metadata:
-  name: {{ $svc }}-webhook
+  name: {{ $webhookSvc }}
   labels:
     {{- include "d7y-cattle-operator.labels" . | nindent 4 }}
 spec:
@@ -53,11 +57,11 @@ spec:
 apiVersion: admissionregistration.k8s.io/v1
 kind: MutatingWebhookConfiguration
 metadata:
-  name: {{ $svc }}
+  name: {{ $fullname }}
   labels:
     {{- include "d7y-cattle-operator.labels" . | nindent 4 }}
 webhooks:
-  - name: {{ printf "%s.machinebootstrap.d7y-cattle-operator.io" $svc | trunc 253 }}
+  - name: {{ printf "%s.machinebootstrap.d7y-cattle-operator.io" $fullname | trunc 253 }}
     admissionReviewVersions: ["v1"]
     sideEffects: None
     failurePolicy: {{ .Values.webhook.failurePolicy }}
@@ -65,7 +69,7 @@ webhooks:
     matchPolicy: Equivalent
     clientConfig:
       service:
-        name: {{ $svc }}-webhook
+        name: {{ $webhookSvc }}
         namespace: {{ $ns }}
         path: /mutate-v1-secret
         port: {{ .Values.webhook.servicePort }}
