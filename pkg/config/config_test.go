@@ -52,6 +52,9 @@ var envKeys = []string{
 	"NYDUS_SNAPSHOTTER_SHA256_ARM64",
 	"NYDUS_SNAPSHOTTER_BINARY_SHA256_AMD64",
 	"NYDUS_SNAPSHOTTER_BINARY_SHA256_ARM64",
+	"MACHINE_BOOTSTRAP_WEBHOOK_ENABLED",
+	"MACHINE_BOOTSTRAP_WEBHOOK_LISTEN_ADDRESS",
+	"MACHINE_BOOTSTRAP_WEBHOOK_CERT_DIR",
 	"KUBECONFIG",
 }
 
@@ -164,6 +167,15 @@ func TestLoadDefaults(t *testing.T) {
 	if cfg.Kubeconfig != "" {
 		t.Errorf("Kubeconfig = %q, want empty", cfg.Kubeconfig)
 	}
+	if cfg.MachineBootstrapWebhook {
+		t.Error("MachineBootstrapWebhook = true, want false by default")
+	}
+	if cfg.WebhookListenAddress != DefaultWebhookListenAddress {
+		t.Errorf("WebhookListenAddress = %q, want %q", cfg.WebhookListenAddress, DefaultWebhookListenAddress)
+	}
+	if cfg.WebhookCertDir != DefaultWebhookCertDir {
+		t.Errorf("WebhookCertDir = %q, want %q", cfg.WebhookCertDir, DefaultWebhookCertDir)
+	}
 }
 
 func TestForkChartDefaults(t *testing.T) {
@@ -269,6 +281,9 @@ func TestLoadEnvOverride(t *testing.T) {
 	t.Setenv("CLIENT_VERSION", "v1.5.15")
 	t.Setenv("NYDUS_VERSION", "v2.4.6")
 	t.Setenv("NYDUS_SNAPSHOTTER_VERSION", "v0.16.1")
+	t.Setenv("MACHINE_BOOTSTRAP_WEBHOOK_ENABLED", "true")
+	t.Setenv("MACHINE_BOOTSTRAP_WEBHOOK_LISTEN_ADDRESS", ":9444")
+	t.Setenv("MACHINE_BOOTSTRAP_WEBHOOK_CERT_DIR", "/tmp/webhook-certs")
 	t.Setenv("KUBECONFIG", "/tmp/kubeconfig")
 
 	cfg, err := Load(nil)
@@ -348,6 +363,15 @@ func TestLoadEnvOverride(t *testing.T) {
 	}
 	if cfg.ClientVersion != "v1.5.15" || cfg.NydusVersion != "v2.4.6" || cfg.SnapshotterVersion != "v0.16.1" {
 		t.Errorf("versions = %q/%q/%q", cfg.ClientVersion, cfg.NydusVersion, cfg.SnapshotterVersion)
+	}
+	if !cfg.MachineBootstrapWebhook {
+		t.Error("MachineBootstrapWebhook = false, want true from the environment")
+	}
+	if cfg.WebhookListenAddress != ":9444" {
+		t.Errorf("WebhookListenAddress = %q", cfg.WebhookListenAddress)
+	}
+	if cfg.WebhookCertDir != "/tmp/webhook-certs" {
+		t.Errorf("WebhookCertDir = %q", cfg.WebhookCertDir)
 	}
 
 	if cfg.Kubeconfig != "/tmp/kubeconfig" {

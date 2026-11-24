@@ -97,18 +97,21 @@ func effectiveUserData(t *testing.T, value string) int {
 }
 
 func TestShortBootstrapFitsEffectiveUserDataLimit(t *testing.T) {
-	controller, secrets, _, clusters, _, _ := testController()
+	fixture := newWebhookFixture()
 	caPEM, certPEM, keyPEM := testECDSAIdentity(t)
-	secrets.mtls.Data = map[string][]byte{
+	fixture.secrets["operator-system/p2p-mtls"].Data = map[string][]byte{
 		"ca.crt":                caPEM,
 		corev1.TLSCertKey:       certPEM,
 		corev1.TLSPrivateKeyKey: keyPEM,
 	}
-	secrets.secret.Data[bootstrapValueKey] = []byte(realisticRKE2Bootstrap())
-	setPreinstall(clusters, "echo pre")
+	fixture.secret.Data[bootstrapValueKey] = []byte(realisticRKE2Bootstrap())
+	fixture.clusters["cluster-ns/cluster-1"].Annotations[bootstrap.PreinstallAnnotation] = "echo pre"
 
-	reconcileNow(t, controller, secrets)
-	value := string(secrets.secret.Data[bootstrapValueKey])
+	response := mutate(t, fixture.webhook, fixture.secret)
+	if !response.Allowed || len(response.Patch) == 0 {
+		t.Fatalf("response = %+v, want an allowed patch", response)
+	}
+	value := string(applyPatch(t, fixture.secret, response.Patch).Data[bootstrapValueKey])
 	if len(value) <= 32*1024 {
 		t.Fatalf("fixture bootstrap value = %d bytes, want > 32 KiB so the effective user_data metric is exercised", len(value))
 	}
@@ -123,7 +126,7 @@ func TestShortBootstrapFitsEffectiveUserDataLimit(t *testing.T) {
 	if !strings.Contains(value, "set -a\n") || !strings.Contains(value, "set +a\n") {
 		t.Fatalf("bootstrap value does not export the env around the p2p fetch: %q", value)
 	}
-	if !strings.Contains(value, `curl -sfL "http://static.example.com/p2p-install.sh" | bash || true`) {
+	if !strings.Contains(value, `curl -sfL "https://static.example.com/p2p-install.sh" | bash || true`) {
 		t.Fatalf("bootstrap value is missing the plain static script fetch: %q", value)
 	}
 	if !strings.Contains(value, shortInstallSignature) {

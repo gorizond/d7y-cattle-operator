@@ -16,12 +16,37 @@ serviceAccount:
 rbac:
   create: true
 
-# Diagnostics switch: skip the machine-bootstrap controller. Intended for
+# Diagnostics switch: skip machine bootstrap injection. Intended for
 # node-driver or custom machine pools whose join is disturbed by the bootstrap
 # rewrite. Already injected p2p blocks stay in the plan Secrets. Default false
-# keeps the current behavior.
+# leaves injection available when webhook.enabled is true.
 machineBootstrap:
   disabled: false
+
+# Synchronous machine bootstrap injection. The operator serves a mutating
+# admission webhook for core/v1 Secrets of type rke.cattle.io/bootstrap named
+# "<machine>-machine-bootstrap". The webhook adds the p2p block before the
+# Secret is persisted, so the node driver cannot read it without the block.
+# The old Secret watch was removed; enabling this flag is required for
+# injection. Disabled by default for a staged rollout.
+webhook:
+  enabled: false
+  # Fail is deterministic: a bootstrap Secret is never persisted without the
+  # p2p block and node bootstrap waits while the webhook is unavailable. The
+  # webhook rule only matches rke.cattle.io/bootstrap Secrets, so this does not
+  # block unrelated Secret writes. Ignore keeps writes flowing but can leave a
+  # new node without p2p.
+  failurePolicy: Fail
+  # Admission timeout in seconds (1-30).
+  timeoutSeconds: 5
+  # Container listen port and the Service port used by the API server.
+  port: 9443
+  servicePort: 443
+  certificate:
+    # The chart reuses the existing self-signed certificate Secret across
+    # upgrades. Set rotate=true to generate a new CA and leaf on the next
+    # upgrade (the webhook reloads the mounted key pair on the next handshake).
+    rotate: false
 
 # Secret holding the CA and leaf certificate shared with Dragonfly.
 mtlsSecretName: dragonfly-p2p-mtls

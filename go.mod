@@ -3,6 +3,7 @@ module github.com/gorizond/d7y-cattle-operator
 go 1.27.0
 
 require (
+	github.com/evanphx/json-patch v5.9.11+incompatible
 	github.com/rancher/fleet/pkg/apis v0.18.0-alpha.4.0.20261119123829-5449d25d5ff3
 	github.com/rancher/lasso v0.2.10
 	github.com/rancher/rancher v0.0.0-20261029130418-99ab89e90bf1
@@ -20,7 +21,6 @@ require (
 	github.com/cespare/xxhash/v2 v2.3.0 // indirect
 	github.com/davecgh/go-spew v1.1.2-0.20180830191138-d8f796af33cc // indirect
 	github.com/emicklei/go-restful/v3 v3.13.0 // indirect
-	github.com/evanphx/json-patch v5.9.11+incompatible // indirect
 	github.com/fxamacker/cbor/v2 v2.9.1 // indirect
 	github.com/go-logr/logr v1.4.4 // indirect
 	github.com/go-openapi/jsonpointer v1.0.0 // indirect

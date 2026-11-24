@@ -142,20 +142,30 @@ func run() error {
 		NydusVersion:                 cfg.NydusVersion,
 		SnapshotterVersion:           cfg.SnapshotterVersion,
 	})
+	var webhook *machinebootstrap.Webhook
 	if os.Getenv("MACHINE_BOOTSTRAP_DISABLED") == "true" {
-		slog.Info("machine bootstrap controller disabled by environment")
+		slog.Info("machine bootstrap disabled by environment")
 	} else {
-		machinebootstrap.Register(ctx, secretController, machineController, clusterController, eventController, machinebootstrap.Options{
-			OperatorNamespace:  cfg.Namespace,
-			MTLSSecretName:     cfg.MTLSSecretName,
-			ManagerGRPCDomain:  cfg.ManagerGRPCDomain,
-			ManagerGRPCPort:    cfg.ManagerGRPCPort,
-			StaticURL:          cfg.NginxStaticURL,
-			NydusMirrorURL:     cfg.NydusMirrorURL,
-			ClientVersion:      cfg.ClientVersion,
-			NydusVersion:       cfg.NydusVersion,
-			SnapshotterVersion: cfg.SnapshotterVersion,
-		})
+		builder := machinebootstrap.NewBuilder(
+			secretController.Cache(),
+			machineController.Cache(),
+			clusterController.Cache(),
+			machinebootstrap.Options{
+				OperatorNamespace:  cfg.Namespace,
+				MTLSSecretName:     cfg.MTLSSecretName,
+				ManagerGRPCDomain:  cfg.ManagerGRPCDomain,
+				ManagerGRPCPort:    cfg.ManagerGRPCPort,
+				StaticURL:          cfg.NginxStaticURL,
+				NydusMirrorURL:     cfg.NydusMirrorURL,
+				ClientVersion:      cfg.ClientVersion,
+				NydusVersion:       cfg.NydusVersion,
+				SnapshotterVersion: cfg.SnapshotterVersion,
+			})
+		if cfg.MachineBootstrapWebhook {
+			webhook = machinebootstrap.NewWebhook(builder)
+		} else {
+			slog.Warn("machine bootstrap webhook is disabled; bootstrap Secrets will not be mutated")
+		}
 	}
 
 	if err := start.All(ctx, 1, coreFactory, provisioningFactory, capiFactory); err != nil {
@@ -163,10 +173,26 @@ func run() error {
 	}
 
 	slog.Info("cluster controller running")
-
-	<-ctx.Done()
-	return nil
-
+	if webhook == nil {
+		<-ctx.Done()
+		return nil
+	}
+	errCh := make(chan error, 1)
+	go func() {
+		errCh <- machinebootstrap.Serve(ctx, machinebootstrap.ServerConfig{
+			ListenAddress: cfg.WebhookListenAddress,
+			CertDir:       cfg.WebhookCertDir,
+		}, webhook)
+	}()
+	select {
+	case <-ctx.Done():
+		return nil
+	case err := <-errCh:
+		if err != nil {
+			return fmt.Errorf("machine bootstrap webhook: %w", err)
+		}
+		return nil
+	}
 }
 
 func hostFromURL(raw string) (string, error) {

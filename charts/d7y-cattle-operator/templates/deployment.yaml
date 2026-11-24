@@ -1,3 +1,4 @@
+{{- $webhookEnabled := and .Values.webhook.enabled (not .Values.machineBootstrap.disabled) }}
 apiVersion: apps/v1
 kind: Deployment
 metadata:
@@ -27,6 +28,12 @@ spec:
           imagePullPolicy: {{ .Values.image.pullPolicy }}
           args:
             - --leader-elect={{ .Values.leaderElect }}
+          {{- if $webhookEnabled }}
+          ports:
+            - name: webhook
+              containerPort: {{ .Values.webhook.port }}
+              protocol: TCP
+          {{- end }}
           env:
             - name: MANAGER_GRPC_DOMAIN
               value: {{ .Values.manager.grpcDomain | quote }}
@@ -128,6 +135,14 @@ spec:
             - name: MACHINE_BOOTSTRAP_DISABLED
               value: "true"
             {{- end }}
+            {{- if $webhookEnabled }}
+            - name: MACHINE_BOOTSTRAP_WEBHOOK_ENABLED
+              value: "true"
+            - name: MACHINE_BOOTSTRAP_WEBHOOK_LISTEN_ADDRESS
+              value: ":{{ .Values.webhook.port }}"
+            - name: MACHINE_BOOTSTRAP_WEBHOOK_CERT_DIR
+              value: /var/run/d7y-webhook-certs
+            {{- end }}
             - name: POD_NAMESPACE
               valueFrom:
                 fieldRef:
@@ -140,3 +155,22 @@ spec:
                 - ALL
           resources:
             {{- toYaml .Values.resources | nindent 12 }}
+          {{- if $webhookEnabled }}
+          volumeMounts:
+            - name: webhook-certs
+              mountPath: /var/run/d7y-webhook-certs
+              readOnly: true
+          readinessProbe:
+            httpGet:
+              path: /healthz
+              port: webhook
+              scheme: HTTPS
+            initialDelaySeconds: 2
+            periodSeconds: 10
+          {{- end }}
+      {{- if $webhookEnabled }}
+      volumes:
+        - name: webhook-certs
+          secret:
+            secretName: {{ include "d7y-cattle-operator.fullname" . }}-webhook-cert
+      {{- end }}
