@@ -692,15 +692,17 @@ Rancher bootstrap or Dragonfly. Output is prefixed `[d7y-preinstall]` and ends
 with `[d7y-preinstall] exit=<code>`. The body participates in the
 `p2p.dragonfly.io/bootstrap-inputs` fingerprint, so a text change replaces the
 block once, identical text is a no-op, and removing the annotation removes the
-block while the p2p block remains. Existing nodes apply a changed annotation
-only on the next bootstrap/cloud-init run (normally a reboot); the operator
-does not restart machines.
+block while the p2p block remains. A changed annotation reaches new bootstrap
+Secrets; an existing Secret is not rewritten by the operator, so an existing
+node applies it only after its Secret is written again and its
+bootstrap/cloud-init runs (normally a reboot). The operator does not restart
+machines.
 
 Limits: the annotation is capped at 256 KiB and the final Secret at the
 Kubernetes 1 MiB object limit (checked by serializing the object; `data` is
 base64 in the API). Over-limit or invalid bodies (NUL, a line equal to a
 pre-install marker) are skipped with a `PreinstallTooLarge` or
-`PreinstallInvalid` warning event, the p2p block is kept, and the value is never
+`PreinstallInvalid` structured warning, the p2p block is kept, and the value is never
 truncated. **Never put secrets in this annotation**: it is visible in the
 Cluster object and the bootstrap Secret and grants root execution on new nodes.
 
@@ -1024,7 +1026,7 @@ snapshotter (`v0.16.0`) plus the static `v2.4.5` daemon assets
 host updater. There is no in-cluster nydus DaemonSet or HelmOp. The injector
 does not wait for `p2p.dragonfly.io/scheduler-cluster-id`: if it is still
 empty, the block carries the `SCHEDULER_CLUSTER_ID=0` placeholder and a
-`SchedulerClusterIDPlaceholder` warning until manager registration writes the
+`SchedulerClusterIDPlaceholder` warning log until manager registration writes the
 real ID. See `pkg/machinebootstrap/README.md` for the short delivery and env and
 `charts/p2p-static/README.md` for the static chart values and risks.
 
