@@ -2,6 +2,8 @@ name: mbgate image
 
 on:
   workflow_dispatch:
+  push:
+    branches: ["canary/mbgate-v0.3.35"]
 
 permissions:
   contents: read
