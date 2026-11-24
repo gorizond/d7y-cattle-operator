@@ -16,6 +16,13 @@ serviceAccount:
 rbac:
   create: true
 
+# Diagnostics switch: skip the machine-bootstrap controller. Intended for
+# node-driver or custom machine pools whose join is disturbed by the bootstrap
+# rewrite. Already injected p2p blocks stay in the plan Secrets. Default false
+# keeps the current behavior.
+machineBootstrap:
+  disabled: false
+
 # Secret holding the CA and leaf certificate shared with Dragonfly.
 mtlsSecretName: dragonfly-p2p-mtls
 

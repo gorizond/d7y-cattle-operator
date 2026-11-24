@@ -124,6 +124,10 @@ spec:
               value: {{ .Values.extras.ingress.tlsSecret | quote }}
             - name: EXTRAS_TRAEFIK_SERVERS_TRANSPORT_ENABLED
               value: {{ .Values.extras.ingress.traefikServersTransportEnabled | quote }}
+            {{- if .Values.machineBootstrap.disabled }}
+            - name: MACHINE_BOOTSTRAP_DISABLED
+              value: "true"
+            {{- end }}
             - name: POD_NAMESPACE
               valueFrom:
                 fieldRef:
