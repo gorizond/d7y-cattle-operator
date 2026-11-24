@@ -40,7 +40,7 @@ const (
 )
 
 // InstallConfig carries the operator-wide values used to build the p2p install
-// block for the machine-bootstrap Secret controller.
+// block for the machine-bootstrap admission webhook.
 type InstallConfig struct {
 	ManagerGRPCDomain  string
 	ManagerGRPCPort    int

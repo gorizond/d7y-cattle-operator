@@ -44,17 +44,22 @@ The env carries the client identity's `ca-bundle.crt` (falling back to
 `p2p.dragonfly.io/client-cert-revision` and
 `p2p.dragonfly.io/bootstrap-inputs` (client revision + scheduler IPs/ID +
 distro); when either changes, the injected block is replaced in place (bounded
-by the p2p start/end markers). A provisioning-Cluster watch re-enqueues only
-that cluster's bootstrap Secrets when its scheduler annotations change.
-Existing nodes only pick up a changed bootstrap block after their Rancher
+by the p2p start/end markers). Injection is synchronous in a mutating admission
+webhook: the Secret is patched on `CREATE`/`UPDATE` before the API server
+persists it. The old Secret/Cluster watch was removed, so a Cluster annotation
+change no longer re-enqueues existing Secrets; the operator does not rewrite a
+bootstrap Secret after it exists. A changed scheduler annotation or client
+revision is injected into new Secrets (normally a new machine), and an existing
+Secret changes only when something writes it again. Existing nodes only pick up
+a changed bootstrap block after their Secret is rewritten and their Rancher
 bootstrap/cloud-init runs again, which in practice requires a reboot. Version
 convergence is separate: host-sync updates `/etc/nydus/versions.env` live, and a
 later block re-run reads it.
 
 Existing v0.3.23 Secrets with the old inline heredoc block are replaced by the
-short block on the next reconcile. Existing nodes only pick up the new block
-after their Rancher bootstrap/cloud-init runs again (normally a reboot), as
-with any other bootstrap change.
+short block the next time the webhook admits a write of that Secret. Existing
+nodes only pick up the new block after their Rancher bootstrap/cloud-init runs
+again (normally a reboot), as with any other bootstrap change.
 
 The env always carries `P2P_DISTRO` and the Cluster's
 `p2p.dragonfly.io/scheduler-ips` annotation (seed clusters publish their own
@@ -66,11 +71,27 @@ started.
 
 The injector does not wait for `p2p.dragonfly.io/scheduler-cluster-id`. When
 the annotation is empty, the block is injected with the placeholder
-`SCHEDULER_CLUSTER_ID=0` and the controller emits a
-`SchedulerClusterIDPlaceholder` warning. This is the first-seed-node path: its
-scheduler IPs are still empty, so the host dfdaemon does not start; later
-reconciles keep the marker and are idempotent. Workers normally have the
-annotation by the time their bootstrap Secret is rendered.
+`SCHEDULER_CLUSTER_ID=0` and the webhook logs a structured warning. This is the
+first-seed-node path: its scheduler IPs are still empty, so the host dfdaemon
+does not start; later admissions keep the marker and are idempotent. Workers
+normally have the annotation by the time their bootstrap Secret is rendered.
+
+## Admission webhook
+
+The chart registers a mutating admission webhook for core/v1 Secrets. The API
+server sends only `CREATE`/`UPDATE` requests that match
+`secret.type == "rke.cattle.io/bootstrap"` and either a name ending in
+`-machine-bootstrap` or an `RKEBootstrap` owner reference (long generated names
+are truncated before the suffix). The handler repeats the filter defensively,
+resolves the CAPI Machine and provisioning Cluster, builds the desired value
+and annotations, and returns an RFC 6902 JSON patch. Non-matching Secrets and
+Secrets that already carry the current block produce an empty patch (allowed,
+no mutation). A missing machine, cluster, or mTLS Secret denies the write, so a
+bootstrap Secret cannot silently miss p2p. `failurePolicy=Fail` gives the same
+guarantee when the webhook is unavailable, at the cost of blocking node
+bootstrap; `failurePolicy=Ignore` prefers Secret-write availability and can
+leave a new node without p2p. Injection and skip reasons are structured logs;
+the webhook does not create Kubernetes Events.
 
 ## Pre-install annotation
 
@@ -96,7 +117,7 @@ does not stop the bootstrap or Dragonfly. stdout/stderr are echoed with the
 `[d7y-preinstall]` prefix and a final `[d7y-preinstall] exit=<code>` line; the
 final log line is emitted even without a trailing newline.
 
-Lifecycle and ordering: every reconcile removes the old pre-install block,
+Lifecycle and ordering: every admission removes the old pre-install block,
 replaces the p2p block, then inserts the new pre-install block before the p2p
 marker. The body is part of `p2p.dragonfly.io/bootstrap-inputs`, so a text edit
 re-renders the Secret once, identical text is a no-op, and clearing the
@@ -114,9 +135,10 @@ Limits and safety: the annotation is limited to 256 KiB. The final Secret is
 checked against the Kubernetes 1 MiB object limit by serializing a DeepCopy with
 `encoding/json` (`data` is base64 in the API, so the raw value length is not a
 safe guard). When the pre-install block would overflow, it is dropped, the p2p
-block is kept, the value is never truncated, and a `PreinstallTooLarge` warning
-event is emitted. NUL or a line equal to either pre-install marker is rejected
-with `PreinstallInvalid`. Events never contain the annotation body.
+block is kept, the value is never truncated, and the webhook logs a structured
+`PreinstallTooLarge` warning. NUL or a line equal to either pre-install marker
+is rejected with a `PreinstallInvalid` warning. Logs never contain the
+annotation body.
 
 **Never put secrets in this annotation.** Its value is visible in the Cluster
 object and in every machine bootstrap Secret, and it grants root execution on

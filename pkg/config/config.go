@@ -59,6 +59,8 @@ const (
 	DefaultExtrasIngressTLSSecret        = ""
 	DefaultExtrasTraefikTransportEnabled = true
 	DefaultNamespace                     = "dragonfly-system"
+	DefaultWebhookListenAddress          = ":9443"
+	DefaultWebhookCertDir                = "/var/run/d7y-webhook-certs"
 )
 
 var chartVersionPattern = regexp.MustCompile(`^v?[0-9]+\.[0-9]+\.[0-9]+(?:[-+][0-9A-Za-z.-]+)?$`)
@@ -116,6 +118,9 @@ type Config struct {
 	Namespace                    string
 	LeaderElect                  bool
 	Kubeconfig                   string
+	MachineBootstrapWebhook      bool
+	WebhookListenAddress         string
+	WebhookCertDir               string
 }
 
 // Load parses args (without the program name) and validates the result.
@@ -138,6 +143,10 @@ func Load(args []string) (*Config, error) {
 		return nil, err
 	}
 	defaultContainerdMirrorPort, err := envInt("CONTAINERD_MIRROR_PORT", DefaultContainerdMirrorPort)
+	if err != nil {
+		return nil, err
+	}
+	defaultWebhook, err := envBool("MACHINE_BOOTSTRAP_WEBHOOK_ENABLED", false)
 	if err != nil {
 		return nil, err
 	}
@@ -195,6 +204,9 @@ func Load(args []string) (*Config, error) {
 	fs.StringVar(&cfg.Namespace, "namespace", envOr("POD_NAMESPACE", DefaultNamespace), "namespace where the operator stores its Secret")
 	fs.BoolVar(&cfg.LeaderElect, "leader-elect", false, "enable leader election")
 	fs.StringVar(&cfg.Kubeconfig, "kubeconfig", envOr("KUBECONFIG", ""), "path to a kubeconfig (in-cluster config when empty)")
+	fs.BoolVar(&cfg.MachineBootstrapWebhook, "machine-bootstrap-webhook-enabled", defaultWebhook, "serve the machine bootstrap mutating admission webhook")
+	fs.StringVar(&cfg.WebhookListenAddress, "machine-bootstrap-webhook-listen-address", envOr("MACHINE_BOOTSTRAP_WEBHOOK_LISTEN_ADDRESS", DefaultWebhookListenAddress), "listen address of the machine bootstrap admission webhook")
+	fs.StringVar(&cfg.WebhookCertDir, "machine-bootstrap-webhook-cert-dir", envOr("MACHINE_BOOTSTRAP_WEBHOOK_CERT_DIR", DefaultWebhookCertDir), "directory with tls.crt and tls.key for the machine bootstrap admission webhook")
 
 	if err := fs.Parse(args); err != nil {
 		return nil, err
@@ -397,6 +409,14 @@ func (c *Config) Validate() error {
 		add("--namespace is required")
 	} else if msgs := validation.IsDNS1123Label(c.Namespace); len(msgs) > 0 {
 		add("--namespace: %s", strings.Join(msgs, "; "))
+	}
+	if c.MachineBootstrapWebhook {
+		if c.WebhookListenAddress == "" {
+			add("--machine-bootstrap-webhook-listen-address is required when the webhook is enabled")
+		}
+		if c.WebhookCertDir == "" {
+			add("--machine-bootstrap-webhook-cert-dir is required when the webhook is enabled")
+		}
 	}
 
 	if len(errs) > 0 {

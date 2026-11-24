@@ -1,0 +1,92 @@
+{{- if and .Values.webhook.enabled (not .Values.machineBootstrap.disabled) }}
+{{- if not (has .Values.webhook.failurePolicy (list "Fail" "Ignore")) }}
+{{- fail "webhook.failurePolicy must be Fail or Ignore" }}
+{{- end }}
+{{- $svc := include "d7y-cattle-operator.fullname" . }}
+{{- $ns := .Release.Namespace }}
+{{- $certSecret := printf "%s-webhook-cert" $svc }}
+{{- $caCert := "" }}
+{{- $tlsCert := "" }}
+{{- $tlsKey := "" }}
+{{- $existing := lookup "v1" "Secret" $ns $certSecret }}
+{{- if and $existing (not .Values.webhook.certificate.rotate) }}
+{{- $caCert = index $existing.data "ca.crt" | default "" }}
+{{- $tlsCert = index $existing.data "tls.crt" | default "" }}
+{{- $tlsKey = index $existing.data "tls.key" | default "" }}
+{{- end }}
+{{- if or (not $caCert) (not $tlsCert) (not $tlsKey) }}
+{{- $altNames := list $svc (printf "%s.%s" $svc $ns) (printf "%s.%s.svc" $svc $ns) (printf "%s.%s.svc.cluster.local" $svc $ns) }}
+{{- $ca := genCA (printf "%s-webhook-ca" $svc) 3650 }}
+{{- $cert := genSignedCert (printf "%s.%s.svc" $svc $ns) nil $altNames 3650 $ca }}
+{{- $caCert = $ca.Cert | b64enc }}
+{{- $tlsCert = $cert.Cert | b64enc }}
+{{- $tlsKey = $cert.Key | b64enc }}
+{{- end }}
+apiVersion: v1
+kind: Secret
+metadata:
+  name: {{ $certSecret }}
+  labels:
+    {{- include "d7y-cattle-operator.labels" . | nindent 4 }}
+type: kubernetes.io/tls
+data:
+  ca.crt: {{ $caCert }}
+  tls.crt: {{ $tlsCert }}
+  tls.key: {{ $tlsKey }}
+---
+apiVersion: v1
+kind: Service
+metadata:
+  name: {{ $svc }}-webhook
+  labels:
+    {{- include "d7y-cattle-operator.labels" . | nindent 4 }}
+spec:
+  type: ClusterIP
+  selector:
+    {{- include "d7y-cattle-operator.selectorLabels" . | nindent 4 }}
+  ports:
+    - name: webhook
+      port: {{ .Values.webhook.servicePort }}
+      targetPort: webhook
+      protocol: TCP
+---
+apiVersion: admissionregistration.k8s.io/v1
+kind: MutatingWebhookConfiguration
+metadata:
+  name: {{ $svc }}
+  labels:
+    {{- include "d7y-cattle-operator.labels" . | nindent 4 }}
+webhooks:
+  - name: {{ printf "%s.machinebootstrap.d7y-cattle-operator.io" $svc | trunc 253 }}
+    admissionReviewVersions: ["v1"]
+    sideEffects: None
+    failurePolicy: {{ .Values.webhook.failurePolicy }}
+    timeoutSeconds: {{ .Values.webhook.timeoutSeconds }}
+    matchPolicy: Equivalent
+    clientConfig:
+      service:
+        name: {{ $svc }}-webhook
+        namespace: {{ $ns }}
+        path: /mutate-v1-secret
+        port: {{ .Values.webhook.servicePort }}
+      caBundle: {{ $caCert }}
+    rules:
+      - apiGroups: [""]
+        apiVersions: ["v1"]
+        operations: ["CREATE", "UPDATE"]
+        resources: ["secrets"]
+        scope: "*"
+    # The API server filters before it calls the webhook, so failurePolicy=Fail
+    # only blocks matching bootstrap Secrets, not unrelated Secret writes.
+    matchConditions:
+      - name: rke-bootstrap-secret
+        expression: >-
+          has(object.type) && object.type == 'rke.cattle.io/bootstrap' &&
+          (
+            (has(object.metadata.name) && object.metadata.name.endsWith('-machine-bootstrap')) ||
+            (has(object.metadata.ownerReferences) &&
+              object.metadata.ownerReferences.exists(r,
+                has(r.apiVersion) && r.apiVersion == 'rke.cattle.io/v1' &&
+                has(r.kind) && r.kind == 'RKEBootstrap'))
+          )
+{{- end }}

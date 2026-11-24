@@ -8,7 +8,7 @@ import (
 )
 
 // inlineInstallBlock renders the legacy v0.3.21-v0.3.23 inline block. It is
-// retained for migration tests; production reconciles use shortInstallBlock.
+// retained for migration tests; production admission uses shortInstallBlock.
 func inlineInstallBlock(env string) string {
 	return inlineInstallBlockFor(p2pInstallBody, env)
 }
