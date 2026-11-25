@@ -613,7 +613,21 @@ is_our_dfdaemon() {
 }
 
 health_ok() {
-  curl -fsS --max-time=2 "http://127.0.0.1:${HEALTH_PORT}/healthy" >/dev/null 2>&1
+  local rc=0
+  curl -fsS --max-time=2 "http://127.0.0.1:${HEALTH_PORT}/healthy" >/dev/null 2>&1 || rc=$?
+  if [ "$rc" -eq 0 ]; then
+    return 0
+  fi
+  if [ "$rc" -eq 2 ]; then
+    # Some minimal curl builds do not know --max-time; keep the retry bounded.
+    if command -v timeout >/dev/null 2>&1; then
+      timeout 2 curl -fsS "http://127.0.0.1:${HEALTH_PORT}/healthy" >/dev/null 2>&1
+    else
+      curl -fsS "http://127.0.0.1:${HEALTH_PORT}/healthy" >/dev/null 2>&1
+    fi
+    return
+  fi
+  return 1
 }
 
 port_open() {
