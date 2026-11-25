@@ -5,6 +5,8 @@ root="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
 script="$root/pkg/machinebootstrap/assets/p2p-install.sh"
 selector="$root/pkg/machinebootstrap/assets/nydus-fs-select.sh"
 self_test="$root/pkg/machinebootstrap/assets/test.sh"
+container_init="$root/pkg/machinebootstrap/assets/container-init.sh"
+container_init_test="$root/scripts/test-container-init.sh"
 tmp="$(mktemp -d)"
 trap 'rm -rf "$tmp"' EXIT
 
@@ -15,13 +17,16 @@ fail() {
 
 bash -n "$script" || fail "p2p-install.sh has a syntax error"
 bash -n "$selector" || fail "nydus-fs-select.sh has a syntax error"
+bash -n "$container_init" || fail "container-init.sh has a syntax error"
+bash -n "$container_init_test" || fail "test-container-init.sh has a syntax error"
 if command -v shellcheck >/dev/null 2>&1; then
-  shellcheck "$script" "$selector" "$self_test" || fail "shellcheck failed"
+  shellcheck "$script" "$selector" "$self_test" "$container_init" "$container_init_test" || fail "shellcheck failed"
 else
   echo "shellcheck not installed; skipping shellcheck"
 fi
 
 bash "$self_test" || fail "embedded p2p-install self-test failed"
+bash "$container_init_test" || fail "container-init self-test failed"
 
 chart="$root/charts/p2p-static"
 values="$root/scripts/testdata/p2p-static-operator-values.yaml"
@@ -33,6 +38,8 @@ fi
 bash -n "$chart/files/nydus-fs-select.sh" || fail "chart nydus-fs-select.sh has a syntax error"
 bash -n "$chart/files/p2p-install.sh" || fail "chart p2p-install.sh has a syntax error"
 cmp -s "$chart/files/p2p-install.sh" "$script" || fail "chart p2p-install.sh differs from the embedded asset"
+bash -n "$chart/files/container-init.sh" || fail "chart container-init.sh has a syntax error"
+cmp -s "$chart/files/container-init.sh" "$container_init" || fail "chart container-init.sh differs from the embedded asset"
 if grep -q '__CFG__\|?cfg=' "$chart/files/p2p-install.sh"; then
   fail "chart p2p-install.sh must not carry the cfg query/placeholder"
 fi
@@ -67,6 +74,13 @@ grep -q 'listen \[::\]:80;' "$tmp/p2p-static.yaml" || fail "p2p-static nginx mus
 grep -q 'location = /p2p-install.sh' "$tmp/p2p-static.yaml" || fail "p2p-static is missing the p2p-install.sh endpoint"
 grep -q 'access_log off;' "$tmp/p2p-static.yaml" || fail "p2p-static must disable access logs for p2p-install.sh"
 grep -q 'alias /etc/nginx/conf.d/p2p-install.sh;' "$tmp/p2p-static.yaml" || fail "p2p-static must serve p2p-install.sh from the ConfigMap file"
+grep -q 'container-init.sh: |-' "$tmp/p2p-static.yaml" || fail "p2p-static ConfigMap is missing the container-init.sh key"
+grep -q 'location = /container-init.sh' "$tmp/p2p-static.yaml" || fail "p2p-static is missing the container-init.sh endpoint"
+grep -A3 'location = /container-init.sh' "$tmp/p2p-static.yaml" | grep -q 'access_log off;' || fail "p2p-static must disable access logs for container-init.sh"
+grep -q 'alias /etc/nginx/conf.d/container-init.sh;' "$tmp/p2p-static.yaml" || fail "p2p-static must serve container-init.sh from the ConfigMap file"
+grep -q 'Cache-Control "no-store"' "$tmp/p2p-static.yaml" || fail "p2p-static must disable caching for container-init.sh"
+grep -A5 'location = /container-init.sh' "$tmp/p2p-static.yaml" | grep -q 'add_header Cache-Control "no-store" always' || fail "p2p-static container-init.sh location is missing the no-store header"
+grep -q 'helm.sh/chart: p2p-static-0.1.16' "$tmp/p2p-static.yaml" || fail "p2p-static chart version is not 0.1.16"
 if grep -q 'sub_filter\|__CFG__\|?cfg=' "$tmp/p2p-static.yaml"; then
   fail "p2p-static must not use the cfg query/sub_filter"
 fi
@@ -80,6 +94,7 @@ grep -q 'PathPrefix(`/nydus`)' "$tmp/p2p-static-manager.yaml" || fail "p2p-stati
 grep -q 'PathPrefix(`/client`)' "$tmp/p2p-static-manager.yaml" || fail "p2p-static /client path missing"
 grep -q 'PathPrefix(`/snapshotter`)' "$tmp/p2p-static-manager.yaml" || fail "p2p-static /snapshotter path missing"
 grep -q 'PathPrefix(`/p2p-install.sh`)' "$tmp/p2p-static-manager.yaml" || fail "p2p-static manager route is missing /p2p-install.sh"
+grep -q 'PathPrefix(`/container-init.sh`)' "$tmp/p2p-static-manager.yaml" || fail "p2p-static manager route is missing /container-init.sh"
 
 # Exercise the populate script with a fake downloader: versioned/arch layouts
 # for both architectures, legacy /bin from the node arch, existing dfdaemon kept.

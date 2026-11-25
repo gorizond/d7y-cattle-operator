@@ -2,15 +2,16 @@
 
 Nginx static server for the Dragonfly P2P bootstrap flow. It serves the static
 asset volume under `/bin/`, `/nydus/<version>/`, `/client/<version>/<arch>/`,
-and `/snapshotter/<version>/<arch>/`, plus the host bootstrap script endpoint
-`/p2p-install.sh`.
+and `/snapshotter/<version>/<arch>/`, plus the bootstrap script endpoints
+`/p2p-install.sh` and `/container-init.sh`.
 
-## Script endpoint
+## Script endpoints
 
-The chart renders `files/p2p-install.sh` into a ConfigMap and serves it
-directly at `/p2p-install.sh` (no query parameters, no `sub_filter`). The file
-is a byte-identical copy of `pkg/machinebootstrap/assets/p2p-install.sh`; the
-self-test fails if the two drift. The location sets `access_log off` and
+The chart renders `files/p2p-install.sh` and `files/container-init.sh` into a
+ConfigMap and serves them directly at `/p2p-install.sh` and
+`/container-init.sh` (no query parameters, no `sub_filter`). Each file is a
+byte-identical copy of its `pkg/machinebootstrap/assets/` counterpart; the
+self-test fails if the pairs drift. Both locations set `access_log off` and
 `Cache-Control: no-store`.
 
 The node-side env is embedded in the machine-bootstrap Secret by the operator
@@ -27,6 +28,31 @@ raw Secret value can be larger.
 or its env in public artifacts or tickets, and treat the machine-bootstrap
 Secret as sensitive. The endpoint is reachable wherever the static URL is
 published; restrict it like the bootstrap configuration.
+
+## Container init endpoint
+
+`/container-init.sh` prepares a container (no systemd, containerd,
+privileged mode, or FUSE) and takes no arguments. Its env contract uses the
+same names as `/p2p-install.sh`: required `STATIC_URL`, `MANAGER_GRPC`,
+`SCHEDULER_CLUSTER_ID`, `CA_CRT_B64`, `CLIENT_CRT_B64`, `CLIENT_KEY_B64`;
+optional `SCHEDULER_IPS`, `SMART_PROXY_URL`, `NYDUS_MIRROR_URL`, client/nydus
+versions, checksum pins, registry credentials, `P2P_BIN_DIR`, `P2P_ROOT`,
+`TARGET_ARCH`, and timeouts. It does not configure network/VPN/Tailscale or
+iptables and does not install `nydus-mount`.
+
+Ordering: run `container-init.sh` to exit 0 (`dfdaemon` healthy, `nydusd` and
+`/usr/local/bin/{dfget,nydusd}` plus `/etc/nydus/config.json` installed), then
+run the external `nydus-mount`/`nydusd` command for the model image, then start
+`vllm`/`sglang` against the mount point.
+
+`MANAGER_GRPC` must be the manager gRPC **SNI host** (the host used by the
+manager gRPC ingress, e.g. `ingress.grpc.host`), not the manager REST API host.
+`/etc/nydus/config.json` is a template: before starting `nydusd`, copy it and
+inject `device.backend.config.host` and `repo` for the model image; the base
+file alone is not runnable. Re-running `container-init.sh` with changed
+certificates, cluster ID, or registry auth restarts only the script's own
+`dfdaemon`; an unchanged environment is a no-op. Run the script from `/tmp` (or
+another path), not `/usr/local/bin`, to keep the "three P2P binaries" rule.
 
 ## Install
 
@@ -108,8 +134,9 @@ helm install p2p-static charts/p2p-static \
 
 `manager.entryPoint` defaults to `websecure`; the IngressRoute uses
 `ingress.className` (default `traefik`). The route matches
-`Host("<manager-host>")` plus `PathPrefix` for `/bin`, `/nydus`, `/client`, or
-`/snapshotter`, and forwards to the `p2p-static` Service. The manager REST API keeps its own
+`Host("<manager-host>")` plus `PathPrefix` for `/p2p-install.sh`,
+`/container-init.sh`, `/bin`, `/nydus`, `/client`, or `/snapshotter`, and
+forwards to the `p2p-static` Service. The manager REST API keeps its own
 `/api` paths; these prefixes do not overlap.
 
 ## Asset volume
@@ -152,6 +179,7 @@ The self-test uses temporary roots, `SKIP_DOWNLOAD=1`, and a fake
 script, including env injection, certificate files/modes, dfget/dynconfig,
 scheduler ID, fscache/fusedev selection, nydus update, fail-open fallback, and
 the selector matrix. `scripts/test-p2p-static.sh` also renders this chart and
-checks that `/bin`, `/nydus`, `/client`, `/snapshotter`, and `/p2p-install.sh`
-are served, the manager route forwards all five prefixes, the script endpoint
-has `access_log off`, and the chart script matches the embedded asset.
+checks that `/bin`, `/nydus`, `/client`, `/snapshotter`, `/p2p-install.sh`, and
+`/container-init.sh` are served, the manager route forwards all six prefixes,
+the script endpoints have `access_log off`, and the chart scripts match the
+embedded assets.
