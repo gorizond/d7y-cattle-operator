@@ -36,7 +36,7 @@ const (
 	DefaultSchedulerCertChartVersion     = "0.1.0"
 	DefaultStaticChartRepo               = "https://gorizond.github.io/d7y-cattle-operator"
 	DefaultStaticChartName               = "p2p-static"
-	DefaultStaticChartVersion            = "0.1.15"
+	DefaultStaticChartVersion            = "0.1.16"
 	DefaultStaticReleaseName             = "p2p-static"
 	DefaultClientReleaseRepo             = "dragonflyoss/client"
 	DefaultNydusReleaseRepo              = "dragonflyoss/nydus"

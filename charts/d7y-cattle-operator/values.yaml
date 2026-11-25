@@ -135,7 +135,7 @@ static:
   chart:
     repo: https://gorizond.github.io/d7y-cattle-operator
     name: p2p-static
-    version: 0.1.15
+    version: 0.1.16
   releaseName: p2p-static
 
 # GitHub release repositories and version fallbacks. Checksums are fallback

@@ -26,6 +26,13 @@ data:
             add_header Cache-Control "no-store" always;
         }
 
+        location = /container-init.sh {
+            access_log off;
+            alias /etc/nginx/conf.d/container-init.sh;
+            default_type text/x-shellscript;
+            add_header Cache-Control "no-store" always;
+        }
+
         location /bin/ {
             try_files $uri =404;
             autoindex off;
@@ -56,5 +63,7 @@ data:
 {{ .Files.Get "files/nydus-fs-select.sh" | indent 4 }}
   p2p-install.sh: |-
 {{ .Files.Get "files/p2p-install.sh" | indent 4 }}
+  container-init.sh: |-
+{{ .Files.Get "files/container-init.sh" | indent 4 }}
   populate-plan.txt: |-
 {{ include "p2p-static.populatePlan" . | indent 4 }}

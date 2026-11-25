@@ -71,3 +71,6 @@ jobs:
 
       - name: Render fork chart TLS probes
         run: bash scripts/test-fork-chart-tls.sh
+
+      - name: Render p2p static endpoints
+        run: bash scripts/test-p2p-static.sh
