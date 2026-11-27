@@ -3,11 +3,9 @@
 Kubernetes operator that runs [Dragonfly](https://d7y.io) P2P on Rancher-managed
 RKE2 clusters.
 
-**Status**: v0.3.18 (2026-11-22). The operator implements the Cluster controller,
-role resolution, KeyDB, manager, seed role, manager registration,
-`dragonfly-extras`, the fail-open p2p host bootstrap, manager root
-credentials, and host nydus. Harbor, registry-proxy, and pod-image admission
-webhooks are out of scope.
+
+https://github.com/user-attachments/assets/8613691a-ca1b-45c7-99e3-b92a715792fc
+
 
 ## What it does today
 
